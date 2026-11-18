@@ -1,4 +1,4 @@
-import { withoutSession } from '../../shared/session-contract';
+import { isRightInspectorTab, withoutSession } from '../../shared/session-contract';
 import { prepareRevision } from '../../shared/message-revision';
 import {
   calculateTokenCost,
@@ -1513,6 +1513,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     async saveWorkspaceLayout(
       patch: Partial<WorkspaceLayoutState>
     ): Promise<WorkspaceLayoutState> {
+      if (patch.activeInspectorTab !== undefined && !isRightInspectorTab(patch.activeInspectorTab)) throw new Error('未知的检视器页签');
       layout = {
         ...layout,
         ...patch,

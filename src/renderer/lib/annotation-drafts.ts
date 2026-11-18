@@ -29,7 +29,23 @@ export function clearAnnotationDraft(profile: string, id: string) { write(draftK
 export function useAnnotationDraft(profile: string, id: string) {
   const key = draftKey(profile, id);
   const draft = useSyncExternalStore(subscribe, () => read(key));
-  return { ...draft, update: (change: (prev: Draft) => Draft) => write(key, change(read(key))) };
+  function update(change: (prev: Draft) => Draft) { write(key, change(read(key))); }
+  function takeSubmitted(quotes: TextQuoteItem[], notes: TextNotationItem[]) {
+    const current = read(key);
+    const sentQuotes = current.quotes.filter(q => quotes.some(sent => sent.id === q.id));
+    const sentNotes = current.notes.filter(n => notes.some(sent => sent.id === n.id && sent.comment === n.comment));
+    if (sentQuotes.length || sentNotes.length) {
+      write(key, { quotes: current.quotes.filter(q => !sentQuotes.includes(q)), notes: current.notes.filter(n => !sentNotes.includes(n)) });
+    }
+    return () => {
+      if (!sentQuotes.length && !sentNotes.length) return;
+      update(d => ({
+        quotes: [...sentQuotes.filter(q => !d.quotes.some(newer => newer.id === q.id)), ...d.quotes],
+        notes: [...sentNotes.filter(n => !d.notes.some(newer => newer.id === n.id)), ...d.notes],
+      }));
+    };
+  }
+  return { ...draft, update, takeSubmitted };
 }
 
 const rangesByPane = new Map<HTMLElement, Range[]>();

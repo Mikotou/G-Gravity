@@ -115,13 +115,21 @@ async function checkSessionActions(page) {
 }
 
 async function checkLiveQuota(page) {
-  await page.getByTestId('inspector-tab-quota').click();
-  const view = page.getByTestId('inspector-view-quota');
+  const weekly = page.getByTestId('quota-weekly');
+  await weekly.waitFor();
+  await weekly.hover();
+  const view = page.getByTestId('quota-details');
   const bucket = view.getByTestId('quota-bucket').first();
   await bucket.or(view.getByRole('alert')).first().waitFor({ timeout: 85000 });
   if (!await bucket.count()) throw new Error(await view.getByRole('alert').textContent());
   assert.ok(await view.locator('progress').count() > 0);
-  console.log('Official account quota visible: ' + await view.getByTestId('quota-bucket').count() + ' windows.');
+  const bucketCount = await view.getByTestId('quota-bucket').count();
+  const weeklyAmount = await view.locator('article[title="gemini-weekly"] header span').textContent();
+  assert.ok(weeklyAmount && (await weekly.textContent()).includes(weeklyAmount));
+  await page.getByTestId('topbar-app-icon').hover();
+  await view.waitFor({ state: 'detached' });
+  assert.ok(await weekly.isVisible());
+  console.log('Official account quota: ' + bucketCount + ' windows. Weekly badge matched the official row and remained visible after dismissal.');
 }
 
 async function exerciseLiveChat(page, cwd) {
@@ -136,6 +144,7 @@ async function exerciseLiveChat(page, cwd) {
   const composer = page.locator('[data-testid^="composer-input-"]').first();
   await composer.waitFor({ timeout: 45000 });
   const sessionId = (await composer.getAttribute('data-testid')).slice('composer-input-'.length);
+  if (process.env.GRAVITY_DESKTOP_LIVE === 'quota') return;
   let step = 'sending the first user message';
   try {
     await typeInField(composer, 'Reply only with GRAVITY_OK. No tools are needed.');

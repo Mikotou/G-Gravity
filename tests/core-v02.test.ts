@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -12,8 +12,9 @@ import { prepareMockAcp } from './helpers/stdio-rpc';
 describe('Gravity v0.2 真内核与标准ACP桩整合', () => {
   let fixture: Awaited<ReturnType<typeof prepareMockAcp>>;
   beforeAll(async () => { fixture = await prepareMockAcp(); }); afterAll(async () => { await fixture?.cleanup(); });
-  function setup(historyRoots: string[] = []) {
+  function setup(historyRoots: string[] = [], savedLayout?: object) {
     const directory = mkdtempSync(path.join(tmpdir(), 'gravity-qa-core-v02-'));
+    if (savedLayout) writeFileSync(path.join(directory, 'layout.json'), JSON.stringify(savedLayout));
     const spawnSpy = vi.fn((_binary, _args, options) => spawn(fixture.executable, fixture.args, options));
     const executor = vi.fn(async () => ({ stdout: '[]' }));
     const core = new CoreService({ dataDir: directory, acpOptions: { spawn: spawnSpy }, historyRoots, pluginsExecutor: executor, homeDir: path.join(directory, 'fake-home') });
@@ -30,6 +31,13 @@ describe('Gravity v0.2 真内核与标准ACP桩整合', () => {
       expect((await core.setAppIcon('gravity-ubuntu')).appIcon).toBe('gravity-ubuntu');
       const layout = await core.saveWorkspaceLayout({ leftSidebarCollapsed: true, rightInspectorWidth: 420, activeInspectorTab: 'context' });
       expect(layout).toMatchObject({ leftSidebarCollapsed: true, rightInspectorWidth: 420, activeInspectorTab: 'context' });
+    } finally { await cleanup(); }
+  });
+  it('重新打开旧额度页时保留侧栏尺寸并进入上下文页', async () => {
+    const { core, cleanup } = setup([], { activeInspectorTab: 'quota', rightInspectorWidth: 405 });
+    try {
+      const saved = await core.saveWorkspaceLayout({ leftSidebarCollapsed: true });
+      expect(saved).toMatchObject({ activeInspectorTab: 'context', rightInspectorWidth: 405 });
     } finally { await cleanup(); }
   });
   it('本地历史继续创建新ACP会话带入摘要，源树前后完全不变', async () => {

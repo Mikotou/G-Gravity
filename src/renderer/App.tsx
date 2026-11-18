@@ -982,7 +982,6 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           onCommitWidth={(w) => void patchLayout({ rightInspectorWidth: w })}
           onLaunchSwarmTask={handleLaunchSwarmTask}
           onOpenRateCardsSettings={() => setSettingsSection('rates')}
-          onClose={() => void patchLayout({ rightInspectorCollapsed: true })}
         />
 
         {settingsSection && (

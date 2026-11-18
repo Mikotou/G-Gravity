@@ -2855,7 +2855,7 @@ select.input {
 }
 
 /* 非激活标签只显示图标，节省右栏宽度 */
-.inspector-tab:not(.is-active):not(.quota-tab) .inspector-tab-label {
+.inspector-tab:not(.is-active) .inspector-tab-label {
   display: none;
 }
 
@@ -4698,7 +4698,55 @@ select.input {
 .archived-sessions summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
 .archived-sessions button { display: flex; gap: 5px; width: 100%; justify-content: space-between; padding: 6px; text-align: left; color: inherit; background: transparent; border: 0; cursor: pointer; }
 
-.quota-view { padding: 12px; }
+.quota-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  min-width: 0;
+  padding-inline: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.quota-footer .status-line { flex: 1; min-width: 0; padding: 0; }
+.quota-trigger, .quota-weekly {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 2px 4px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+}
+.quota-weekly { margin-inline-start: auto; font-variant-numeric: tabular-nums; }
+.quota-weekly strong { color: var(--text-secondary); font-weight: 600; }
+.quota-trigger:hover, .quota-weekly:hover, .quota-trigger:focus-visible, .quota-weekly:focus-visible {
+  color: var(--text-primary); background: var(--hover);
+}
+.quota-view {
+  position: absolute;
+  z-index: 20;
+  inset-inline: 0;
+  bottom: 100%;
+  max-height: min(360px, 55dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+  font-size: var(--fs-sm);
+}
+.quota-buckets { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 0 14px; }
+.workspace.mode-grid-4 .quota-view { max-height: min(300px, calc(50dvh - 65px)); }
+@container pane (max-width: 440px) {
+  .quota-footer { gap: 2px; padding-inline: 0; }
+  .quota-trigger span, .quota-footer .status-seg-rate { display: none; }
+  .quota-footer .status-line, .quota-footer .status-line-trigger { gap: 3px; }
+}
 .quota-view header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .quota-view h3, .quota-view p { margin: 0 0 10px; }
 .quota-view p, .quota-view small { color: var(--text-secondary); font-size: 12px; }

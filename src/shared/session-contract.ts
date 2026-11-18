@@ -346,14 +346,11 @@ export function withoutSession(layout: WorkspaceLayoutState, id: string): Worksp
 
 export type WorkspaceSplitMode = 'single' | 'split-2' | 'grid-4';
 
-export type RightInspectorTab =
-  | 'diff'
-  | 'files'
-  | 'plan'
-  | 'terminal'
-  | 'context'
-  | 'quota'
-  | 'swarm';
+const inspectorTabs = ['diff', 'files', 'plan', 'terminal', 'context', 'swarm'] as const;
+export type RightInspectorTab = (typeof inspectorTabs)[number];
+export function isRightInspectorTab(value: unknown): value is RightInspectorTab {
+  return inspectorTabs.some(tab => tab === value);
+}
 
 export interface WorkspaceLayoutState {
   openTabSessionIds: string[];

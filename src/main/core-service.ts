@@ -9,7 +9,7 @@ import type { ApprovalDecisionSubmission, ApprovalMode, ApproveForMeConfig } fro
 import type { AppBootstrapPayload, AcpConnectionStatus, CreateSessionInput, OpenLinkOrFileInput, OpenLinkOrFileResult, SendPromptInput } from '../shared/ipc-channels';
 import { isForbiddenCredentialOrStatePath } from '../shared/accounts-history-contract';
 import type { ChatMessageItem, ManagedSessionSummary, TitleOrganizeRequest, WorkspaceLayoutState } from '../shared/session-contract';
-import { generateStructuredChineseTitle, isLegacyPollutionSessionTitle, normalizeWorkspacePath } from '../shared/session-contract';
+import { generateStructuredChineseTitle, isLegacyPollutionSessionTitle, isRightInspectorTab, normalizeWorkspacePath } from '../shared/session-contract';
 import type { ClientPreferences, GravityIconId, WorkspaceProjectConfig } from '../shared/theme-i18n-contract';
 import { THEME_PRESETS, GRAVITY_ICON_VARIANTS, validateCustomThemeConfig } from '../shared/theme-i18n-contract';
 import type { ModelRateCard } from '../shared/telemetry-contract';
@@ -74,7 +74,8 @@ export class CoreService extends EventEmitter {
     if (!THEME_PRESETS.some(theme => theme.id === this.preferences.theme) && !['custom', 'system'].includes(this.preferences.theme)) this.preferences.theme = DEFAULT_PREFERENCES.theme;
     if (!GRAVITY_ICON_VARIANTS.some(icon => icon.id === this.preferences.appIcon)) this.preferences.appIcon = DEFAULT_PREFERENCES.appIcon;
     if (this.preferences.customTheme) { try { this.preferences.customTheme = validateCustomThemeConfig(this.preferences.customTheme); } catch { delete this.preferences.customTheme; this.preferences.theme = DEFAULT_PREFERENCES.theme; } }
-    this.layout = { ...DEFAULT_LAYOUT, ...this.store.read('layout.json', {}) };
+    this.layout = { ...DEFAULT_LAYOUT, ...this.store.read<Partial<WorkspaceLayoutState>>('layout.json', {}) };
+    if (!isRightInspectorTab(this.layout.activeInspectorTab)) this.layout.activeInspectorTab = DEFAULT_LAYOUT.activeInspectorTab;
     this.client = options.acp || new AcpClient({ ...options.acpOptions, args: options.acpOptions?.args || ['acp', ...(this.preferences.processPerSession ? ['--process-per-session'] : [])] });
     this.sessions = new SessionMultiplexer(this.client, this.store);
     let config = this.store.read<ApproveForMeConfig>('approval-config.json', structuredClone(DEFAULT_APPROVAL_CONFIG));
@@ -754,7 +755,7 @@ export class CoreService extends EventEmitter {
   async saveWorkspaceLayout(patch: Partial<WorkspaceLayoutState>): Promise<WorkspaceLayoutState> {
     const next = { ...this.layout, ...patch };
     if (!Array.isArray(next.openTabSessionIds) || next.openTabSessionIds.length > 4 || !next.openTabSessionIds.every(id => typeof id === 'string') || !['single', 'split-2', 'grid-4'].includes(next.layoutMode) || typeof next.hideLegacyPollutionSessions !== 'boolean') throw new Error('工作台布局无效');
-    if (typeof next.leftSidebarCollapsed !== 'boolean' || typeof next.rightInspectorCollapsed !== 'boolean' || !Number.isFinite(next.leftSidebarWidth) || next.leftSidebarWidth < 160 || next.leftSidebarWidth > 600 || !Number.isFinite(next.rightInspectorWidth) || next.rightInspectorWidth < 240 || next.rightInspectorWidth > 1000 || !['diff', 'files', 'plan', 'terminal', 'context', 'swarm', 'quota'].includes(next.activeInspectorTab)) throw new Error('Inspector 布局或栏宽无效');
+    if (typeof next.leftSidebarCollapsed !== 'boolean' || typeof next.rightInspectorCollapsed !== 'boolean' || !Number.isFinite(next.leftSidebarWidth) || next.leftSidebarWidth < 160 || next.leftSidebarWidth > 600 || !Number.isFinite(next.rightInspectorWidth) || next.rightInspectorWidth < 240 || next.rightInspectorWidth > 1000 || !isRightInspectorTab(next.activeInspectorTab)) throw new Error('Inspector 布局或栏宽无效');
     this.layout = next; this.store.write('layout.json', next); return structuredClone(next);
   }
   async renameSession(sessionId: string, newTitle: string) { const session = this.titles.rename(this.sessions.get(sessionId), newTitle); this.sessions.updateSessionRecord(session); this.emit('session-updated', session); return session; }

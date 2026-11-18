@@ -333,10 +333,19 @@ describe('v0.5 六项核心增强验收测试', () => {
       sessionId: 'sess-annot',
     });
 
-    sendPromptMock.mockRejectedValueOnce(new Error('测试断线'));
+    let failSend!: (reason: Error) => void;
+    sendPromptMock.mockImplementationOnce(() => new Promise<void>((_, reject) => { failSend = reject; }));
     fireEvent.click(screen.getByTestId('send-prompt-btn-sess-annot'));
+    expect(screen.queryByTestId('turn-notation-pins')).toBeNull();
+    expect(screen.queryByTestId('composer-annotations-sess-annot')).toBeNull();
+    fireEvent.mouseUp(bodyEl, { button: 0, clientX: 240, clientY: 260 });
+    fireEvent.click(screen.getByTestId('selection-annotate-btn'));
+    fireEvent.change(screen.getByTestId('selection-notation-input'), { target: { value: '发送途中新增的批注' } });
+    fireEvent.click(screen.getByTestId('selection-notation-save-btn'));
+    expect(screen.getAllByTestId(/^composer-notation-/)).toHaveLength(1);
+    await act(async () => { failSend(new Error('测试断线')); });
     await screen.findByText(/测试断线/);
-    expect(screen.getAllByTestId(/^composer-notation-/)).toHaveLength(2);
+    expect(screen.getAllByTestId(/^composer-notation-/)).toHaveLength(3);
     // 重试时完整发送同一组引用和批注。
     fireEvent.click(screen.getByTestId('send-prompt-btn-sess-annot'));
     await waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(2));
@@ -346,6 +355,7 @@ describe('v0.5 六项核心增强验收测试', () => {
     expect(sentText).toContain('【逐处标记批注 (Notations)】');
     expect(sentText).toContain('1. 针对原文「检查本地文件 src/main/core-service.ts」：请补充空路径异常校验');
     expect(sentText).toContain('2. 针对原文「第二处关键逻辑负责压缩窗口读取」：缓存命中后避免重复读取 SQLite');
+    expect(sentText.match(/发送途中新增的批注/g)).toHaveLength(1);
   });
 
   it('4) AI 代审转交人工审理时清晰解析并展示代码与命令的明确用意', async () => {

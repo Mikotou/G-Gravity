@@ -1,9 +1,10 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from '../src/renderer/App';
-import { SessionPane } from '../src/renderer/components/SessionPane';
+import { SessionWorkspaceGrid } from '../src/renderer/components/SessionWorkspaceGrid';
+import { TopBar } from '../src/renderer/components/TopBar';
 import { getFallbackDesktopBridge } from '../src/renderer/services/desktop-bridge';
-import type { ChatMessageItem, SendPromptInput } from '../src/shared';
+import type { ChatMessageItem, ManagedSessionSummary, SendPromptInput, WorkspaceSplitMode } from '../src/shared';
 import '../src/renderer/styles/global.css';
 import '../src/renderer/styles/design-system.css';
 
@@ -41,19 +42,51 @@ async function main() {
   ];
   const noop = () => {};
   const done = async () => {};
+  const other = { ...session, sessionId: 'fixture-other', title: '其他记录', updatedAt: '2099-01-01T00:00:00Z' };
   const state = { opened: false, calls: [] as SendPromptInput[], revised: '', streaming: true,
+    mode: 'single' as WorkspaceSplitMode, long: false, quotaReads: 0, sending: false, settle: () => {},
     draw(streaming: boolean) {
       state.streaming = streaming;
+      const primary: ManagedSessionSummary = { ...session, status: state.sending ? 'streaming' : 'idle' };
+      const sessions = [other, primary];
+      const layout = { ...boot.layout, layoutMode: state.mode,
+        openTabSessionIds: state.opened ? [primary.sessionId, other.sessionId] : [],
+        activePrimarySessionId: state.opened ? primary.sessionId : null, splitSecondarySessionId: other.sessionId,
+        tertiarySessionId: null, quaternarySessionId: null };
       const reply = messages[1];
       const thought = { ...reply.thoughts![0], isStreaming: streaming, isTranslating: streaming };
-      root.render(<SessionPane slotIndex={0} layoutMode="single" isFocused session={state.opened ? session : null} availableSessions={[session]} availableModels={[]}
-        messages={[messages[0], { ...reply, thoughts: [thought] }]} pendingApprovals={[]} approvalConfig={boot.approvalConfig}
-        defaultThoughtTrack="zh" telemetryDashboard={boot.telemetry} scrollMemoryRef={scroll} canTriggerDemoApproval={false} appIcon="gravity-claude-dark"
-        onFocusPane={noop} onBindSlotSession={() => { state.opened = true; state.draw(state.streaming); }} onOpenNewSession={noop} onReviseMessage={async input => { state.revised = input.text; }}
-        onSendPrompt={async input => { state.calls.push(input); }} onCancelPrompt={done} onCompactContext={done} onSetSessionMode={done}
-        onSetSessionEffort={done} onSetSessionModel={done} onQueryWorkspaceFiles={async () => []} onSubmitApproval={done} onCycleApprovalMode={done}
-        onOpenApprovalSettings={noop} onOpenSwarmInspector={noop} onOpenContextInspector={noop} onInspectDiffFile={noop} onTriggerDemoApproval={noop} />);
+      const transcript = [messages[0], { ...reply, thoughts: [thought] }];
+      if (state.long) transcript.push({ ...reply, id: 'long-reply', attachments: [], thoughts: [],
+        content: Array.from({ length: 55 }, (_, n) => '布局测试段落 ' + n).join('\n\n') });
+      root.render(<div style={{ display: 'flex', flexDirection: 'column', width: '100%', minWidth: 0 }}>
+        <TopBar sessions={sessions} layout={layout} focusedSessionId={primary.sessionId} pendingApprovals={[]}
+          onToggleLeftSidebar={noop} onToggleRightInspector={noop} onSelectTab={noop} onCloseTab={noop} onOpenNewSessionModal={noop}
+          onChangeLayoutMode={mode => { state.mode = mode; state.draw(state.streaming); }} />
+        <SessionWorkspaceGrid layout={layout} focusedSessionId={primary.sessionId} sessions={sessions} availableModels={[]}
+          messagesBySession={{ [primary.sessionId]: transcript, [other.sessionId]: [] }} auditLog={[]} swarmBySession={{}}
+          pendingApprovals={[]} approvalConfig={boot.approvalConfig} defaultThoughtTrack="zh" telemetryDashboard={boot.telemetry}
+          scrollMemoryRef={scroll} canTriggerDemoApproval={false} appIcon="gravity-claude-dark"
+          onFocusPane={noop} onBindSlotSession={(_, id) => { if (id === primary.sessionId) { state.opened = true; state.draw(state.streaming); } }}
+          onOpenNewSession={noop} onReviseMessage={async input => { state.revised = input.text; }}
+          onSendPrompt={input => {
+            state.calls.push(input); state.sending = true; state.draw(false);
+            return new Promise<void>(resolve => {
+              state.settle = () => { state.sending = false; state.draw(false); resolve(); };
+            });
+          }}
+          onCancelPrompt={done} onCompactContext={done} onSetSessionMode={done} onSetSessionEffort={done}
+          onSetSessionModel={done} onQueryWorkspaceFiles={async () => []} onSubmitApproval={done} onCycleApprovalMode={done}
+          onOpenApprovalSettings={noop} onOpenSwarmInspector={noop} onOpenContextInspector={noop} onInspectDiffFile={noop}
+          onTriggerDemoApproval={noop} />
+      </div>);
     } };
+  bridge.getAccountQuota = async () => {
+    state.quotaReads++;
+    return { profileId: session.profileId, checkedAt: new Date().toISOString(), buckets: [
+      { id: '3p-5h', remainingFraction: 0 }, { id: '3p-weekly', remainingFraction: .46 },
+      { id: 'gemini-5h', remainingFraction: 1 }, { id: 'gemini-weekly', remainingFraction: state.quotaReads === 1 ? .812 : .798 },
+    ] };
+  };
   Object.assign(window, { fixture: state });
   state.draw(true);
 }

@@ -7,7 +7,7 @@
 export const APP_BRAND = {
   name: 'Gravity',
   productName: 'Gravity',
-  version: '0.1.2',
+  version: '0.1.3',
   descriptionZh: '基于官方 ACP 协议的本地智能编码工作台',
   descriptionEn: 'Local Agentic Coding Studio powered by Official ACP',
 } as const;

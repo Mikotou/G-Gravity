@@ -635,38 +635,30 @@
   inset: 0 0 auto 0;
   height: 2px;
   z-index: 3;
-  overflow: hidden;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--accent-primary) 80%, transparent) 50%,
-    transparent 100%
-  );
-  background-size: 40% 100%;
-  background-repeat: no-repeat;
-  animation: gv-pane-progress 1.6s var(--ease-in-out) infinite;
+  pointer-events: none;
 }
 
-@keyframes gv-pane-progress {
-  from {
-    background-position: -40% 0;
-  }
-  to {
-    background-position: 140% 0;
-  }
+.stream-viewport {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
 }
 
 .jump-latest {
   position: absolute;
-  left: 50%;
-  bottom: 150px;
-  z-index: 30;
+  inset-inline: 0;
+  margin-inline: auto;
+  width: max-content;
+  bottom: 10px;
+  z-index: 3;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 30px;
   padding: 0 13px;
-  transform: translateX(-50%);
   border-radius: 99px;
   border: 1px solid var(--border-strong);
   background: var(--surface-3);
@@ -735,7 +727,7 @@
   height: 2px;
   border-radius: 2px 2px 0 0;
   background: transparent;
-  transition: background var(--dur-2);
+  transition: background-color var(--dur-2);
 }
 
 .tab.is-active::after {
@@ -751,11 +743,30 @@
   background: var(--status-danger);
 }
 
+.pane[data-pane-state='streaming']::before,
 .tab[data-tab-state='streaming']::after {
-  background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
-  background-size: 50% 100%;
-  background-repeat: no-repeat;
-  animation: gv-pane-progress 1.6s var(--ease-in-out) infinite;
+  --activity-period: 192px;
+  --activity-base: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  background: linear-gradient(90deg, var(--activity-base) 0%, var(--activity-base) 14%,
+    var(--accent-primary) 50%, var(--activity-base) 86%, var(--activity-base) 100%) repeat-x;
+  background-size: var(--activity-period) 100%;
+  animation: gv-activity-flow 2.6s linear infinite;
+}
+
+.pane[data-pane-state='streaming']::before {
+  --activity-period: 432px;
+}
+
+@keyframes gv-activity-flow {
+  from { background-position-x: 0; }
+  to { background-position-x: var(--activity-period); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane[data-pane-state='streaming']::before,
+  .tab[data-tab-state='streaming']::after {
+    animation: none;
+  }
 }
 
 .tab-alert-count {

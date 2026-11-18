@@ -38,6 +38,7 @@ import {
   type TextQuoteItem,
 } from './SelectionAnnotationTools';
 import { ThinkingBlock } from './ThinkingBlock';
+import { AccountQuotaFooter } from './AccountQuotaView';
 import { PaneStatusChip, ToolActivityStream, TurnOutcomeBar } from './TurnActivity';
 
 export interface SessionPaneProps {
@@ -282,7 +283,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
   const streamRef = useRef<HTMLDivElement | null>(null);
   const selectionRange = useRef<Range | null>(null);
   const stickToBottomRef = useRef(true);
-  const { quotes: sessionQuotes, notes: sessionNotations, update: updateDraft } =
+  const { quotes: sessionQuotes, notes: sessionNotations, update: updateDraft, takeSubmitted } =
     useAnnotationDraft(session?.profileId || 'default', session?.sessionId || '');
   const [editRequest, setEditRequest] = useState({ id: '', seq: 0 });
   useLayoutEffect(() => {
@@ -553,124 +554,126 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
         )}
       </header>
 
-      <div
-        ref={streamRef}
-        className="stream"
-        onMouseUp={handleStreamMouseUp}
-        onKeyUp={e => { if (e.shiftKey) handleStreamMouseUp(e); }}
-        onContextMenu={handleStreamContextMenu}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          scrollMemoryRef.current[session.sessionId] = el.scrollTop;
-          const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-          stickToBottomRef.current = nearBottom;
-          const away = el.scrollHeight - el.scrollTop - el.clientHeight > 240;
-          if (away !== awayFromBottom) setAwayFromBottom(away);
-          if (nearBottom && hasUnseen) setHasUnseen(false);
-          const anchor = selectionRange.current;
-          if (selectionBar && anchor && typeof anchor.getBoundingClientRect === 'function') {
-            const rect = anchor.getBoundingClientRect();
-            const x = rect.left + Math.min(rect.width / 2, 120);
-            const y = Math.max(14, rect.top - 42);
-            setSelectionBar(prev => prev && (prev.x !== x || prev.y !== y) ? { ...prev, x, y } : prev);
-          }
-          if (contextMenu) setContextMenu(null);
-        }}
-      >
-        <div className="stream-inner">
-          {openTargetError && (
-            <div role="alert" className="alert" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ flex: 1 }}>{openTargetError}</span>
-              <button
-                type="button"
-                className="icon-btn icon-btn-sm"
-                onClick={() => setOpenTargetError(null)}
-                aria-label={dict.closeAction}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          )}
-          {messages.map((msg) => {
-            const linked = msg.pendingApprovalId
-              ? sessionApprovals.find((a) => a.requestId === msg.pendingApprovalId)
-              : undefined;
-            if (linked) renderedApprovalIds.add(linked.requestId);
-            const turnNotations = sessionNotations.filter((n) => n.messageId === msg.id);
-            const turn = (
-              <ImageWorkspace.Provider value={session.cwd}><MessageTurn
-                message={msg}
-                latest={msg.id === lastUserId}
-                editRequest={editRequest.id === msg.id ? editRequest.seq : 0}
-                onRevise={session.readOnly ? undefined : props.onReviseMessage}
-                busy={session.status === 'streaming' || session.status === 'waiting_approval'}
-                defaultThoughtTrack={defaultThoughtTrack}
-                turnStartedAt={turnStartById.get(msg.id)}
-                onInspectDiff={(fp) => onInspectDiffFile(session.sessionId, fp)}
-              /></ImageWorkspace.Provider>
-            );
-            return (
-              <div key={msg.id} className={`turn turn-${msg.role}`}>
-                {turn}
-                {turnNotations.length > 0 && (
-                  <TurnNotationPins
-                    items={turnNotations}
-                    allNotations={sessionNotations}
-                    locale={locale}
-                    onUpdate={(id, comment) => updateDraft(d => ({ ...d, notes: d.notes.map(n => n.id === id ? { ...n, comment } : n) }))}
-                    onRemove={id => updateDraft(d => ({ ...d, notes: d.notes.filter(n => n.id !== id) }))}
-                  />
-                )}
-                {linked && (
-                  <InlineRequestView
-                    request={linked}
-                    enableNumericShortcuts={isFocused && linked.requestId === primaryShortcutRequestId}
-                    onSubmitDecision={onSubmitApproval}
-                  />
-                )}
-              </div>
-            );
-          })}
-
-          {sessionApprovals
-            .filter((req) => !renderedApprovalIds.has(req.requestId))
-            .map((req) => (
-              <InlineRequestView
-                key={req.requestId}
-                request={req}
-                enableNumericShortcuts={isFocused && req.requestId === primaryShortcutRequestId}
-                onSubmitDecision={onSubmitApproval}
-              />
-            ))}
-
-          {showWorking && (
-            <div className="cc-thinking-head" style={{ cursor: 'default' }}>
-              <span className="cc-thinking-glyph is-streaming">✻</span>
-              <span className="cc-thinking-title is-streaming">{dict.thinkingStreamingTitle}</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {awayFromBottom && (
-        <button
-          type="button"
-          className={`jump-latest ${hasUnseen ? 'has-unseen' : ''}`}
-          onClick={jumpToLatest}
-          data-testid={`jump-latest-${session.sessionId}`}
+      <div className="stream-viewport">
+        <div
+          ref={streamRef}
+          className="stream"
+          onMouseUp={handleStreamMouseUp}
+          onKeyUp={e => { if (e.shiftKey) handleStreamMouseUp(e); }}
+          onContextMenu={handleStreamContextMenu}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            scrollMemoryRef.current[session.sessionId] = el.scrollTop;
+            const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            stickToBottomRef.current = nearBottom;
+            const away = el.scrollHeight - el.scrollTop - el.clientHeight > 240;
+            if (away !== awayFromBottom) setAwayFromBottom(away);
+            if (nearBottom && hasUnseen) setHasUnseen(false);
+            const anchor = selectionRange.current;
+            if (selectionBar && anchor && typeof anchor.getBoundingClientRect === 'function') {
+              const rect = anchor.getBoundingClientRect();
+              const x = rect.left + Math.min(rect.width / 2, 120);
+              const y = Math.max(14, rect.top - 42);
+              setSelectionBar(prev => prev && (prev.x !== x || prev.y !== y) ? { ...prev, x, y } : prev);
+            }
+            if (contextMenu) setContextMenu(null);
+          }}
         >
-          <ArrowDown size={13} />
-          <span>
-            {hasUnseen
-              ? locale === 'zh-CN'
-                ? '有新内容'
-                : 'New activity'
-              : locale === 'zh-CN'
-                ? '回到最新'
-                : 'Latest'}
-          </span>
-        </button>
-      )}
+          <div className="stream-inner">
+            {openTargetError && (
+              <div role="alert" className="alert" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ flex: 1 }}>{openTargetError}</span>
+                <button
+                  type="button"
+                  className="icon-btn icon-btn-sm"
+                  onClick={() => setOpenTargetError(null)}
+                  aria-label={dict.closeAction}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )}
+            {messages.map((msg) => {
+              const linked = msg.pendingApprovalId
+                ? sessionApprovals.find((a) => a.requestId === msg.pendingApprovalId)
+                : undefined;
+              if (linked) renderedApprovalIds.add(linked.requestId);
+              const turnNotations = sessionNotations.filter((n) => n.messageId === msg.id);
+              const turn = (
+                <ImageWorkspace.Provider value={session.cwd}><MessageTurn
+                  message={msg}
+                  latest={msg.id === lastUserId}
+                  editRequest={editRequest.id === msg.id ? editRequest.seq : 0}
+                  onRevise={session.readOnly ? undefined : props.onReviseMessage}
+                  busy={session.status === 'streaming' || session.status === 'waiting_approval'}
+                  defaultThoughtTrack={defaultThoughtTrack}
+                  turnStartedAt={turnStartById.get(msg.id)}
+                  onInspectDiff={(fp) => onInspectDiffFile(session.sessionId, fp)}
+                /></ImageWorkspace.Provider>
+              );
+              return (
+                <div key={msg.id} className={`turn turn-${msg.role}`}>
+                  {turn}
+                  {turnNotations.length > 0 && (
+                    <TurnNotationPins
+                      items={turnNotations}
+                      allNotations={sessionNotations}
+                      locale={locale}
+                      onUpdate={(id, comment) => updateDraft(d => ({ ...d, notes: d.notes.map(n => n.id === id ? { ...n, comment } : n) }))}
+                      onRemove={id => updateDraft(d => ({ ...d, notes: d.notes.filter(n => n.id !== id) }))}
+                    />
+                  )}
+                  {linked && (
+                    <InlineRequestView
+                      request={linked}
+                      enableNumericShortcuts={isFocused && linked.requestId === primaryShortcutRequestId}
+                      onSubmitDecision={onSubmitApproval}
+                    />
+                  )}
+                </div>
+              );
+            })}
+
+            {sessionApprovals
+              .filter((req) => !renderedApprovalIds.has(req.requestId))
+              .map((req) => (
+                <InlineRequestView
+                  key={req.requestId}
+                  request={req}
+                  enableNumericShortcuts={isFocused && req.requestId === primaryShortcutRequestId}
+                  onSubmitDecision={onSubmitApproval}
+                />
+              ))}
+
+            {showWorking && (
+              <div className="cc-thinking-head" style={{ cursor: 'default' }}>
+                <span className="cc-thinking-glyph is-streaming">✻</span>
+                <span className="cc-thinking-title is-streaming">{dict.thinkingStreamingTitle}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {awayFromBottom && (
+          <button
+            type="button"
+            className={`jump-latest ${hasUnseen ? 'has-unseen' : ''}`}
+            onClick={jumpToLatest}
+            data-testid={`jump-latest-${session.sessionId}`}
+          >
+            <ArrowDown size={13} />
+            <span>
+              {hasUnseen
+                ? locale === 'zh-CN'
+                  ? '有新内容'
+                  : 'New activity'
+                : locale === 'zh-CN'
+                  ? '回到最新'
+                  : 'Latest'}
+            </span>
+          </button>
+        )}
+      </div>
 
       {selectionBar && (
         <SelectionFloatingBar
@@ -697,11 +700,16 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
         />
       )}
 
-      {session.readOnly ? <div className="offline-conversation">
-        <span>{locale === 'zh-CN' ? '正在查看本机保存的对话' : 'Viewing the saved conversation'}</span>
-        <button type="button" className="btn btn-sm" onClick={() => onBindSlotSession(slotIndex, session.sessionId)}>
-          {locale === 'zh-CN' ? '重新连接' : 'Reconnect'}
-        </button>
+      {session.readOnly ? <div className="composer-dock">
+        <div className="composer-wrap">
+          <div className="offline-conversation">
+            <span>{locale === 'zh-CN' ? '正在查看本机保存的对话' : 'Viewing the saved conversation'}</span>
+            <button type="button" className="btn btn-sm" onClick={() => onBindSlotSession(slotIndex, session.sessionId)}>
+              {locale === 'zh-CN' ? '重新连接' : 'Reconnect'}
+            </button>
+          </div>
+          <AccountQuotaFooter key={session.profileId} profileId={session.profileId} />
+        </div>
       </div> : <Composer
         session={session}
         availableSessions={availableSessions}
@@ -717,8 +725,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
         onEditLast={lastUserId && props.onReviseMessage ? () => setEditRequest(e => ({ id: lastUserId!, seq: e.seq + 1 })) : undefined}
         onRemoveQuote={id => updateDraft(d => ({ ...d, quotes: d.quotes.filter(q => q.id !== id) }))}
         onRemoveNotation={id => updateDraft(d => ({ ...d, notes: d.notes.filter(n => n.id !== id) }))}
-        onClearQuotesAndNotations={(quotes, notes) => updateDraft(d => ({ quotes: d.quotes.filter(q => !quotes.some(sent => sent.id === q.id)),
-          notes: d.notes.filter(n => !notes.some(sent => sent.id === n.id && sent.comment === n.comment)) }))}
+        onSubmitAnnotations={takeSubmitted}
         onSendPrompt={props.onSendPrompt}
         onCancelPrompt={props.onCancelPrompt}
         onCompactContext={props.onCompactContext}

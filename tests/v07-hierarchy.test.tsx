@@ -202,13 +202,21 @@ describe('v0.7 信息层级：回合洞察、工具分组、结果条、状态�
     fireEvent.click(screen.getByTestId('thinking-block-th').querySelector('[aria-expanded]')!);
     expect(screen.queryByTestId('thought-content-th')).toBeNull();
     view.unmount();
-    render(wrap(<><ThinkingBlock thought={{ ...base, isStreaming: false }} defaultTrack="zh" />
+    const pair = render(wrap(<><ThinkingBlock thought={{ ...base, isStreaming: false }} defaultTrack="zh" />
       <ThinkingBlock thought={{ ...base, id: 'next', originalText: 'New text', translatedZhText: '新译文', languageDetected: 'en' }} defaultTrack="zh" /></>));
     expect(screen.queryByTestId('thought-content-next')).toBeNull();
     expect(screen.getByTestId('thinking-block-next').textContent).toContain('新译文');
     expect(screen.getByTestId('thinking-block-th').textContent).toContain('先检查 core-service 的回合收口逻辑');
     fireEvent.click(screen.getByTestId('thinking-block-next').querySelector('[aria-expanded]')!);
-    expect(screen.getByTestId('thought-content-th')).toBeTruthy();
+    expect(screen.queryByTestId('thought-content-th')).toBeNull();
+    expect(localStorage.getItem('gravity.thoughts.expanded')).toBe('false');
     expect(screen.getByTestId('thought-content-next').textContent).toContain('新译文');
+    pair.rerender(wrap(<><ThinkingBlock thought={{ ...base, translatedZhText: '收起时更新了译文' }} defaultTrack="zh" />
+      <ThinkingBlock thought={{ ...base, id: 'next' }} defaultTrack="zh" />
+      <ThinkingBlock thought={{ ...base, id: 'third' }} defaultTrack="zh" /></>));
+    expect(screen.queryByTestId('thought-content-th')).toBeNull();
+    expect(screen.getByTestId('thinking-block-th').textContent).toContain('收起时更新了译文');
+    expect(screen.getByTestId('thought-content-next')).toBeTruthy();
+    expect(screen.queryByTestId('thought-content-third')).toBeNull();
   });
 });

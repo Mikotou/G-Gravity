@@ -32,6 +32,7 @@ import { useI18n } from '../i18n/I18nContext';
 import { formatActionError } from '../i18n/locales';
 import { MessageImage } from './MessageImage';
 import { ContextStatusBar } from './ContextStatusBar';
+import { AccountQuotaFooter } from './AccountQuotaView';
 import {
   composePromptWithQuotesAndNotations,
   type TextNotationItem,
@@ -69,7 +70,7 @@ export interface ComposerProps {
   focusTrigger?: number;
   onRemoveQuote?: (id: string) => void;
   onRemoveNotation?: (id: string) => void;
-  onClearQuotesAndNotations?: (quotes: TextQuoteItem[], notations: TextNotationItem[]) => void;
+  onSubmitAnnotations?: (quotes: TextQuoteItem[], notations: TextNotationItem[]) => () => void;
   onEditLast?: () => void;
   onSendPrompt: (input: SendPromptInput) => Promise<void>;
   onCancelPrompt: (sessionId: string) => Promise<void>;
@@ -208,7 +209,7 @@ export function Composer({
   focusTrigger = 0,
   onRemoveQuote,
   onRemoveNotation,
-  onClearQuotesAndNotations,
+  onSubmitAnnotations,
   onEditLast,
   onSendPrompt,
   onCancelPrompt,
@@ -418,6 +419,7 @@ export function Composer({
     setAttachments([]);
     sendLock.current = true;
     setSending(true);
+    const restoreAnnotations = onSubmitAnnotations?.(prevQuotes, prevNotations);
     try {
       await onSendPrompt({
         sessionId: session.sessionId,
@@ -433,8 +435,8 @@ export function Composer({
             }))
           : undefined,
       });
-      onClearQuotesAndNotations?.(prevQuotes, prevNotations);
     } catch (err) {
+      restoreAnnotations?.();
       setDraft(current => [prevDraft, current].filter(Boolean).join('\n'));
       setReferences(current => [...prevRefs, ...current.filter(r => !prevRefs.some(p => p.value === r.value && p.kind === r.kind))]);
       setAttachments(current => [...prevAtts, ...current]);
@@ -865,13 +867,15 @@ export function Composer({
           </div>
         </div>
 
-        <ContextStatusBar
-          sessionId={session.sessionId}
-          modelId={session.modelId}
-          sessionTelemetry={sessionTelemetry}
-          onCompactContext={onCompactContext}
-          onOpenContextInspector={onOpenContextInspector}
-        />
+        <AccountQuotaFooter key={session.profileId} profileId={session.profileId} generating={isStreaming}>
+          <ContextStatusBar
+            sessionId={session.sessionId}
+            modelId={session.modelId}
+            sessionTelemetry={sessionTelemetry}
+            onCompactContext={onCompactContext}
+            onOpenContextInspector={onOpenContextInspector}
+          />
+        </AccountQuotaFooter>
       </div>
     </div>
   );

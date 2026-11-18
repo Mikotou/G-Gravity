@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { DualTrackThoughtBlock, ThoughtDisplayTrack } from '@shared';
 import { useFluidStreamText } from '../hooks/useFluidStreamText';
 import { useI18n } from '../i18n/I18nContext';
@@ -10,18 +10,9 @@ function readExpanded(): boolean {
   try { return window.localStorage.getItem(expansionKey) !== 'false'; }
   catch { return fallbackExpanded; }
 }
-function subscribeExpansion(listener: () => void): () => void {
-  window.addEventListener(expansionKey, listener);
-  window.addEventListener('storage', listener);
-  return () => {
-    window.removeEventListener(expansionKey, listener);
-    window.removeEventListener('storage', listener);
-  };
-}
-function toggleExpansion(): void {
-  fallbackExpanded = !readExpanded();
-  try { window.localStorage.setItem(expansionKey, String(fallbackExpanded)); } catch { /* Window memory still works. */ }
-  window.dispatchEvent(new Event(expansionKey));
+function rememberCollapsedDefault(): void {
+  fallbackExpanded = false;
+  try { window.localStorage.setItem(expansionKey, 'false'); } catch { /* Keep the preference for this window. */ }
 }
 
 export interface ThinkingBlockProps {
@@ -36,7 +27,11 @@ export function ThinkingBlock({
   forceAnimation = false,
 }: ThinkingBlockProps): React.ReactElement {
   const { dict } = useI18n();
-  const expanded = useSyncExternalStore(subscribeExpansion, readExpanded, () => true);
+  const [expanded, setExpanded] = useState(readExpanded);
+  function toggleExpansion(): void {
+    if (expanded) rememberCollapsedDefault();
+    setExpanded(!expanded);
+  }
   const [track, setTrack] = useState<ThoughtDisplayTrack>(defaultTrack);
 
   useEffect(() => {

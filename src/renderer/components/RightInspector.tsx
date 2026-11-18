@@ -6,11 +6,9 @@ import {
   CircleDot,
   FileCode2,
   FileDiff,
-  Gauge,
   ListTodo,
   Network,
   SquareTerminal,
-  X,
 } from 'lucide-react';
 import type {
   ChatMessageItem,
@@ -24,7 +22,6 @@ import type {
 } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { ContextCostInspectorView } from './ContextCostInspectorView';
-import { AccountQuotaView } from './AccountQuotaView';
 import { SwarmPanel } from './SwarmPanel';
 import { UnifiedDiffBlock } from './UnifiedDiffBlock';
 
@@ -46,7 +43,6 @@ export interface RightInspectorProps {
   onCommitWidth: (width: number) => void;
   onLaunchSwarmTask?: (sessionId: string, taskBrief: string) => Promise<void>;
   onOpenRateCardsSettings: () => void;
-  onClose?: () => void;
 }
 
 const TABS: ReadonlyArray<{ id: RightInspectorTab; Icon: typeof FileDiff }> = [
@@ -55,7 +51,6 @@ const TABS: ReadonlyArray<{ id: RightInspectorTab; Icon: typeof FileDiff }> = [
   { id: 'plan', Icon: ListTodo },
   { id: 'terminal', Icon: SquareTerminal },
   { id: 'context', Icon: BarChart3 },
-  { id: 'quota', Icon: Gauge },
   { id: 'swarm', Icon: Network },
 ];
 
@@ -78,7 +73,6 @@ export function RightInspector({
   onCommitWidth,
   onLaunchSwarmTask,
   onOpenRateCardsSettings,
-  onClose,
 }: RightInspectorProps): React.ReactElement {
   const { dict } = useI18n();
   const [liveWidth, setLiveWidth] = useState<number>(width || 380);
@@ -253,7 +247,7 @@ export function RightInspector({
               type="button"
               role="tab"
               aria-selected={activeTab === id}
-              className={`inspector-tab ${id === 'quota' ? 'quota-tab' : ''} ${activeTab === id ? 'is-active' : ''}`}
+              className={`inspector-tab ${activeTab === id ? 'is-active' : ''}`}
               onClick={() => onSelectTab(id)}
               aria-label={dict.inspectorTabs[id]}
               title={dict.inspectorTabs[id]}
@@ -266,12 +260,6 @@ export function RightInspector({
               ) : null}
             </button>
           ))}
-          <span className="spacer" />
-          {onClose && (
-            <button type="button" className="icon-btn icon-btn-sm" onClick={onClose} aria-label={dict.closeAction}>
-              <X size={13} />
-            </button>
-          )}
         </div>
 
         <div className="inspector-body">
@@ -361,7 +349,6 @@ export function RightInspector({
             </div>
           )}
 
-          {!collapsed && activeTab === 'quota' && <AccountQuotaView key={profileId} profileId={profileId} />}
           {activeTab === 'context' && (
             <ContextCostInspectorView
               sessionId={sessionId}
