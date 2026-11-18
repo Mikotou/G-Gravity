@@ -24,8 +24,8 @@ import { TitleOrganizer } from './organizer/title-organizer';
 import { estimateTokens, TelemetryStore } from './telemetry/telemetry-store';
 import { readSessionCheckpointLimit } from './telemetry/checkpoint-limit-reader';
 import { ThoughtTranslator } from './translation/thought-translator';
-import { SwarmTranslator } from './translation/swarm-translator';
 import { SwarmTracker } from './swarm/swarm-tracker';
+import { readAccountQuota } from './accounts/account-quota';
 import { AccountManager } from './accounts/account-manager';
 import { HistoryImporter } from './history/history-importer';
 import { PluginsManager, type CliExecutor } from './plugins/plugins-manager';
@@ -34,10 +34,11 @@ import { InspectorStore } from './session/inspector-store';
 
 import { prepareRevision, revisionContext } from '../shared/message-revision';
 import type { ReviseMessageInput } from '../shared/ipc-channels';
+import { withoutSession, type SessionAction } from '../shared/session-contract';
 import { appendImage } from './session/message-images';
 import { LocalTranslator } from './translation/local-translator';
 
-export const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'gravity-claude-dark', defaultThoughtTrack: 'zh', translationEngine: 'swarm', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [] };
+export const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'gravity-claude-dark', defaultThoughtTrack: 'zh', translationEngine: 'local', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [] };
 export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, tertiarySessionId: null, quaternarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context' };
 export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; setIcon?: (iconId: GravityIconId) => void | Promise<void>; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
 /** 主进程的业务入口。窗口请求进入此处，ACP 更新按会话分发给消息、审批、统计和检视器，再由事件通知渲染层。 */
@@ -56,9 +57,9 @@ export class CoreService extends EventEmitter {
   private reactiveTurnTimers = new Map<string, NodeJS.Timeout>();
   private reactiveWakeupActive = new Set<string>();
   private skipReplayedMessages = new Set<string>();
+  private quotaRequests = new Map<string, ReturnType<typeof readAccountQuota>>();
+  private managing = new Set<string>();
   private revising = new Set<string>();
-  private waitingPrompts = new Map<string, symbol>();
-  private translators: SwarmTranslator;
   private localTranslator = new LocalTranslator();
   private guardActiveSessions = new Map<string, { count: number; modelLabel: string }>();
   private bootstrapping?: Promise<AppBootstrapPayload>;
@@ -66,7 +67,10 @@ export class CoreService extends EventEmitter {
   constructor(private options: CoreServiceOptions) {
     super(); this.store = new ClientStore(options.dataDir);
     this.preferences = { ...DEFAULT_PREFERENCES, ...this.store.read('preferences.json', {}) };
-    if (this.preferences.translationEngine !== 'local') this.preferences.translationEngine = 'swarm';
+    if (this.preferences.translationEngine !== 'local') {
+      this.preferences.translationEngine = 'local';
+      this.store.write('preferences.json', this.preferences);
+    }
     if (!THEME_PRESETS.some(theme => theme.id === this.preferences.theme) && !['custom', 'system'].includes(this.preferences.theme)) this.preferences.theme = DEFAULT_PREFERENCES.theme;
     if (!GRAVITY_ICON_VARIANTS.some(icon => icon.id === this.preferences.appIcon)) this.preferences.appIcon = DEFAULT_PREFERENCES.appIcon;
     if (this.preferences.customTheme) { try { this.preferences.customTheme = validateCustomThemeConfig(this.preferences.customTheme); } catch { delete this.preferences.customTheme; this.preferences.theme = DEFAULT_PREFERENCES.theme; } }
@@ -80,23 +84,18 @@ export class CoreService extends EventEmitter {
     catch { this.approval = new ApprovalEngine({ store: this.store, reviewer: options.reviewer }); }
     this.telemetry = new TelemetryStore({ store: this.store });
     this.swarm = new SwarmTracker(this.store);
-    this.translators = new SwarmTranslator(this.client, this.store, id => this.sessions.sessions.has(id),
-      (parent, member, status) => this.swarm.updateTranslatorStatus(parent, member, status));
     this.inspector = new InspectorStore(this.store);
     this.titles = new TitleOrganizer(this.store);
     this.thoughts =
       options.translator ||
-      new ThoughtTranslator(undefined, (originalText, thoughtId, onDelta) =>
-        this.translateThoughtBlock(originalText, thoughtId, onDelta)
-      );
+      new ThoughtTranslator(originalText => this.localTranslator.translate(originalText));
     // 默认与外部 Antigravity 历史完全隔离（roots=[]），仅在显式指定 historyRoots（如单测）时扫描
     this.history = new HistoryImporter({ roots: options.historyRoots ?? [], cacheDir: join(options.dataDir, 'history-cache') });
     this.plugins = new PluginsManager({ store: this.store, binaryPath: options.acpOptions?.binaryPath, executor: options.pluginsExecutor, homeDir: options.homeDir });
     // 切换账号要跨越两套会话状态。旧消息在切换前保存，新账号的消息在窗格和内存索引清空后载入。
     this.accounts = new AccountManager({ store: this.store, client: this.client, sessions: this.sessions,
-      beforeSwitch: async () => { this.approval.dispose(); this.feedback.clear(); this.saveMessages(); this.translators.reset(); },
+      beforeSwitch: async () => { if (this.managing.size) throw new Error('正在保存会话变更'); this.approval.dispose(); this.feedback.clear(); this.saveMessages(); },
       afterSwitch: profileId => {
-        this.waitingPrompts.clear();
         this.thoughts.dispose();
         for (const id of this.reactiveTurnTimers.keys()) this.clearReactiveTurnTimer(id);
         this.guardActiveSessions.clear();
@@ -117,7 +116,7 @@ export class CoreService extends EventEmitter {
       if (!params?.sessionId || !this.sessions.isActive(params.sessionId)) return { outcome: { outcome: 'cancelled' } };
       return this.approval.requestPermission(params, this.sessions.get(params.sessionId).cwd);
     });
-    this.client.on('disconnected', () => { this.translators.reset(); this.approval.dispose(); });
+    this.client.on('disconnected', () => { this.approval.dispose(); });
     this.client.on('rateLimited', (warning: string) => {
       for (const session of this.sessions.sessions.values()) if (this.sessions.isActive(session.sessionId)) this.upsert({ id: randomUUID(), sessionId: session.sessionId, role: 'system', content: warning, createdAt: new Date().toISOString() });
     });
@@ -172,7 +171,8 @@ export class CoreService extends EventEmitter {
     const owned = new Set(this.sessions.sessions.keys());
     this.inspector.setProfile(profileId, owned);
     this.swarm.setProfile(profileId, owned);
-    this.translators.setProfile(profileId);
+    const pending = this.store.read<string[]>('pending-session-deletes-' + profileId + '.json', []);
+    for (const id of pending) this.finishDeletion(id);
   }
   getPreferences(): ClientPreferences { return structuredClone(this.preferences); }
   private saveMessages(): void { this.store.write(this.messagesFile(), Object.fromEntries(this.messages)); }
@@ -183,8 +183,9 @@ export class CoreService extends EventEmitter {
   private loadMessages(): void {
     const saved = this.store.read<Record<string, ChatMessageItem[]>>(this.messagesFile(), this.accounts.activeProfileId === 'default' ? this.store.read('messages.json', {}) : {});
     const seedEntries: Array<{ sessionId: string; title: string; cwd: string; updatedAt: string }> = [];
+    const hasLedger = this.sessions.hasPersistedLedger();
     for (const [id, items] of Object.entries(saved || {})) {
-      if (!Array.isArray(items)) continue;
+      if (!Array.isArray(items) || (hasLedger && !this.sessions.sessions.has(id))) continue;
       const normalizedItems = items.slice(-500).filter(item => item && typeof item.id === 'string').map(item => ({
         ...item, isStreaming: false,
         thoughts: item.thoughts?.map(block => ({ ...block, isStreaming: false, isTranslating: false })),
@@ -218,10 +219,6 @@ export class CoreService extends EventEmitter {
   }
   /** 按 ACP 更新类型合并增量。回复正文、思考、工具状态和用量共享 sessionId，各自维护自己的累计方式。 */
   private consumeUpdate({ sessionId, update }: AcpSessionUpdateNotification): void {
-    if (this.translators.isStarting(sessionId) && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'user_message_chunk', 'plan'].includes(update.sessionUpdate)) {
-      this.swarm.consume(sessionId, update);
-      return;
-    }
     const replaying = this.sessions.isResuming(sessionId);
     if (replaying && this.skipReplayedMessages.has(sessionId) &&
         !['available_commands_update', 'current_mode_update', 'config_option_update'].includes(update.sessionUpdate)) return;
@@ -402,10 +399,21 @@ export class CoreService extends EventEmitter {
     })();
     try { return await this.bootstrapping; } finally { this.bootstrapping = undefined; }
   }
+  async getAccountQuota() {
+    this.accounts.assertReady();
+    const state = this.accounts.getState();
+    const profile = state.profiles.find(p => p.profileId === state.activeProfileId)!;
+    let query = this.quotaRequests.get(profile.profileId);
+    if (!query) {
+      query = readAccountQuota(profile, this.client.options.binaryPath).finally(() => this.quotaRequests.delete(profile.profileId));
+      this.quotaRequests.set(profile.profileId, query);
+    }
+    return query;
+  }
   async getConnectionStatus(): Promise<AcpConnectionStatus> { return { connected: this.client.connected, agyBinaryPath: this.client.binaryPath, agyVersion: this.client.initializeResult?.agentInfo?.version || '', agentServerVersion: this.client.initializeResult?.agentInfo?.version, activeSessionCount: this.sessions.activeSessionCount, maxParallelSessions: 4, activeProfileId: this.accounts.activeProfileId, availableModels: this.sessions.availableModels(), lastError: this.client.lastError }; }
   async updatePreferences(patch: Partial<ClientPreferences>): Promise<ClientPreferences> {
     const next = { ...this.preferences, ...patch };
-    if (!['local', 'swarm'].includes(next.translationEngine!)) throw new Error('翻译方式无效');
+    next.translationEngine = 'local';
     if (!['zh-CN', 'en-US'].includes(next.locale) || !['zh', 'raw'].includes(next.defaultThoughtTrack) || !(['system', 'custom'].includes(next.theme) || THEME_PRESETS.some(theme => theme.id === next.theme)) || typeof next.processPerSession !== 'boolean' || !GRAVITY_ICON_VARIANTS.some(icon => icon.id === next.appIcon)) throw new Error('偏好设置格式无效');
     // Profile 切换还涉及关闭旧连接和加载新的消息索引，必须走账号管理器的完整切换流程。
     if (next.activeProfileId !== this.accounts.activeProfileId) throw new Error('切换 Profile 必须使用专用账号切换入口');
@@ -451,7 +459,6 @@ export class CoreService extends EventEmitter {
     }
     if (this.client.connected && next.processPerSession !== this.preferences.processPerSession) throw new Error('请重启客户端后修改进程隔离设置');
     if (next.appIcon !== this.preferences.appIcon) await this.options.setIcon?.(next.appIcon);
-    if (next.translationEngine === 'local' && this.preferences.translationEngine !== 'local') this.translators.reset();
     this.preferences = next; this.store.write('preferences.json', next);
     if (!this.client.connected) { this.client.options.args = ['acp', ...(next.processPerSession ? ['--process-per-session'] : [])]; this.accounts.applyArgs(); }
     return structuredClone(next);
@@ -492,18 +499,19 @@ export class CoreService extends EventEmitter {
     let session = await this.sessions.createSession(input);
     try {
       if (input.modelId && input.modelId !== session.modelId) session = await this.sessions.setSessionModel(session.sessionId, input.modelId);
-      if (input.executionMode) session = await this.sessions.setSessionMode(session.sessionId, input.executionMode);
-      if (input.reasoningEffort) session = await this.sessions.setSessionEffort(session.sessionId, input.reasoningEffort);
+      if (input.executionMode && input.executionMode !== session.executionMode) session = await this.sessions.setSessionMode(session.sessionId, input.executionMode);
+      if (input.reasoningEffort && (input.reasoningEffort !== session.reasoningEffort ||
+          session.availableEfforts?.every(level => level.value !== input.reasoningEffort))) session = await this.sessions.setSessionEffort(session.sessionId, input.reasoningEffort);
     // 初始模式、推理强度或模型设置失败时尝试关闭刚创建的会话，避免半配置的会话继续占用活动名额。
     } catch (error) { await this.sessions.closeSession(session.sessionId).catch(() => {}); throw error; }
     this.approval.setSessionExecutionMode(session.sessionId, session.executionMode);
-    void this.startSwarmTranslation(session);
     this.telemetry.hydrateFromMessages(session.sessionId, session.modelId, this.messages.get(session.sessionId) || []);
     this.syncSessionCheckpointWindow(session.sessionId);
     return this.titles.apply(session);
   }
   async resumeSession(sessionId: string, cwd: string) {
     this.accounts.assertReady();
+    if (this.managing.has(sessionId) || this.sessions.get(sessionId).archivedAt) throw new Error('请先从归档恢复会话');
     if (this.sessions.isActive(sessionId)) return this.titles.apply(this.sessions.get(sessionId));
     if (this.sessions.isResuming(sessionId)) throw new Error('此会话正在恢复');
     const hadLocalMessages = Boolean(this.messages.get(sessionId)?.length);
@@ -534,32 +542,62 @@ export class CoreService extends EventEmitter {
     this.finishMessage(sessionId);
     return this.titles.apply(session);
   }
-  async closeSession(sessionId: string): Promise<void> { this.clearReactiveTurnTimer(sessionId); this.swarm.markWorkingSubagentsCompleted(sessionId, '会话已关闭'); this.approval.cancelSession(sessionId); await this.sessions.closeSession(sessionId); this.translators.release(sessionId); this.finishMessage(sessionId); }
-  async getSessionMessages(sessionId: string): Promise<ChatMessageItem[]> { return structuredClone(this.messages.get(sessionId) || []); }
-  private startSwarmTranslation(session: ManagedSessionSummary): Promise<void> {
-    if (this.preferences.translationEngine === 'local') return Promise.resolve();
-    if (!this.client.initializeResult?.agentInfo.name.toLowerCase().includes('antigravity')) return Promise.resolve();
-    const existing = this.translators.pendingStart(session.sessionId);
-    if (existing) return existing;
-    const message: ChatMessageItem = {
-      id: randomUUID(), sessionId: session.sessionId, role: 'system',
-      content: '正在请主模型创建或接回本会话的蜂群翻译成员…', createdAt: new Date().toISOString(),
-    };
-    this.upsert(message);
-    return this.translators.start(session.sessionId, session.cwd, content => {
-      this.upsert({ ...message, content });
-      this.saveMessages();
-    });
-  }
-  private async translateThoughtBlock(originalText: string, thoughtId: string, onDelta?: (text: string) => void) {
-    const owner = this.thoughtOwners.get(thoughtId);
-    if (!owner) return '';
-    if (this.preferences.translationEngine === 'swarm' && this.translators.hasAttempt(owner.sessionId)) {
-      const text = await this.translators.translate(owner.sessionId, originalText, onDelta).catch(() => '');
-      if (text) return { text, source: 'acp-subagent' as const };
+  async closeSession(sessionId: string): Promise<void> { this.clearReactiveTurnTimer(sessionId); this.swarm.markWorkingSubagentsCompleted(sessionId, '会话已关闭'); this.approval.cancelSession(sessionId); await this.sessions.closeSession(sessionId); this.finishMessage(sessionId); }
+  private finishDeletion(id: string): void {
+    const profile = this.accounts.activeProfileId;
+    for (const [key, owner] of this.thoughtOwners) if (owner.sessionId === id) {
+      this.thoughtOwners.delete(key);
+      this.thoughts.clear(key);
     }
-    return { text: await this.localTranslator.translate(originalText), source: 'local-model' as const };
+    this.clearReactiveTurnTimer(id);
+    this.feedback.delete(id); this.compactAvailable.delete(id); this.guardActiveSessions.delete(id);
+    this.assistantMessages.delete(id);
+    this.messages.delete(id);
+    this.saveMessages();
+    this.inspector.remove(id);
+    this.swarm.remove(id);
+    this.titles.remove(profile, id);
+    this.telemetry.remove(id);
+    if (profile === 'default') {
+      for (const file of ['messages.json', 'inspector-states.json', 'swarm-states.json']) {
+        const legacy = this.store.read<Record<string, unknown>>(file, {});
+        if (Object.hasOwn(legacy, id)) { delete legacy[id]; this.store.write(file, legacy); }
+      }
+    }
+    this.sessions.forgetSession(id);
+    this.layout = withoutSession(this.layout, id);
+    this.store.write('layout.json', this.layout);
+    const journal = 'pending-session-deletes-' + profile + '.json';
+    this.store.write(journal, this.store.read<string[]>(journal, []).filter(item => item !== id));
   }
+  async manageSession(id: string, action: SessionAction) {
+    this.accounts.assertReady();
+    if (!['archive', 'restore', 'delete'].includes(action)) throw new Error('未知会话操作');
+    const journal = 'pending-session-deletes-' + this.accounts.activeProfileId + '.json';
+    const pendingDelete = this.store.read<string[]>(journal, []).includes(id);
+    if (pendingDelete && action !== 'delete') throw new Error('会话删除尚未完成');
+    const session = pendingDelete ? this.sessions.sessions.get(id) : this.sessions.get(id);
+    if (this.sessions.isBusy(id) || this.sessions.isResuming(id) || this.revising.has(id) || this.managing.has(id) ||
+        session?.status === 'waiting_approval' || session?.status === 'streaming') throw new Error('请等待当前回合结束后再管理会话');
+    this.managing.add(id);
+    try {
+      if (action !== 'restore' && this.sessions.isActive(id)) await this.closeSession(id);
+      if (action === 'delete') {
+        this.store.write(journal, [...new Set([...this.store.read<string[]>(journal, []), id])]);
+        this.finishDeletion(id);
+      } else {
+        if (action === 'archive') {
+          this.layout = withoutSession(this.layout, id);
+          this.store.write('layout.json', this.layout);
+        }
+        const updated = { ...this.sessions.get(id), archivedAt: action === 'archive' ? session?.archivedAt || new Date().toISOString() : undefined };
+        this.sessions.updateSessionRecord(updated);
+        this.emit('session-updated', this.titles.apply(updated));
+      }
+      return { sessions: [...this.sessions.sessions.values()].map(s => this.titles.apply(s)), layout: structuredClone(this.layout) };
+    } finally { this.managing.delete(id); }
+  }
+  async getSessionMessages(sessionId: string): Promise<ChatMessageItem[]> { return structuredClone(this.messages.get(sessionId) || []); }
   private userMessage(input: SendPromptInput): ChatMessageItem {
     return {
       id: randomUUID(), sessionId: input.sessionId, role: 'user', content: input.text,
@@ -576,16 +614,15 @@ export class CoreService extends EventEmitter {
     const origin = this.sessions.get(input.sessionId);
     const profile = this.accounts.activeProfileId;
     if (origin.profileId !== profile || origin.readOnly || !this.sessions.isActive(origin.sessionId) ||
-        this.sessions.isBusy(origin.sessionId) || this.waitingPrompts.has(origin.sessionId) ||
-        this.revising.has(origin.sessionId) || this.translators.isStarting(origin.sessionId)) {
+        this.sessions.isBusy(origin.sessionId) || this.revising.has(origin.sessionId) || this.managing.has(origin.sessionId)) {
       throw new Error('请等当前回合结束后再编辑');
     }
     const { prefix, references, attachments } = prepareRevision(this.messages.get(origin.sessionId) || [], input);
-    const full = this.sessions.activeSessionCount >= 4;
     let branch: ManagedSessionSummary | undefined;
     this.revising.add(origin.sessionId);
     try {
-      if (full) await this.closeSession(origin.sessionId);
+      // The edited branch replaces this live tab. Release the official worker first and restore it on failure.
+      await this.closeSession(origin.sessionId);
       this.accounts.assertReady();
       if (profile !== this.accounts.activeProfileId) throw new Error('账号资料已切换');
       branch = await this.createSession({ cwd: origin.cwd, title: origin.title + ' · ' + (this.preferences.locale === 'en-US' ? 'Revision' : '修订'),
@@ -602,7 +639,6 @@ export class CoreService extends EventEmitter {
       });
       this.messages.set(id, [...history, ...(this.messages.get(id) || [])]);
       this.saveMessages();
-      if (!full) await this.closeSession(origin.sessionId);
       const revision = { sessionId: id, text: input.text, references, attachments };
       void this.sendPrompt(revision).catch(error => {
         if (this.accounts.activeProfileId !== profile || !this.sessions.sessions.has(id)) return;
@@ -624,23 +660,11 @@ export class CoreService extends EventEmitter {
   }
   async sendPrompt(input: SendPromptInput): Promise<void> {
     this.accounts.assertReady();
-    if (this.revising.has(input.sessionId)) throw new Error('该会话正在创建修订分支');
+    if (this.revising.has(input.sessionId) || this.managing.has(input.sessionId)) throw new Error('该会话正在创建修订分支');
     if (typeof input?.text !== 'string' || input.text.length > 1000000 || (!input.text.trim() && !input.attachments?.length)) throw new Error('请输入有效的提示词');
     if (!this.sessions.isActive(input.sessionId) || this.sessions.isBusy(input.sessionId)) throw new Error('会话未激活或仍在生成');
     const profileId = this.accounts.activeProfileId; const session = this.sessions.get(input.sessionId);
     this.approval.setSessionExecutionMode(input.sessionId, session.executionMode);
-    if (this.waitingPrompts.has(input.sessionId)) throw new Error('此会话已有一条待发送消息');
-    const setup = this.startSwarmTranslation(session);
-    if (this.translators.isStarting(input.sessionId)) {
-      const queued = Symbol();
-      this.waitingPrompts.set(input.sessionId, queued);
-      try {
-        await setup;
-        if (this.waitingPrompts.get(input.sessionId) !== queued) throw new Error('已取消待发送的消息');
-      } finally {
-        if (this.waitingPrompts.get(input.sessionId) === queued) this.waitingPrompts.delete(input.sessionId);
-      }
-    }
     const isManualCompact = input.text.trim() === '/compact';
     const prompt: AcpPromptContentBlock[] = [...revisionContext(this.messages.get(input.sessionId) || []), { type: 'text', text: input.text }];
     // 旧会话缺少原生配置能力时，用额外提示文本传递模式偏好。支持该能力的会话经专门的配置请求设置。
@@ -683,7 +707,7 @@ export class CoreService extends EventEmitter {
     });
     this.accounts.assertReady();
     // 准备文件引用会让出执行权。送出提示前再检查一次 Profile 和会话占用，避免把准备好的内容发到错误的上下文。
-    if (profileId !== this.accounts.activeProfileId || this.sessions.isBusy(input.sessionId) || !this.sessions.isActive(input.sessionId)) throw new Error('文件准备期间会话状态已改变，请重试');
+    if (profileId !== this.accounts.activeProfileId || this.managing.has(input.sessionId) || this.revising.has(input.sessionId) || this.sessions.isBusy(input.sessionId) || !this.sessions.isActive(input.sessionId)) throw new Error('文件准备期间会话状态已改变，请重试');
     if (!isManualCompact && input.text.trim() && (!session.title || session.title === '新建对话' || session.title === 'New Session')) {
       const generated = generateStructuredChineseTitle(input.text, session.cwd);
       session.title = generated.organizedTitle;
@@ -718,9 +742,7 @@ export class CoreService extends EventEmitter {
     }
   }
   async cancelPrompt(sessionId: string): Promise<void> {
-    this.waitingPrompts.delete(sessionId);
     this.clearReactiveTurnTimer(sessionId);
-    this.translators.cancelTurn(sessionId);
     this.swarm.markWorkingSubagentsCompleted(sessionId, '用户已停止执行');
     await this.sessions.cancelPrompt(sessionId);
     this.finishMessage(sessionId);
@@ -732,7 +754,7 @@ export class CoreService extends EventEmitter {
   async saveWorkspaceLayout(patch: Partial<WorkspaceLayoutState>): Promise<WorkspaceLayoutState> {
     const next = { ...this.layout, ...patch };
     if (!Array.isArray(next.openTabSessionIds) || next.openTabSessionIds.length > 4 || !next.openTabSessionIds.every(id => typeof id === 'string') || !['single', 'split-2', 'grid-4'].includes(next.layoutMode) || typeof next.hideLegacyPollutionSessions !== 'boolean') throw new Error('工作台布局无效');
-    if (typeof next.leftSidebarCollapsed !== 'boolean' || typeof next.rightInspectorCollapsed !== 'boolean' || !Number.isFinite(next.leftSidebarWidth) || next.leftSidebarWidth < 160 || next.leftSidebarWidth > 600 || !Number.isFinite(next.rightInspectorWidth) || next.rightInspectorWidth < 240 || next.rightInspectorWidth > 1000 || !['diff', 'files', 'plan', 'terminal', 'context', 'swarm'].includes(next.activeInspectorTab)) throw new Error('Inspector 布局或栏宽无效');
+    if (typeof next.leftSidebarCollapsed !== 'boolean' || typeof next.rightInspectorCollapsed !== 'boolean' || !Number.isFinite(next.leftSidebarWidth) || next.leftSidebarWidth < 160 || next.leftSidebarWidth > 600 || !Number.isFinite(next.rightInspectorWidth) || next.rightInspectorWidth < 240 || next.rightInspectorWidth > 1000 || !['diff', 'files', 'plan', 'terminal', 'context', 'swarm', 'quota'].includes(next.activeInspectorTab)) throw new Error('Inspector 布局或栏宽无效');
     this.layout = next; this.store.write('layout.json', next); return structuredClone(next);
   }
   async renameSession(sessionId: string, newTitle: string) { const session = this.titles.rename(this.sessions.get(sessionId), newTitle); this.sessions.updateSessionRecord(session); this.emit('session-updated', session); return session; }
@@ -883,7 +905,6 @@ export class CoreService extends EventEmitter {
     this.reactiveTurnTimers.clear();
     this.reactiveWakeupActive.clear();
     this.thoughts.dispose();
-    this.translators.reset();
     this.localTranslator.dispose();
     this.history.dispose();
     this.approval.dispose(); if (this.telemetryPush) clearTimeout(this.telemetryPush);

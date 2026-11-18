@@ -37,6 +37,8 @@ import {
   type WorkspaceSplitMode,
 } from '@shared';
 import { NewSessionModal } from './components/NewSessionModal';
+import { clearAnnotationDraft } from './lib/annotation-drafts';
+import type { SessionAction } from '../shared/session-contract';
 import { ProjectSidebar } from './components/ProjectSidebar';
 import { ReadOnlyHistoryView } from './components/ReadOnlyHistoryView';
 import { RightInspector } from './components/RightInspector';
@@ -215,7 +217,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         // 单个关闭会话恢复失败时保留摘要，继续处理其他标签。
         const openSet = new Set(boot.layout.openTabSessionIds);
         const tabCandidates = boot.sessions
-          .filter((s) => !s.isLegacyApprovalPollution && openSet.has(s.sessionId))
+          .filter((s) => !s.archivedAt && !s.isLegacyApprovalPollution && openSet.has(s.sessionId))
           .slice(0, MAX_PARALLEL_ACTIVE_SESSIONS);
 
         const resumedMap = new Map<string, ManagedSessionSummary>();
@@ -509,6 +511,20 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     },
     [focusedSessionId, layout.activePrimarySessionId, layout.openTabSessionIds, reportError]
   );
+
+  const handleManageSession = async (id: string, action: SessionAction) => {
+    const result = await getDesktopBridge().manageSession(id, action);
+    setSessions(result.sessions);
+    setLayout(result.layout);
+    if (action !== 'restore' && focusedSessionId === id) setFocusedSessionId(result.layout.activePrimarySessionId);
+    if (action === 'delete') {
+      clearAnnotationDraft(accounts.activeProfileId, id);
+      try { localStorage.removeItem('gravity.terminal.read.' + accounts.activeProfileId + '.' + id); } catch { /* optional storage */ }
+      setMessagesBySession(prev => { const next = { ...prev }; delete next[id]; return next; });
+      setInspectorBySession(prev => { const next = { ...prev }; delete next[id]; return next; });
+      setSwarmBySession(prev => { const next = { ...prev }; delete next[id]; return next; });
+    }
+  };
 
   const handleBindSlotSession = useCallback(
     async (slotIndex: number, sessionId: string) => {
@@ -884,6 +900,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           onTogglePollutionVisibility={handleTogglePollution}
           onRenameSession={handleRenameSession}
           onTogglePinSession={handleTogglePin}
+          onManageSession={handleManageSession}
           onOpenAccounts={() => setSettingsSection('accounts')}
           onOpenPlugins={() => setSettingsSection('plugins')}
           onOpenSettings={() => setSettingsSection('themes')}
@@ -892,7 +909,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
         <div className="main">
           <TopBar
-            sessions={sessions}
+            sessions={sessions.filter(s => !s.archivedAt)}
             layout={layout}
             focusedSessionId={focusedSessionId}
             pendingApprovals={pendingApprovals}
@@ -915,7 +932,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
             <SessionWorkspaceGrid
               layout={layout}
               focusedSessionId={focusedSessionId}
-              sessions={sessions}
+              sessions={sessions.filter(s => !s.archivedAt)}
               availableModels={connection.availableModels}
               messagesBySession={messagesBySession}
               pendingApprovals={pendingApprovals}

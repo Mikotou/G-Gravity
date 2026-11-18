@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AcpRpcError } from '../src/main/acp/acp-client';
 import { CoreService } from '../src/main/core-service';
 import { prepareMockAcp } from './helpers/stdio-rpc';
 
@@ -23,6 +24,62 @@ describe('CoreService 完整 ACP 与原生桥接闭环', () => {
     const close = async () => { await core.dispose(); rmSync(dataDir, { recursive: true, force: true }); };
     return { core, close, children, spawnSpy, reviewer, dataDir };
   }
+  it('官方明确拒绝启动分支后会释放旧会话并重试，修订提示只提交一次', async () => {
+    const { core, close, dataDir } = await setup();
+    try {
+      const origin = await core.createSession({ cwd: dataDir });
+      await core.sendPrompt({ sessionId: origin.sessionId, text: 'original' });
+      const first = (await core.getSessionMessages(origin.sessionId)).find(m => m.role === 'user')!;
+      const rpc = core.client.request.bind(core.client);
+      let newCalls = 0;
+      const spy = vi.spyOn(core.client, 'request').mockImplementation(async (method, params, timeout) => {
+        if (method === 'session/new' && ++newCalls === 1) {
+          expect(core.sessions.isActive(origin.sessionId)).toBe(false);
+          throw new AcpRpcError(-32603, 'Failed to start Antigravity conversation');
+        }
+        return rpc(method, params, timeout);
+      });
+      const branch = await core.reviseMessage({ sessionId: origin.sessionId, messageId: first.id, text: 'edited just once' });
+      await vi.waitFor(() => expect(core.sessions.isBusy(branch.sessionId)).toBe(false));
+      expect(newCalls).toBe(2);
+      expect(spy.mock.calls.filter(c => c[0] === 'session/prompt')).toHaveLength(1);
+      expect((await core.getSessionMessages(origin.sessionId)).some(m => m.content === 'original')).toBe(true);
+    } finally { await close(); }
+  });
+  it('归档关闭所有对应窗格，恢复原消息，删除后远端列表和重启均不会复活记录', async () => {
+    const { core, close, dataDir } = await setup();
+    try {
+      const one = await core.createSession({ cwd: dataDir, title: 'keep history' });
+      const two = await core.createSession({ cwd: dataDir, title: 'other' });
+      const id = one.sessionId;
+      await core.sendPrompt({ sessionId: id, text: 'archive example' });
+      await core.saveWorkspaceLayout({ openTabSessionIds: [two.sessionId, id], activePrimarySessionId: two.sessionId, splitSecondarySessionId: id });
+      const archived = await core.manageSession(id, 'archive');
+      expect(archived.layout.openTabSessionIds).toEqual([two.sessionId]);
+      expect(archived.layout.splitSecondarySessionId).toBeNull();
+      expect((await core.listSessions()).find(s => s.sessionId === id)?.archivedAt).toBeTruthy();
+      await expect(core.resumeSession(id, dataDir)).rejects.toThrow(/归档/);
+      expect((await core.getSessionMessages(id)).some(m => m.content === 'archive example')).toBe(true);
+      await core.manageSession(id, 'restore');
+      expect((await core.resumeSession(id, dataDir)).archivedAt).toBeUndefined();
+      const realWrite = core.store.write.bind(core.store);
+      let interrupted = false;
+      const failure = vi.spyOn(core.store, 'write').mockImplementation((name, value) => {
+        if (name === 'titles.json' && !interrupted) { interrupted = true; throw new Error('write interrupted'); }
+        realWrite(name, value);
+      });
+      await expect(core.manageSession(id, 'delete')).rejects.toThrow(/interrupted/);
+      failure.mockRestore();
+      await core.dispose();
+      const reopened = new CoreService({ dataDir, acpOptions: { spawn: (_binary, _args, options) => spawn(fixture.executable, fixture.args, options) } });
+      try {
+        expect((await reopened.listSessions()).map(s => s.sessionId)).toEqual([two.sessionId]);
+        expect(await reopened.getSessionMessages(id)).toEqual([]);
+        await expect(reopened.resumeSession(id, dataDir)).rejects.toThrow();
+        expect(reopened.store.read('pending-session-deletes-default.json', [])).toEqual([]);
+      } finally { await reopened.dispose(); }
+    } finally { await close(); }
+  });
   it('bootstrap 与四会话完整流隔离，含思考、工具、遥测和蜂群', async () => {
     const { core, close, spawnSpy } = await setup();
     try {

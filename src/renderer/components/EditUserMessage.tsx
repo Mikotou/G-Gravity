@@ -1,10 +1,11 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import type { ChatMessageItem, ReviseMessageInput } from '@shared';
 import { canResendAttachment } from '../../shared/message-revision';
 import { useI18n } from '../i18n/I18nContext';
 
-export function EditUserMessage({ message, busy, submit, children }: {
+export function EditUserMessage({ message, busy, submit, children, editRequest = 0, latest }: {
+  latest?: boolean; editRequest?: number;
   message: ChatMessageItem; busy: boolean; submit: (input: ReviseMessageInput) => Promise<void>; children: React.ReactNode;
 }) {
   const zh = useI18n().locale === 'zh-CN';
@@ -15,6 +16,21 @@ export function EditUserMessage({ message, busy, submit, children }: {
   const [error, setError] = useState('');
   const lock = useRef(false);
   const button = useRef<HTMLButtonElement>(null);
+  const editor = useRef<HTMLTextAreaElement>(null);
+  const seenRequest = useRef(editRequest);
+  function start() {
+    setDraft(message.content);
+    setAttachments((message.attachments || []).filter(canResendAttachment).map(a => a.id));
+    setError('');
+    setEditing(true);
+  }
+  useEffect(() => {
+    if (seenRequest.current !== editRequest && !busy) start();
+    seenRequest.current = editRequest;
+  }, [editRequest]);
+  useEffect(() => {
+    if (editing) { editor.current?.focus(); editor.current?.scrollIntoView?.({ block: 'nearest' }); }
+  }, [editing]);
   function cancel() {
     if (lock.current) return;
     setEditing(false); requestAnimationFrame(() => button.current?.focus());
@@ -26,12 +42,12 @@ export function EditUserMessage({ message, busy, submit, children }: {
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { lock.current = false; setPending(false); }
   }
-  if (!editing) return <>{children}<button ref={button} type="button" className="icon-btn edit-message" disabled={busy}
-    data-testid={'edit-msg-' + message.id} aria-label={zh ? '编辑消息' : 'Edit message'} title={zh ? '编辑消息' : 'Edit message'}
-    onClick={() => { setDraft(message.content); setAttachments((message.attachments || []).filter(canResendAttachment).map(a => a.id)); setError(''); setEditing(true); }}>
+  if (!editing) return <>{children}<button ref={button} type="button" className={"icon-btn edit-message" + (latest ? " edit-latest" : "")} disabled={busy}
+    data-testid={'edit-msg-' + message.id} aria-label={zh ? '编辑消息' : 'Edit message'} title={latest ? (zh ? '编辑上一条消息（输入框内按 ↑）' : 'Edit last message (↑ in empty composer)') : (zh ? '编辑消息' : 'Edit message')}
+    onClick={start}>
     <Pencil size={13} /></button></>;
   return <form className="message-editor" onSubmit={e => { e.preventDefault(); void send(); }}>
-    <textarea autoFocus aria-label={zh ? '编辑原消息' : 'Edit original message'} value={draft} disabled={pending} rows={4}
+    <textarea ref={editor} autoFocus aria-label={zh ? '编辑原消息' : 'Edit original message'} value={draft} disabled={pending} rows={4}
       onChange={e => setDraft(e.target.value)} onKeyDown={e => {
         if (e.nativeEvent.isComposing) return;
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }

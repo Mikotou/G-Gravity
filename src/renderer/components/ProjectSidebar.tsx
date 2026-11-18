@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Archive, ArchiveRestore, MoreHorizontal, Trash2,
   BookOpen,
   Blocks,
   ChevronDown,
@@ -26,6 +27,7 @@ import {
   type GravityIconId,
   type ImportedHistorySessionRecord,
   type ManagedSessionSummary,
+  type SessionAction,
   type WorkspaceProjectConfig,
 } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
@@ -58,6 +60,7 @@ export interface ProjectSidebarProps {
   onTogglePollutionVisibility: () => Promise<void>;
   onRenameSession: (sessionId: string, newTitle: string) => Promise<void>;
   onTogglePinSession: (sessionId: string) => Promise<void>;
+  onManageSession?: (id: string, action: SessionAction) => Promise<void>;
   onOpenAccounts: () => void;
   onOpenPlugins: () => void;
   onOpenSettings: () => void;
@@ -95,6 +98,7 @@ export function ProjectSidebar({
   onTogglePollutionVisibility,
   onRenameSession,
   onTogglePinSession,
+  onManageSession,
   onOpenAccounts,
   onOpenPlugins,
   onOpenSettings,
@@ -108,6 +112,23 @@ export function ProjectSidebar({
   const [syncingHistory, setSyncingHistory] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
+  const zh = locale === 'zh-CN';
+  const [manage, setManage] = useState<ManagedSessionSummary | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [manageError, setManageError] = useState('');
+  const dialog = React.useRef<HTMLDialogElement>(null);
+  React.useEffect(() => { if (manage) dialog.current?.showModal?.(); }, [manage]);
+  function openActions(s: ManagedSessionSummary) {
+    setConfirmDelete(false); setManageError(''); setManage(s);
+  }
+  async function applyAction(action: SessionAction) {
+    if (!manage || !onManageSession || saving) return;
+    setSaving(true); setManageError('');
+    try { await onManageSession(manage.sessionId, action); setManage(null); }
+    catch (error) { setManageError(error instanceof Error ? error.message : String(error)); }
+    finally { setSaving(false); }
+  }
   const icon = resolveGravityIconVariant(appIcon);
   const q = search.trim().toLowerCase();
   const openSet = new Set(openTabSessionIds);
@@ -137,6 +158,7 @@ export function ProjectSidebar({
     }
 
     for (const s of sessions) {
+      if (s.archivedAt) continue;
       if (hideLegacyPollutionSessions && s.isLegacyApprovalPollution) continue;
       const rawKey = normalizeWorkspacePath(s.cwd || s.rawCwd || '');
       const matchedProj = projectByPath.get(rawKey.toLowerCase());
@@ -242,6 +264,18 @@ export function ProjectSidebar({
       aria-hidden={collapsed}
     >
       <div className="sidebar-inner">
+        {manage && <dialog ref={dialog} className="session-actions-dialog" aria-label={zh ? '管理会话' : 'Manage conversation'}
+          onCancel={e => { e.preventDefault(); if (!saving) setManage(null); }}>
+          <h3>{manage.title}</h3>
+          {confirmDelete ? <p>{zh ? '永久删除 Gravity 中保存的这条会话及消息？此操作无法撤销。' : 'Permanently delete this conversation and its messages from Gravity? This cannot be undone.'}</p>
+            : <button type="button" className="btn" disabled={saving} onClick={() => void applyAction(manage.archivedAt ? 'restore' : 'archive')}>
+               {manage.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+               {manage.archivedAt ? (zh ? '恢复会话' : 'Restore conversation') : (zh ? '归档会话' : 'Archive conversation')}</button>}
+          <button type="button" className="btn danger" disabled={saving} onClick={() => confirmDelete ? void applyAction('delete') : setConfirmDelete(true)}>
+            <Trash2 size={15} />{confirmDelete ? (zh ? '确认永久删除' : 'Permanently delete') : (zh ? '删除会话' : 'Delete conversation')}</button>
+          <button type="button" className="btn" autoFocus disabled={saving} onClick={() => setManage(null)}>{zh ? '取消' : 'Cancel'}</button>
+          {manageError && <p role="alert">{manageError}</p>}
+        </dialog>}
         <div className="sidebar-head">
           <img src={icon.publicSvgUrl} alt="Gravity" className="brand-logo" data-testid="topbar-app-icon" />
           <span className="brand-name">Gravity</span>
@@ -374,6 +408,12 @@ export function ProjectSidebar({
                         onClick={() => {
                           if (!editing) onSelectSession(s);
                         }}
+                        role="group"
+                        tabIndex={0}
+                        aria-label={s.title}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && e.target === e.currentTarget && !editing) { e.preventDefault(); onSelectSession(s); }
+                        }}
                         title={s.title}
                         data-testid={`sidebar-session-${s.sessionId}`}
                       >
@@ -444,6 +484,9 @@ export function ProjectSidebar({
                             >
                               <Pin size={11} />
                             </button>
+                            {onManageSession && <button type="button" className="icon-btn icon-btn-sm" title={zh ? '管理会话' : 'Manage conversation'}
+                              aria-label={zh ? '管理会话' : 'Manage conversation'} data-testid={'manage-session-' + s.sessionId}
+                              onClick={() => openActions(s)}><MoreHorizontal size={14} /></button>}
                           </div>
                         )}
                       </div>
@@ -453,6 +496,12 @@ export function ProjectSidebar({
             );
           })}
 
+          {sessions.some(s => s.archivedAt) && <details className="archived-sessions" data-testid="archived-sessions">
+            <summary><Archive size={13} /> {zh ? '已归档' : 'Archived'} · {sessions.filter(s => s.archivedAt).length}</summary>
+            {sessions.filter(s => s.archivedAt && (!q || (s.title + ' ' + s.cwd).toLowerCase().includes(q))).map(s =>
+              <button type="button" key={s.sessionId} onClick={() => openActions(s)} data-testid={'archived-session-' + s.sessionId}>
+                <span className="truncate">{s.title}</span><MoreHorizontal size={13} /></button>)}
+          </details>}
           {history.length > 0 && (
             <div data-testid="imported-history-section">
               <div className="section-head" style={{ marginTop: 14 }}>

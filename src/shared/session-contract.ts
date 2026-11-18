@@ -311,6 +311,7 @@ export type SessionOriginKind =
   | 'antigravity-cli-readonly';
 
 export interface ManagedSessionSummary {
+  archivedAt?: string;
   sessionId: string;
   cwd: string;
   rawCwd: string;
@@ -331,6 +332,18 @@ export interface ManagedSessionSummary {
   updatedAt: string;
 }
 
+export type SessionAction = 'archive' | 'restore' | 'delete';
+
+export function withoutSession(layout: WorkspaceLayoutState, id: string): WorkspaceLayoutState {
+  const tabs = layout.openTabSessionIds.filter(tab => tab !== id);
+  const secondary = layout.splitSecondarySessionId === id ? null : layout.splitSecondarySessionId;
+  const third = layout.tertiarySessionId === id ? null : layout.tertiarySessionId;
+  const fourth = layout.quaternarySessionId === id ? null : layout.quaternarySessionId;
+  return { ...layout, openTabSessionIds: tabs,
+    activePrimarySessionId: layout.activePrimarySessionId === id ? tabs.find(t => ![secondary, third, fourth].includes(t)) ?? null : layout.activePrimarySessionId,
+    splitSecondarySessionId: secondary, tertiarySessionId: third, quaternarySessionId: fourth };
+}
+
 export type WorkspaceSplitMode = 'single' | 'split-2' | 'grid-4';
 
 export type RightInspectorTab =
@@ -339,6 +352,7 @@ export type RightInspectorTab =
   | 'plan'
   | 'terminal'
   | 'context'
+  | 'quota'
   | 'swarm';
 
 export interface WorkspaceLayoutState {

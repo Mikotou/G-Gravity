@@ -158,13 +158,8 @@ function GeneralPanel({
           </div>
         </div>
         <div className="setting-row">
-          <label className="setting-label" htmlFor="translation-engine">{dict.translationEngineLabel}</label>
-          <select id="translation-engine" className="input" style={{ width: 'auto' }}
-            data-testid="translation-engine" value={preferences.translationEngine ?? 'swarm'}
-            onChange={e => void onUpdatePreferences({ translationEngine: e.target.value === 'local' ? 'local' : 'swarm' })}>
-            <option value="swarm">{dict.swarmTranslatorLabel}</option>
-            <option value="local">{dict.localTranslatorLabel}</option>
-          </select>
+          <span className="setting-label">{dict.translationEngineLabel}</span>
+          <span data-testid="translation-engine">{dict.localTranslatorLabel}</span>
         </div>
         <div className="setting-row" title={dict.processPerSessionDesc}>
           <span className="setting-label">{dict.processPerSessionLabel}</span>

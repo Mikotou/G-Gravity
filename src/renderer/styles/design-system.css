@@ -220,9 +220,7 @@
   color: var(--text-secondary);
 }
 
-.cc-thinking-body {
-  animation: gv-rise var(--dur-2) var(--ease-out) both;
-}
+.cc-thinking-body { font-weight: 400; }
 
 /* ============================================================================
  * 工具行：按类别着色；只读探索降权，改动/命令/失败升权

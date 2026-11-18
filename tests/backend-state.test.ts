@@ -35,44 +35,44 @@ describe('双轨思考增量与异步竞态', () => {
     expect(detectThoughtLanguage('检查 file')).toBe('mixed');
     expect(new ThoughtTranslator().append('empty', '').originalText).toBe('');
   });
-  it('新分片到达后旧外部译文不能覆盖新版本', async () => {
+  it('新分片到达后旧译文不能覆盖新版本', async () => {
     let resolve!: (value: string) => void;
-    const translator = new ThoughtTranslator(undefined, () => new Promise((done) => { resolve = done; }));
+    const translator = new ThoughtTranslator(() => new Promise((done) => { resolve = done; }));
     translator.append('a', 'Check file'); translator.complete('a');
     const latest = translator.append('a', ' and test');
     const seen: any[] = []; translator.on('block', (block) => seen.push(block));
     resolve('旧译文'); await new Promise((done) => setImmediate(done));
     expect(seen).toEqual([]); expect(latest.originalText).toBe('Check file and test');
   });
-  it('清除后复用相同块 ID，旧外部译文也不能覆盖新块', async () => {
+  it('清除后复用相同块 ID，旧译文也不能覆盖新块', async () => {
     let resolve!: (value: string) => void;
-    const translator = new ThoughtTranslator(undefined, () => new Promise((done) => { resolve = done; }));
+    const translator = new ThoughtTranslator(() => new Promise((done) => { resolve = done; }));
     translator.append('a', 'Check old file'); translator.complete('a');
     translator.clear('a'); translator.append('a', 'Test new file');
     const seen: any[] = []; translator.on('block', (block) => seen.push(block));
     resolve('检查旧文件'); await new Promise((done) => setImmediate(done));
     expect(seen).toEqual([]);
   });
-  it('外部翻译异常保留干净原文，不产生半英半中词典替换污染', async () => {
-    const translator = new ThoughtTranslator(undefined, async () => { throw new Error('offline'); });
+  it('翻译异常保留干净原文，不产生半英半中词典替换污染', async () => {
+    const translator = new ThoughtTranslator(async () => { throw new Error('offline'); });
     translator.append('a', 'Check file'); const result = translator.complete('a');
     await new Promise((done) => setImmediate(done));
     expect(result!.originalText).toBe('Check file'); expect(result!.translatedZhText).toBe('Check file');
   });
-  it('外部译文成功时原文轨道不变', async () => {
-    const translator = new ThoughtTranslator(undefined, async () => '检查文件');
+  it('本地翻译成功时原文轨道不变', async () => {
+    const translator = new ThoughtTranslator(async () => '检查文件');
     translator.append('a', 'Check file'); translator.complete('a');
     const [block] = await once(translator, 'block');
-    expect(block).toMatchObject({ originalText: 'Check file', translatedZhText: '检查文件', translationSource: 'external-api' });
+    expect(block).toMatchObject({ originalText: 'Check file', translatedZhText: '检查文件', translationSource: 'local-model' });
   });
-  it('正文首字出现前（isStreaming=true）遇到句界或换行立即流式触发子个体翻译并保留段落换行', async () => {
+  it('正文首字出现前（isStreaming=true）遇到句界或换行立即流式触发本地翻译并保留段落换行', async () => {
     const calls: string[] = [];
     const seenDeltas: string[] = [];
-    const translator = new ThoughtTranslator(undefined, async (seg, _id, onDelta) => {
+    const translator = new ThoughtTranslator(async (seg, _id, onDelta) => {
       calls.push(seg);
       onDelta?.('正在检查配置');
       await new Promise((r) => setImmediate(r));
-      return { text: '正在检查核心配置。', source: 'acp-subagent' };
+      return '正在检查核心配置。';
     });
     // 尚未调用 complete()（模拟正文首字出现前的 Thinking 阶段）
     translator.on('block', (b) => seenDeltas.push(b.translatedZhText));
@@ -87,9 +87,9 @@ describe('双轨思考增量与异步竞态', () => {
   });
   it('中英混合思考流中前段为中文时，后续英文段落仍会被分段翻译', async () => {
     const calls: string[] = [];
-    const translator = new ThoughtTranslator(undefined, async (seg) => {
+    const translator = new ThoughtTranslator(async (seg) => {
       calls.push(seg);
-      return { text: '两个主要原因：防止历史失效连接。', source: 'acp-subagent' };
+      return '两个主要原因：防止历史失效连接。';
     });
     translator.append('mix', '第一段已经是原生中文思考。\n\n');
     translator.append('mix', 'Two primary reasons: prevent stale historical connections.\n\n');

@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { useI18n } from '../i18n/I18nContext';
 import { formatActionError } from '../i18n/locales';
+import { MessageImage } from './MessageImage';
 import { ContextStatusBar } from './ContextStatusBar';
 import {
   composePromptWithQuotesAndNotations,
@@ -68,7 +69,8 @@ export interface ComposerProps {
   focusTrigger?: number;
   onRemoveQuote?: (id: string) => void;
   onRemoveNotation?: (id: string) => void;
-  onClearQuotesAndNotations?: () => void;
+  onClearQuotesAndNotations?: (quotes: TextQuoteItem[], notations: TextNotationItem[]) => void;
+  onEditLast?: () => void;
   onSendPrompt: (input: SendPromptInput) => Promise<void>;
   onCancelPrompt: (sessionId: string) => Promise<void>;
   onCompactContext: (sessionId: string) => Promise<void>;
@@ -148,11 +150,11 @@ function readAsUtf8Text(file: File): Promise<string | null> {
  * 将选取、粘贴或拖入的文件转换为草稿附件。
  * 图片保留预览，较小的文本优先读取正文，其他文件以 Base64 传送。
  */
-async function readUserAttachmentFile(file: File, index: number): Promise<DraftAttachment | null> {
+async function readUserAttachmentFile(file: File): Promise<DraftAttachment | null> {
   if (file.size > 20 * 1024 * 1024) {
     throw new Error(`文件 ${file.name} 超过 20MB 限制`);
   }
-  const id = `att-${Date.now()}-${index}`;
+  const id = crypto.randomUUID();
   const mimeType = file.type || 'application/octet-stream';
 
   if (mimeType.startsWith('image/')) {
@@ -207,6 +209,7 @@ export function Composer({
   onRemoveQuote,
   onRemoveNotation,
   onClearQuotesAndNotations,
+  onEditLast,
   onSendPrompt,
   onCancelPrompt,
   onCompactContext,
@@ -225,6 +228,7 @@ export function Composer({
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [mentionFiles, setMentionFiles] = useState<string[]>([]);
   const [menuIndex, setMenuIndex] = useState(0);
+  const sendLock = useRef(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [approvalMenuOpen, setApprovalMenuOpen] = useState(false);
@@ -342,7 +346,7 @@ export function Composer({
   async function addFiles(files: File[]): Promise<void> {
     setError(null);
     try {
-      const results = await Promise.all(files.map((file, idx) => readUserAttachmentFile(file, idx)));
+      const results = await Promise.all(files.map(readUserAttachmentFile));
       const valid = results.filter((item): item is DraftAttachment => Boolean(item));
       if (valid.length) setAttachments((prev) => [...prev, ...valid]);
     } catch (err) {
@@ -375,9 +379,10 @@ export function Composer({
 
   const hasQuotesOrNotations = quotes.length > 0 || notations.length > 0;
 
+  const sendLabel = notations.length ? (locale === 'zh-CN' ? '发送 ' + notations.length + ' 条批注' : 'Send annotations (' + notations.length + ')') : dict.sendMessageBtn;
   async function submit(): Promise<void> {
     const text = draft.trim();
-    if ((!text && attachments.length === 0 && !hasQuotesOrNotations) || sending) return;
+    if ((!text && attachments.length === 0 && !hasQuotesOrNotations) || sendLock.current || isStreaming) return;
     setError(null);
 
     // 独立输入的 /compact 和 /plan 走各自的操作入口。带有引用摘录或批注时，草稿会与它们一起构造成消息。
@@ -411,7 +416,7 @@ export function Composer({
     setDraft('');
     setReferences([]);
     setAttachments([]);
-    onClearQuotesAndNotations?.();
+    sendLock.current = true;
     setSending(true);
     try {
       await onSendPrompt({
@@ -428,12 +433,14 @@ export function Composer({
             }))
           : undefined,
       });
+      onClearQuotesAndNotations?.(prevQuotes, prevNotations);
     } catch (err) {
-      setDraft(prevDraft);
-      setReferences(prevRefs);
-      setAttachments(prevAtts);
+      setDraft(current => [prevDraft, current].filter(Boolean).join('\n'));
+      setReferences(current => [...prevRefs, ...current.filter(r => !prevRefs.some(p => p.value === r.value && p.kind === r.kind))]);
+      setAttachments(current => [...prevAtts, ...current]);
       reportError(err);
     } finally {
+      sendLock.current = false;
       setSending(false);
     }
   }
@@ -445,6 +452,14 @@ export function Composer({
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (e.key === 'ArrowUp' && onEditLast && !draft && !menuItems.length && !references.length && !attachments.length &&
+        !hasQuotesOrNotations && !sending && !isStreaming && session.status !== 'waiting_approval' &&
+        !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      onEditLast();
+      return;
+    }
     if (menuItems.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -601,7 +616,15 @@ export function Composer({
             </div>
           )}
 
-          {(references.length > 0 || attachments.length > 0) && (
+          {attachments.some(a => a.previewUrl) && <div className="composer-image-tray" data-testid="composer-image-tray">
+            {attachments.filter(a => a.previewUrl).map(att => <figure key={att.id}>
+              <MessageImage source={att.previewUrl!} alt={att.name} />
+              <button type="button" className="icon-btn composer-image-remove" aria-label={dict.removeAttachmentLabel + ' ' + att.name}
+                onClick={() => setAttachments(items => items.filter(item => item.id !== att.id))}><X size={13} /></button>
+              <figcaption title={att.name}>{att.name}</figcaption>
+            </figure>)}
+          </div>}
+          {(references.length > 0 || attachments.some(a => !a.previewUrl)) && (
             <div className="composer-chips">
               {references.map((r) => (
                 <span key={`${r.kind}-${r.value}`} className="chip chip-mono" title={r.value}>
@@ -617,9 +640,9 @@ export function Composer({
                   </button>
                 </span>
               ))}
-              {attachments.map((att) => (
+              {attachments.filter(a => !a.previewUrl).map((att) => (
                 <span key={att.id} className="chip" title={att.name}>
-                  {att.previewUrl ? <img src={att.previewUrl} alt="" /> : <FileText size={12} className="muted" />}
+                  <FileText size={12} className="muted" />
                   <span className="truncate">{att.name}</span>
                   <button
                     type="button"
@@ -830,13 +853,13 @@ export function Composer({
               <button
                 type="button"
                 className="send-btn"
-                title={dict.sendMessageBtn}
-                aria-label={dict.sendMessageBtn}
+                title={sendLabel}
+                aria-label={sendLabel}
                 disabled={(!draft.trim() && attachments.length === 0 && !hasQuotesOrNotations) || sending}
                 onClick={() => void submit()}
                 data-testid={`send-prompt-btn-${session.sessionId}`}
               >
-                <ArrowUp size={16} />
+                <ArrowUp size={16} />{notations.length > 0 && <span>{notations.length}</span>}
               </button>
             )}
           </div>

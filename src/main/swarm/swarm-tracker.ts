@@ -151,7 +151,7 @@ export class SwarmTracker extends EventEmitter {
     const now = new Date().toISOString();
     let changed = false;
     for (const worker of state.workers) {
-      if (worker.status === 'working' && worker.name !== 'thought-translator') {
+      if (worker.status === 'working') {
         worker.status = 'completed';
         worker.currentAction = undefined;
         if (!worker.resultSummary) {
@@ -175,20 +175,15 @@ export class SwarmTracker extends EventEmitter {
     }
   }
 
+  remove(id: string): void {
+    for (const key of this.calls.keys()) if (key.startsWith(id + '\0')) this.calls.delete(key);
+    this.states.delete(id);
+    this.store?.write(this.filename, Object.fromEntries(this.states));
+  }
   clear(): void {
     this.states.clear();
     this.calls.clear();
   }
-  updateTranslatorStatus(sessionId: string, memberId: string, status: SwarmWorkerStatus): void {
-    const state = this.states.get(sessionId);
-    const worker = state?.workers.find(w => w.name === 'thought-translator');
-    if (!state || !worker || (worker.id === memberId && worker.status === status)) return;
-    worker.id = memberId;
-    worker.status = status;
-    worker.updatedAt = new Date().toISOString();
-    this.save(state);
-  }
-
   getState(sessionId: string): SwarmTopologyState {
     let state = this.states.get(sessionId);
     if (!state) {

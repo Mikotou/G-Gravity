@@ -5,7 +5,7 @@ import type { CoreService } from '../../src/main/core-service';
 export function createCoreBridge(core: CoreService): AgyDesktopBridge {
   const methods = [
     'getBootstrap', 'updatePreferences', 'launchOfficialLogin', 'getConnectionStatus',
-    'listSessions', 'createSession', 'resumeSession', 'closeSession', 'getSessionMessages',
+    'listSessions', 'createSession', 'resumeSession', 'manageSession', 'getAccountQuota', 'closeSession', 'getSessionMessages',
     'reviseMessage', 'sendPrompt', 'cancelPrompt', 'compactSessionContext', 'saveWorkspaceLayout',
     'renameSession', 'togglePinSession', 'organizeTitles', 'setApprovalMode',
     'updateApprovalConfig', 'submitApprovalDecision', 'listApprovalAudit',

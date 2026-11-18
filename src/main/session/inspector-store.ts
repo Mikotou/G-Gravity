@@ -88,6 +88,11 @@ export class InspectorStore extends EventEmitter {
     }
     state.diffs = state.diffs.slice(-200); state.terminals = state.terminals.slice(-200); this.save(state); return card;
   }
+  remove(id: string): void {
+    for (const key of this.proposedDiffs.keys()) if (key.startsWith(id + '\0')) this.proposedDiffs.delete(key);
+    this.states.delete(id);
+    this.store?.write(this.filename, Object.fromEntries(this.states));
+  }
   private save(state: SessionInspectorData): void {
     this.states.set(state.sessionId, state);
     if (this.store) {

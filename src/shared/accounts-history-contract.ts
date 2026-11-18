@@ -117,3 +117,17 @@ export function isAllowedReadOnlyHistoryFile(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/').trim();
   return ALLOWED_HISTORY_CONTENT_PATTERNS.some((re) => re.test(normalized));
 }
+
+export interface QuotaBucket {
+  id: string;
+  remainingFraction?: number;
+  remainingAmount?: number;
+  resetAt?: string;
+  disabled?: boolean;
+}
+export interface AccountQuota {
+  profileId: string;
+  checkedAt: string;
+  plan?: string;
+  buckets: QuotaBucket[];
+}

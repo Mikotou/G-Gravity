@@ -125,54 +125,28 @@ describe('v0.5 六项核心增强验收测试', () => {
     store.dispose();
   });
 
-  it('2) 三种流式动效彼此独立：思考雾化显影、中文渐进替代英文、正文横向滑入', () => {
+  it('思考的译文、原文和完成状态使用相同段落结构，正文保留流式反馈', () => {
     vi.useFakeTimers();
-
-    // 动效 1：思考流吐字雾化显影 (.cc-thought-mist-tail)
-    const streamingThought: DualTrackThoughtBlock = {
-      id: 'th-mist',
-      originalText: 'Inspecting core-service and telemetry store carefully for smooth token delivery.',
-      translatedZhText: '正在仔细检查核心服务与遥测存储的平滑字符吐出逻辑。',
-      isStreaming: true,
-      languageDetected: 'zh',
-      translationSource: 'native-zh',
+    const text = '第一段文字。\n\n\n\n第二段包含 `code`。';
+    const thought: DualTrackThoughtBlock = {
+      id: 'flow', originalText: 'First paragraph.\n\nSecond paragraph.',
+      translatedZhText: text, isStreaming: true, isTranslating: true,
+      languageDetected: 'en', translationSource: 'local-model',
     };
-    const { unmount: unmount1 } = render(
-      wrapI18n(<ThinkingBlock thought={streamingThought} defaultTrack="zh" forceAnimation />)
-    );
-    act(() => {
-      vi.advanceTimersByTime(64);
-    });
-    const mistTail = screen.getByTestId('thought-mist-tail-th-mist');
-    expect(mistTail.classList.contains('cc-thought-mist-tail')).toBe(true);
-    unmount1();
-
-    // 动效 2：中文逐渐替代原有英文 (.cc-morph-zh-wave + .cc-morph-prism + .cc-morph-en-dissolve)
-    const morphingThought: DualTrackThoughtBlock = {
-      id: 'th-morph',
-      originalText: 'Checking checkpoint_config limit and updating status bar.',
-      translatedZhText: '正在核对 checkpoint_config 上限 and updating status bar.',
-      zhFinalized: '',
-      zhMorphing: '正在核对 `checkpoint_config` 上限',
-      enMorphingRemainder: 'and updating status bar.',
-      enPendingTail: '',
-      isStreaming: true,
-      isTranslating: true,
-      languageDetected: 'en',
-      translationSource: 'acp-subagent',
-    };
-    const { unmount: unmount2 } = render(
-      wrapI18n(<ThinkingBlock thought={morphingThought} defaultTrack="zh" forceAnimation />)
-    );
-    act(() => {
-      vi.advanceTimersByTime(80);
-    });
-    expect(screen.getByTestId('thought-morph-stage-th-morph')).toBeTruthy();
-    expect(screen.getByTestId('thought-morph-zh-th-morph').classList.contains('cc-morph-zh-wave')).toBe(true);
-    expect(screen.getByTestId('thought-morph-en-th-morph').classList.contains('cc-morph-en-dissolve')).toBe(true);
-    expect(screen.getByTestId('thought-morph-en-th-morph').textContent).toContain('and updating status bar.');
-    unmount2();
-
+    const ui = (block: DualTrackThoughtBlock) => wrapI18n(<ThinkingBlock thought={block} defaultTrack="zh" forceAnimation />);
+    const view = render(ui(thought));
+    act(() => { vi.advanceTimersByTime(1300); });
+    const body = screen.getByTestId('thought-content-flow');
+    const first = body.querySelector('p');
+    expect(first?.textContent).toBe('第一段文字。');
+    expect(body.querySelectorAll('p')).toHaveLength(2);
+    const html = body.innerHTML;
+    view.rerender(ui({ ...thought, isStreaming: false, isTranslating: false }));
+    expect(body.querySelector('p')).toBe(first);
+    expect(body.innerHTML).toBe(html);
+    fireEvent.click(screen.getByTestId('thought-btn-raw-flow'));
+    expect(first?.textContent).toContain('First paragraph');
+    view.unmount();
     // 动效 3：正文吐出横向清脆滑入 + 呼吸激光游标 (.cc-body-stream-active + .cc-stream-glide-block)
     const { container } = render(
       wrapI18n(
@@ -359,10 +333,15 @@ describe('v0.5 六项核心增强验收测试', () => {
       sessionId: 'sess-annot',
     });
 
-    // 发送整合了 Quote 与多处 Notation 的消息
+    sendPromptMock.mockRejectedValueOnce(new Error('测试断线'));
     fireEvent.click(screen.getByTestId('send-prompt-btn-sess-annot'));
-    await waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(1));
-    const sentText = sendPromptMock.mock.calls[0][0].text as string;
+    await screen.findByText(/测试断线/);
+    expect(screen.getAllByTestId(/^composer-notation-/)).toHaveLength(2);
+    // 重试时完整发送同一组引用和批注。
+    fireEvent.click(screen.getByTestId('send-prompt-btn-sess-annot'));
+    await waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(2));
+    const sentText = sendPromptMock.mock.calls[1][0].text as string;
+    await waitFor(() => expect(screen.queryAllByTestId(/^composer-notation-/)).toHaveLength(0));
     expect(sentText).toContain('> 第一处关键逻辑负责权限快筛');
     expect(sentText).toContain('【逐处标记批注 (Notations)】');
     expect(sentText).toContain('1. 针对原文「检查本地文件 src/main/core-service.ts」：请补充空路径异常校验');

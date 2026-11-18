@@ -13,6 +13,11 @@ export class TitleOrganizer {
     if (typeof title !== 'string' || !title.trim() || title.length > 200) throw new Error('标题应为 1 至 200 个字符');
     return this.save(session, { title: title.trim() });
   }
+  remove(profile: string, id: string): void {
+    delete this.overrides[profile + ':' + id];
+    if (profile === 'default') delete this.overrides[id];
+    this.store.write('titles.json', this.overrides);
+  }
   togglePin(session: ManagedSessionSummary): ManagedSessionSummary { return this.save(session, { pinned: !this.apply(session).pinned }); }
   /** 按请求中的会话范围整理本地标题，未指定范围时遍历传入清单。结果只列出本次确实改写的标题。 */
   organize(sessions: ManagedSessionSummary[], request: TitleOrganizeRequest = {}): TitleOrganizeResult {

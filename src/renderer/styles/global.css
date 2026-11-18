@@ -931,11 +931,11 @@ select.input {
   flex-shrink: 0;
 }
 
-.thread-item:hover .thread-actions {
+.thread-item:hover .thread-actions, .thread-item:focus-within .thread-actions {
   display: flex;
 }
 
-.thread-item:hover .thread-time {
+.thread-item:hover .thread-time, .thread-item:focus-within .thread-time {
   display: none;
 }
 
@@ -2855,7 +2855,7 @@ select.input {
 }
 
 /* 非激活标签只显示图标，节省右栏宽度 */
-.inspector-tab:not(.is-active) .inspector-tab-label {
+.inspector-tab:not(.is-active):not(.quota-tab) .inspector-tab-label {
   display: none;
 }
 
@@ -4101,114 +4101,6 @@ select.input {
   color: var(--accent-primary);
 }
 
-/* ============================================================================
- * 三种差异化流式吐字与中英替换动效
- * 1) 思考流：雾化垂直显影（Mist-Blur Vertical Emergence）
- * 2) 中文替换英文：暖光扫掠 + 棱镜游标 + 英文渐隐退场（Cross-Language Morph）
- * 3) 正文吐出：清脆横向墨迹滑入 + 呼吸激光游标（Editorial Horizontal Glide）
- * ========================================================================== */
-
-.cc-thinking.is-streaming .cc-thinking-body {
-  border-left-color: color-mix(in srgb, var(--accent-primary) 55%, var(--border-subtle));
-  transition: border-left-color 0.25s ease;
-}
-
-.cc-thought-flow,
-.cc-thought-morph-stage {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* 动效 1：思考流雾化显影尾部（从容舒缓） */
-.cc-thought-mist-tail {
-  display: inline;
-  animation: thought-mist-focus 0.54s cubic-bezier(0.16, 1, 0.3, 1) both;
-  will-change: opacity, filter, transform;
-}
-
-@keyframes thought-mist-focus {
-  0% {
-    opacity: 0.18;
-    filter: blur(2.8px);
-    transform: translateY(3.5px);
-  }
-  100% {
-    opacity: 1;
-    filter: blur(0);
-    transform: translateY(0);
-  }
-}
-
-/* 动效 2：中文渐进替代原有英文（柔和扫掠与渐隐） */
-.cc-morph-zh-settled {
-  color: var(--text-secondary);
-}
-
-.cc-morph-zh-wave {
-  display: inline;
-  color: var(--text-primary);
-  border-radius: 3px;
-  padding: 0 1px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--accent-primary) 22%, transparent) 60%,
-    color-mix(in srgb, var(--accent-primary) 34%, transparent) 100%
-  );
-  animation: morph-zh-sweep 0.68s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes morph-zh-sweep {
-  0% {
-    opacity: 0.35;
-    background-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
-  }
-  100% {
-    opacity: 1;
-    background-color: transparent;
-  }
-}
-
-.cc-morph-prism {
-  display: inline-block;
-  width: 2px;
-  height: 0.94em;
-  margin: 0 3px;
-  vertical-align: -1px;
-  border-radius: 99px;
-  background: var(--accent-primary);
-  box-shadow: 0 0 7px var(--accent-primary);
-  animation: morph-prism-pulse 1.35s ease-in-out infinite;
-}
-
-@keyframes morph-prism-pulse {
-  0%,
-  100% {
-    opacity: 0.95;
-    transform: scaleY(1.05);
-  }
-  50% {
-    opacity: 0.35;
-    transform: scaleY(0.75);
-  }
-}
-
-.cc-morph-en-dissolve {
-  display: inline;
-  color: var(--text-muted);
-  opacity: 0.44;
-  filter: blur(0.4px);
-  text-decoration: line-through;
-  text-decoration-color: color-mix(in srgb, var(--text-muted) 38%, transparent);
-  transition: opacity 0.42s ease, filter 0.42s ease;
-}
-
-.cc-morph-en-pending {
-  display: inline;
-  color: var(--text-muted);
-  opacity: 0.68;
-}
-
 /* 动效 3：正文吐出横向稳健滑入（零模糊，保证代码块与表格锐利可读） */
 .cc-body-stream-active .cc-stream-glide-block {
   animation: body-editorial-glide 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -4766,7 +4658,7 @@ select.input {
 
 .message-images { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
 .message-image { display: inline-block; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; vertical-align: middle; }
-.message-image img { display: block; max-width: 100%; max-height: min(58vh, 560px); height: auto; width: auto; object-fit: contain; border-radius: var(--radius-sm); }
+.message-image img.md-img { display: block; max-width: 100%; max-height: clamp(82px, 25vh, 236px); margin: 0; height: auto; width: auto; object-fit: contain; border-radius: var(--radius-sm); }
 .image-lightbox { max-width: 96vw; max-height: 96vh; padding: 0; border: 0; background: transparent; overflow: visible; }
 .image-lightbox::backdrop { background: rgb(0 0 0 / 80%); }
 .image-lightbox > img { display: block; max-width: 94vw; max-height: 90vh; object-fit: contain; }
@@ -4782,3 +4674,33 @@ select.input {
 .message-editor textarea { resize: vertical; min-height: 64px; width: 100%; font: inherit; color: inherit; background: transparent; border: 0; }
 .message-editor-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .offline-conversation { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 12px; color: var(--fg-muted); }
+
+.cc-thinking-body .md-compact p { margin: 0; }
+.cc-thinking-body .md-compact p + p { margin-block-start: .4em; }
+.edit-message.edit-latest { opacity: .85; }
+.pane { container-type: inline-size; }
+.message-image { max-width: min(100%, 420px, 66cqi); }
+.composer-image-tray { display: flex; align-items: flex-start; gap: 10px; overflow-x: auto; padding: 5px 3px; }
+.composer-image-tray figure { position: relative; flex: 0 0 auto; margin: 0; max-width: min(66cqi, 260px); }
+.composer-image-tray .message-image { max-width: 100%; }
+.composer-image-tray .message-image img { height: clamp(64px, 17vh, 150px); width: auto; max-width: min(62cqi, 250px); object-fit: contain; background: var(--bg-surface); }
+.composer-image-tray figcaption { font-size: 11px; color: var(--text-muted); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-image-remove { position: absolute; top: 2px; right: 2px; border-radius: 50%; background: var(--bg-surface); }
+.send-btn:has(span) { width: auto; gap: 3px; padding-inline: 6px; }
+::highlight(gravity-annotations) { background-color: color-mix(in srgb, var(--accent-primary) 32%, transparent); }
+
+.session-actions-dialog { color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 20px; width: min(350px, 85vw); }
+.session-actions-dialog::backdrop { background: rgb(0 0 0 / .45); }
+.session-actions-dialog h3 { margin: 0 0 14px; overflow-wrap: anywhere; }
+.session-actions-dialog .btn { display: flex; width: 100%; margin-top: 7px; gap: 7px; }
+.session-actions-dialog .danger { color: var(--danger, #d47870); }
+.archived-sessions { padding: 10px 6px; }
+.archived-sessions summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+.archived-sessions button { display: flex; gap: 5px; width: 100%; justify-content: space-between; padding: 6px; text-align: left; color: inherit; background: transparent; border: 0; cursor: pointer; }
+
+.quota-view { padding: 12px; }
+.quota-view header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.quota-view h3, .quota-view p { margin: 0 0 10px; }
+.quota-view p, .quota-view small { color: var(--text-secondary); font-size: 12px; }
+.quota-view article { border-top: 1px solid var(--border-subtle); padding: 13px 0; }
+.quota-view progress { width: 100%; height: 6px; display: block; accent-color: var(--accent-primary); margin: 7px 0; }

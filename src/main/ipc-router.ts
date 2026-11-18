@@ -22,6 +22,8 @@ export function registerIpcRouter(ipcMain: IpcMain, service: CoreService, truste
     [IPC_CHANNELS.SESSION_LIST]: include => service.listSessions(include),
     [IPC_CHANNELS.SESSION_CREATE]: input => service.createSession(input),
     [IPC_CHANNELS.SESSION_RESUME]: (id, cwd) => service.resumeSession(id, cwd),
+    [IPC_CHANNELS.SESSION_MANAGE]: (id, action) => service.manageSession(id, action),
+    [IPC_CHANNELS.ACCOUNT_QUOTA]: () => service.getAccountQuota(),
     [IPC_CHANNELS.SESSION_CLOSE]: id => service.closeSession(id),
     [IPC_CHANNELS.SESSION_SET_MODE]: (id, mode) => service.setSessionMode(id, mode),
     [IPC_CHANNELS.SESSION_SET_EFFORT]: (id, effort) => service.setSessionEffort(id, effort),

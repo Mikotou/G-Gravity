@@ -6,6 +6,7 @@ import {
   CircleDot,
   FileCode2,
   FileDiff,
+  Gauge,
   ListTodo,
   Network,
   SquareTerminal,
@@ -23,6 +24,7 @@ import type {
 } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { ContextCostInspectorView } from './ContextCostInspectorView';
+import { AccountQuotaView } from './AccountQuotaView';
 import { SwarmPanel } from './SwarmPanel';
 import { UnifiedDiffBlock } from './UnifiedDiffBlock';
 
@@ -53,6 +55,7 @@ const TABS: ReadonlyArray<{ id: RightInspectorTab; Icon: typeof FileDiff }> = [
   { id: 'plan', Icon: ListTodo },
   { id: 'terminal', Icon: SquareTerminal },
   { id: 'context', Icon: BarChart3 },
+  { id: 'quota', Icon: Gauge },
   { id: 'swarm', Icon: Network },
 ];
 
@@ -250,8 +253,9 @@ export function RightInspector({
               type="button"
               role="tab"
               aria-selected={activeTab === id}
-              className={`inspector-tab ${activeTab === id ? 'is-active' : ''}`}
+              className={`inspector-tab ${id === 'quota' ? 'quota-tab' : ''} ${activeTab === id ? 'is-active' : ''}`}
               onClick={() => onSelectTab(id)}
+              aria-label={dict.inspectorTabs[id]}
               title={dict.inspectorTabs[id]}
               data-testid={`inspector-tab-${id}`}
             >
@@ -357,6 +361,7 @@ export function RightInspector({
             </div>
           )}
 
+          {!collapsed && activeTab === 'quota' && <AccountQuotaView key={profileId} profileId={profileId} />}
           {activeTab === 'context' && (
             <ContextCostInspectorView
               sessionId={sessionId}

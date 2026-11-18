@@ -24,6 +24,7 @@ import { resolveGravityIconVariant } from '../styles/theme';
 import { Composer } from './Composer';
 import { InlineRequestView } from './InlineRequestView';
 import type { ReviseMessageInput } from '@shared';
+import { useAnnotationDraft, showAnnotationRanges } from '../lib/annotation-drafts';
 import { EditUserMessage } from './EditUserMessage';
 import { ImageWorkspace, AttachmentImages } from './MessageImage';
 import { Markdown } from './Markdown';
@@ -147,12 +148,14 @@ function MessageTurn({
   defaultThoughtTrack,
   turnStartedAt,
   onRevise,
+  editRequest, latest,
   busy,
   onInspectDiff,
 }: {
   message: ChatMessageItem;
   defaultThoughtTrack: ThoughtDisplayTrack;
   turnStartedAt?: string;
+  latest?: boolean; editRequest?: number;
   onRevise?: SessionPaneProps['onReviseMessage'];
   busy: boolean;
   onInspectDiff: (filePath: string) => void;
@@ -182,7 +185,7 @@ function MessageTurn({
         </div>
       </div>
     );
-    return onRevise ? <div className="editable-turn"><EditUserMessage message={message} busy={busy} submit={onRevise}>{body}</EditUserMessage></div> : body;
+    return onRevise ? <div className="editable-turn"><EditUserMessage message={message} editRequest={editRequest} latest={latest} busy={busy} submit={onRevise}>{body}</EditUserMessage></div> : body;
   }
 
   if (message.role === 'system') {
@@ -277,14 +280,21 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
   } = props;
   const { locale, dict } = useI18n();
   const streamRef = useRef<HTMLDivElement | null>(null);
+  const selectionRange = useRef<Range | null>(null);
   const stickToBottomRef = useRef(true);
-  const [quotesBySession, setQuotesBySession] = useState<Record<string, TextQuoteItem[]>>({});
-  const [notationsBySession, setNotationsBySession] = useState<Record<string, TextNotationItem[]>>({});
+  const { quotes: sessionQuotes, notes: sessionNotations, update: updateDraft } =
+    useAnnotationDraft(session?.profileId || 'default', session?.sessionId || '');
+  const [editRequest, setEditRequest] = useState({ id: '', seq: 0 });
+  useLayoutEffect(() => {
+    if (streamRef.current) return showAnnotationRanges(streamRef.current, sessionNotations);
+  }, [messages, sessionNotations]);
   const [selectionBar, setSelectionBar] = useState<{
     x: number;
     y: number;
     messageId: string;
     text: string;
+    start?: number;
+    anchorText?: string;
   } | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -345,7 +355,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
   useEffect(() => {
     const el = streamRef.current;
     if (!el || !session) return;
-    if (!stickToBottomRef.current) {
+    if (selectionBar || !stickToBottomRef.current) {
       setHasUnseen(true);
       return;
     }
@@ -389,12 +399,9 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
     return sessionApprovals[0]?.requestId ?? null;
   })();
 
-  const sessionQuotes = quotesBySession[session.sessionId] ?? [];
-  const sessionNotations = notationsBySession[session.sessionId] ?? [];
-
   /** 从当前选区找到所属消息并定位浮动按钮。优先使用选区边界。读不到矩形时使用鼠标坐标。 */
-  function handleStreamMouseUp(e: React.MouseEvent<HTMLDivElement>): void {
-    if (e.button !== 0) return;
+  function handleStreamMouseUp(e: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement>): void {
+    if ('button' in e && e.button !== 0) return;
     const sel = typeof window !== 'undefined' ? window.getSelection() : null;
     const selectedText = sel?.toString().trim() ?? '';
     if (!selectedText || selectedText.length < 1) {
@@ -408,7 +415,9 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
         : sel?.anchorNode?.parentElement ?? (e.target as HTMLElement | null);
     const bodyEl = anchorEl?.closest('[data-message-body="true"]') as HTMLElement | null;
     const msgWrap = (bodyEl ?? anchorEl)?.closest('[data-message-id]') as HTMLElement | null;
-    if (!bodyEl || !msgWrap) {
+    const range = sel?.rangeCount ? sel.getRangeAt(0) : undefined;
+    if (!bodyEl || !msgWrap || !streamRef.current?.contains(bodyEl) ||
+        (range && (!bodyEl.contains(range.startContainer) || !bodyEl.contains(range.endContainer)))) {
       setSelectionBar(null);
       return;
     }
@@ -416,8 +425,11 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
     const messageId = msgWrap.getAttribute('data-message-id') || '';
     if (!messageId) return;
 
-    let x = e.clientX || 120;
-    let y = Math.max(16, (e.clientY || 120) - 44);
+    selectionRange.current = range?.cloneRange() || null;
+    const prefix = range?.cloneRange();
+    if (prefix && range) { prefix.selectNodeContents(bodyEl); prefix.setEnd(range.startContainer, range.startOffset); }
+    let x = 'clientX' in e ? e.clientX : 120;
+    let y = Math.max(16, ('clientY' in e ? e.clientY : 120) - 44);
     try {
       if (sel && sel.rangeCount > 0) {
         const rect = sel.getRangeAt(0).getBoundingClientRect();
@@ -431,7 +443,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
     }
 
     setContextMenu(null);
-    setSelectionBar({ x, y, messageId, text: selectedText });
+    setSelectionBar({ x, y, messageId, text: selectedText, start: prefix?.toString().length, anchorText: range?.toString() });
   }
 
   function handleStreamContextMenu(e: React.MouseEvent<HTMLDivElement>): void {
@@ -449,16 +461,12 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
   /** 引用按会话存放，并保留来源消息的 ID。加入引用后将焦点交给输入框，便于继续填写问题。 */
   function addQuoteFromSelection(): void {
     if (!selectionBar || !session) return;
-    const sid = session.sessionId;
     const item: TextQuoteItem = {
       id: `qt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       messageId: selectionBar.messageId,
       text: selectionBar.text,
     };
-    setQuotesBySession((prev) => ({
-      ...prev,
-      [sid]: [...(prev[sid] ?? []), item],
-    }));
+    updateDraft(d => ({ ...d, quotes: [...d.quotes, item] }));
     window.getSelection()?.removeAllRanges();
     setSelectionBar(null);
     setComposerFocusSeq((n) => n + 1);
@@ -466,18 +474,16 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
 
   function addNotationFromSelection(comment: string): void {
     if (!selectionBar || !session) return;
-    const sid = session.sessionId;
     const item: TextNotationItem = {
       id: `nt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       messageId: selectionBar.messageId,
       selectedText: selectionBar.text,
+      messageNumber: messages.filter(m => m.content && (m.role === 'user' || m.role === 'assistant')).findIndex(m => m.id === selectionBar.messageId) + 1,
+      start: selectionBar.start, anchorText: selectionBar.anchorText,
       comment,
       createdAt: new Date().toISOString(),
     };
-    setNotationsBySession((prev) => ({
-      ...prev,
-      [sid]: [...(prev[sid] ?? []), item],
-    }));
+    updateDraft(d => ({ ...d, notes: [...d.notes, item] }));
     window.getSelection()?.removeAllRanges();
     setSelectionBar(null);
   }
@@ -489,9 +495,10 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
 
   // 每条助手消息对应的回合起点 = 它之前最近一条用户消息的时间
   const turnStartById = new Map<string, string>();
+  let lastUserId: string | undefined;
   let lastUserAt: string | undefined;
   for (const m of messages) {
-    if (m.role === 'user') lastUserAt = m.createdAt;
+    if (m.role === 'user') { lastUserAt = m.createdAt; lastUserId = m.id; }
     else if (m.role === 'assistant' && lastUserAt) turnStartById.set(m.id, lastUserAt);
   }
 
@@ -550,6 +557,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
         ref={streamRef}
         className="stream"
         onMouseUp={handleStreamMouseUp}
+        onKeyUp={e => { if (e.shiftKey) handleStreamMouseUp(e); }}
         onContextMenu={handleStreamContextMenu}
         onScroll={(e) => {
           const el = e.currentTarget;
@@ -559,7 +567,13 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
           const away = el.scrollHeight - el.scrollTop - el.clientHeight > 240;
           if (away !== awayFromBottom) setAwayFromBottom(away);
           if (nearBottom && hasUnseen) setHasUnseen(false);
-          if (selectionBar) setSelectionBar(null);
+          const anchor = selectionRange.current;
+          if (selectionBar && anchor && typeof anchor.getBoundingClientRect === 'function') {
+            const rect = anchor.getBoundingClientRect();
+            const x = rect.left + Math.min(rect.width / 2, 120);
+            const y = Math.max(14, rect.top - 42);
+            setSelectionBar(prev => prev && (prev.x !== x || prev.y !== y) ? { ...prev, x, y } : prev);
+          }
           if (contextMenu) setContextMenu(null);
         }}
       >
@@ -586,6 +600,8 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
             const turn = (
               <ImageWorkspace.Provider value={session.cwd}><MessageTurn
                 message={msg}
+                latest={msg.id === lastUserId}
+                editRequest={editRequest.id === msg.id ? editRequest.seq : 0}
                 onRevise={session.readOnly ? undefined : props.onReviseMessage}
                 busy={session.status === 'streaming' || session.status === 'waiting_approval'}
                 defaultThoughtTrack={defaultThoughtTrack}
@@ -601,20 +617,8 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
                     items={turnNotations}
                     allNotations={sessionNotations}
                     locale={locale}
-                    onUpdate={(id, nextComment) =>
-                      setNotationsBySession((prev) => ({
-                        ...prev,
-                        [session.sessionId]: (prev[session.sessionId] ?? []).map((item) =>
-                          item.id === id ? { ...item, comment: nextComment } : item
-                        ),
-                      }))
-                    }
-                    onRemove={(id) =>
-                      setNotationsBySession((prev) => ({
-                        ...prev,
-                        [session.sessionId]: (prev[session.sessionId] ?? []).filter((item) => item.id !== id),
-                      }))
-                    }
+                    onUpdate={(id, comment) => updateDraft(d => ({ ...d, notes: d.notes.map(n => n.id === id ? { ...n, comment } : n) }))}
+                    onRemove={id => updateDraft(d => ({ ...d, notes: d.notes.filter(n => n.id !== id) }))}
                   />
                 )}
                 {linked && (
@@ -710,22 +714,11 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
         quotes={sessionQuotes}
         notations={sessionNotations}
         focusTrigger={composerFocusSeq}
-        onRemoveQuote={(id) =>
-          setQuotesBySession((prev) => ({
-            ...prev,
-            [session.sessionId]: (prev[session.sessionId] ?? []).filter((q) => q.id !== id),
-          }))
-        }
-        onRemoveNotation={(id) =>
-          setNotationsBySession((prev) => ({
-            ...prev,
-            [session.sessionId]: (prev[session.sessionId] ?? []).filter((n) => n.id !== id),
-          }))
-        }
-        onClearQuotesAndNotations={() => {
-          setQuotesBySession((prev) => ({ ...prev, [session.sessionId]: [] }));
-          setNotationsBySession((prev) => ({ ...prev, [session.sessionId]: [] }));
-        }}
+        onEditLast={lastUserId && props.onReviseMessage ? () => setEditRequest(e => ({ id: lastUserId!, seq: e.seq + 1 })) : undefined}
+        onRemoveQuote={id => updateDraft(d => ({ ...d, quotes: d.quotes.filter(q => q.id !== id) }))}
+        onRemoveNotation={id => updateDraft(d => ({ ...d, notes: d.notes.filter(n => n.id !== id) }))}
+        onClearQuotesAndNotations={(quotes, notes) => updateDraft(d => ({ quotes: d.quotes.filter(q => !quotes.some(sent => sent.id === q.id)),
+          notes: d.notes.filter(n => !notes.some(sent => sent.id === n.id && sent.comment === n.comment)) }))}
         onSendPrompt={props.onSendPrompt}
         onCancelPrompt={props.onCancelPrompt}
         onCompactContext={props.onCompactContext}

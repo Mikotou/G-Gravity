@@ -1,3 +1,4 @@
+import { withoutSession } from '../../shared/session-contract';
 import { prepareRevision } from '../../shared/message-revision';
 import {
   calculateTokenCost,
@@ -142,7 +143,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     theme: 'claude-code-dark',
     appIcon: 'gravity-claude-dark',
     defaultThoughtTrack: 'zh',
-    translationEngine: 'swarm',
+    translationEngine: 'local',
     processPerSession: false,
     activeProfileId: 'default',
   };
@@ -1306,6 +1307,19 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       return { ...target };
     },
 
+    async manageSession(id, action) {
+      const index = sessions.findIndex(s => s.sessionId === id && s.profileId === accounts.activeProfileId);
+      if (index < 0) throw new Error('会话不存在');
+      const target = sessions[index];
+      if (target.status === 'streaming' || target.status === 'waiting_approval') throw new Error('请等回合结束');
+      if (action !== 'restore') { layout = withoutSession(layout, id); target.status = 'closed'; }
+      if (action === 'delete') {
+        sessions.splice(index, 1);
+        delete messagesBySession[id]; delete inspectorBySession[id]; delete swarmBySession[id];
+      } else { target.archivedAt = action === 'archive' ? new Date().toISOString() : undefined; }
+      return { sessions: structuredClone(sessions.filter(s => s.profileId === accounts.activeProfileId)), layout: structuredClone(layout) };
+    },
+    async getAccountQuota() { throw new Error('请在 Gravity 桌面端查看官方账户额度。'); },
     async closeSession(sessionId: string): Promise<void> {
       layout.openTabSessionIds = layout.openTabSessionIds.filter((id) => id !== sessionId);
       if (layout.activePrimarySessionId === sessionId) {

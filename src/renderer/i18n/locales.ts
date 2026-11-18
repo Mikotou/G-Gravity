@@ -267,7 +267,6 @@ export interface UiDictionary {
   localeEnLabel: string;
   defaultThoughtTrackLabel: string;
   translationEngineLabel: string;
-  swarmTranslatorLabel: string;
   localTranslatorLabel: string;
   defaultThoughtTrackDesc: string;
   processPerSessionLabel: string;
@@ -505,6 +504,7 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
       plan: 'Plan',
       terminal: 'Terminal',
       context: 'Context',
+      quota: '额度',
       swarm: 'Swarm',
     },
     diffEmpty: '本会话还没有文件改动',
@@ -721,7 +721,6 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
     localeZhLabel: '中文',
     localeEnLabel: 'English',
     translationEngineLabel: '思考翻译方式',
-    swarmTranslatorLabel: '蜂群子智能体',
     localTranslatorLabel: '本地离线翻译',
     defaultThoughtTrackLabel: 'Thinking 默认显示',
     defaultThoughtTrackDesc: '每个 Thinking 块仍可单独切换',
@@ -919,6 +918,7 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
       plan: 'Plan',
       terminal: 'Terminal',
       context: 'Context',
+      quota: 'Quota',
       swarm: 'Swarm',
     },
     diffEmpty: 'No file changes in this thread yet',
@@ -1135,7 +1135,6 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
     localeZhLabel: '中文',
     localeEnLabel: 'English',
     translationEngineLabel: 'Thinking translation',
-    swarmTranslatorLabel: 'Swarm translator',
     localTranslatorLabel: 'Local offline translator',
     defaultThoughtTrackLabel: 'Default thinking track',
     defaultThoughtTrackDesc: 'Each thinking block can still be toggled',

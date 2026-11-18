@@ -2,7 +2,8 @@ import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute } from 'node:path';
-import { AcpClient } from '../acp/acp-client';
+import { setTimeout as delay } from 'node:timers/promises';
+import { AcpClient, AcpRpcError } from '../acp/acp-client';
 import {
   MAX_PARALLEL_ACTIVE_SESSIONS,
   normalizeWorkspacePath,
@@ -155,6 +156,15 @@ export class SessionMultiplexer extends EventEmitter {
         updatedAt: entry.updatedAt || new Date().toISOString(),
       });
     }
+    this.saveOwnedLedger();
+  }
+
+  forgetSession(id: string): void {
+    this.ownedIds.delete(id);
+    this.sessions.delete(id);
+    this.optionsBySession.delete(id);
+    delete this.savedSettings[this.profileId + ':' + id];
+    this.store?.write('session-settings.json', this.savedSettings);
     this.saveOwnedLedger();
   }
 
@@ -366,6 +376,7 @@ export class SessionMultiplexer extends EventEmitter {
                 ? existing.title
                 : item.title || existing?.title || '新建对话',
             rawTitle: item.title,
+            archivedAt: existing?.archivedAt,
             pinned: existing?.pinned || false,
             categoryTag: existing?.categoryTag,
             isLegacyApprovalPollution: isLegacyPollutionSessionTitle(item.title),
@@ -392,11 +403,21 @@ export class SessionMultiplexer extends EventEmitter {
     try {
       await this.client.start();
       const append = this.client.initializeResult?.agentCapabilities._meta?.antigravity?.systemPrompt?.append;
-      const result = await this.client.request<AcpSessionNewResult>('session/new', {
+      const newSession = () => this.client.request<AcpSessionNewResult>('session/new', {
         cwd,
         mcpServers: [],
         ...(append ? { _meta: { antigravity: { systemPrompt: { append: CHINESE_SESSION_GUIDANCE } } } } : {}),
       });
+      const profile = this.profileId;
+      let result: AcpSessionNewResult;
+      try { result = await newSession(); }
+      catch (error) {
+        // Only retry an explicit startup rejection. A lost response might refer to a conversation that already exists.
+        if (!(error instanceof AcpRpcError) || !/^Failed to start Antigravity conversation[.!]?$/i.test(error.message)) throw error;
+        await delay(900);
+        if (!this.client.connected || this.profileId !== profile) throw error;
+        result = await newSession();
+      }
       if (!result?.sessionId || this.active.has(result.sessionId)) throw new Error('官方 ACP 返回了无效或重复会话 ID');
       const session: ManagedSessionSummary = {
         ...this.defaults(),

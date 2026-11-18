@@ -68,6 +68,8 @@ export const IPC_CHANNELS = {
   SESSION_LIST: 'gravity:session:list',
   SESSION_CREATE: 'gravity:session:create',
   SESSION_RESUME: 'gravity:session:resume',
+  SESSION_MANAGE: 'gravity:session:manage',
+  ACCOUNT_QUOTA: 'gravity:account:quota',
   SESSION_CLOSE: 'gravity:session:close',
   SESSION_REVISE_MESSAGE: 'gravity:session:revise-message',
   SESSION_SEND_PROMPT: 'gravity:session:send-prompt',
@@ -215,6 +217,8 @@ export interface GravityDesktopBridge {
   createSession(input: CreateSessionInput): Promise<ManagedSessionSummary>;
   resumeSession(sessionId: string, cwd: string): Promise<ManagedSessionSummary>;
   closeSession(sessionId: string): Promise<void>;
+  manageSession(id: string, action: import('./session-contract').SessionAction): Promise<{ sessions: ManagedSessionSummary[]; layout: WorkspaceLayoutState }>;
+  getAccountQuota(): Promise<import('./accounts-history-contract').AccountQuota>;
   setSessionMode(sessionId: string, mode: AgentExecutionMode): Promise<ManagedSessionSummary>;
   setSessionEffort(
     sessionId: string,

@@ -14,6 +14,9 @@ export interface TextNotationItem {
   id: string;
   messageId: string;
   selectedText: string;
+  messageNumber?: number;
+  start?: number;
+  anchorText?: string;
   comment: string;
   createdAt: string;
 }
@@ -162,10 +165,11 @@ export function composePromptWithQuotesAndNotations(
         ? '【逐处标记批注 (Notations)】'
         : '[Multi-spot Selection Notations]';
     const items = notations.map((item, idx) => {
-      const snippet = item.selectedText.replace(/\s+/g, ' ').trim();
+      const snippet = item.selectedText.trim();
+      const origin = item.messageNumber ? (locale === 'zh-CN' ? '（第 ' + item.messageNumber + ' 条消息）' : ' (message ' + item.messageNumber + ')') : '';
       return locale === 'zh-CN'
-        ? `${idx + 1}. 针对原文「${snippet}」：${item.comment.trim()}`
-        : `${idx + 1}. Regarding "${snippet}": ${item.comment.trim()}`;
+        ? `${idx + 1}. 针对原文「${snippet}」：${item.comment.trim()}${origin}`
+        : `${idx + 1}. Regarding "${snippet}": ${item.comment.trim()}${origin}`;
     });
     sections.push(`${header}\n${items.join('\n')}`);
   }
