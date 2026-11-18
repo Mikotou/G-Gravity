@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { workspaceSlots } from '@shared';
+import { droppedSession, isSessionDrag } from '../lib/session-drag';
 import type {
   ApprovalAuditEntry,
   ChatMessageItem,
@@ -15,6 +17,8 @@ type SharedPaneProps = Omit<
 
 export interface SessionWorkspaceGridProps extends Omit<SharedPaneProps, 'availableSessions'> {
   layout: WorkspaceLayoutState;
+  historyIds?: string[];
+  renderHistory?: (id: string, slot: number) => React.ReactNode;
   focusedSessionId: string | null;
   sessions: ManagedSessionSummary[];
   messagesBySession: Record<string, ChatMessageItem[]>;
@@ -22,44 +26,22 @@ export interface SessionWorkspaceGridProps extends Omit<SharedPaneProps, 'availa
   swarmBySession: Record<string, SwarmTopologyState>;
 }
 
-/** 根据布局模式把最多 4 个已打开会话分配到窗格；grid 直接子元素即窗格 */
+/** 窗格只控制正在显示的会话。其余会话由后台继续管理。 */
 export function SessionWorkspaceGrid({
   layout,
   focusedSessionId,
   sessions,
   messagesBySession,
   auditLog,
+  historyIds = [], renderHistory,
   swarmBySession,
   ...paneProps
 }: SessionWorkspaceGridProps): React.ReactElement {
   // 可供选择的历史会话与可以放进窗格的活动会话范围不同，后者还须属于当前标签列表且处于打开状态。
   const visibleSessions = sessions.filter((s) => !s.isLegacyApprovalPollution);
-  const openSet = new Set(layout.openTabSessionIds);
-  const openActive = visibleSessions.filter((s) => openSet.has(s.sessionId) && (s.status !== 'closed' || s.readOnly));
-  const slotCount = layout.layoutMode === 'grid-4' ? 4 : layout.layoutMode === 'split-2' ? 2 : 1;
-  const rawSlotIds = [
-    layout.activePrimarySessionId,
-    layout.splitSecondarySessionId,
-    layout.tertiarySessionId,
-    layout.quaternarySessionId,
-  ];
-
-  // 按槽位依次取已保存的会话，失效或重复绑定时从剩余活动会话补位。没有可用会话的位置交给欢迎窗格。
-  const used = new Set<string>();
-  const slots: Array<ManagedSessionSummary | null> = [];
-  for (let i = 0; i < slotCount; i += 1) {
-    const candidate = rawSlotIds[i];
-    let picked = candidate ? openActive.find((s) => s.sessionId === candidate) ?? null : null;
-    if (picked && used.has(picked.sessionId)) picked = null;
-    if (!picked) {
-      picked =
-        layout.openTabSessionIds
-          .map((id) => openActive.find((s) => s.sessionId === id))
-          .find((s): s is ManagedSessionSummary => Boolean(s && !used.has(s.sessionId))) ?? null;
-    }
-    if (picked) used.add(picked.sessionId);
-    slots.push(picked);
-  }
+  const active = visibleSessions.filter(s => !s.archivedAt && (s.status !== 'closed' || s.readOnly));
+  const slots = workspaceSlots(layout, [...active.map(s => s.sessionId), ...historyIds]);
+  const [dragSlot, setDragSlot] = useState<number | null>(null);
 
   return (
     <main
@@ -67,20 +49,39 @@ export function SessionWorkspaceGrid({
       data-testid="workspace-grid"
       data-layout-mode={layout.layoutMode}
     >
-      {slots.map((slot, idx) => (
-        <SessionPane
-          key={slot ? `pane-${idx}-${slot.sessionId}` : `pane-empty-${idx}`}
+      {slots.map((id, idx) => {
+        const slot = active.find(s => s.sessionId === id);
+        const history = id && historyIds.includes(id) ? id : null;
+        return (
+        <div key={idx} className={'workspace-slot' + (dragSlot === idx ? ' drag-target' : '')} data-testid={'workspace-slot-' + idx}
+          onPointerDownCapture={() => { if (history) paneProps.onFocusPane(history); }}
+          onFocusCapture={() => { if (history) paneProps.onFocusPane(history); }}
+          onDragOver={e => {
+            if (!isSessionDrag(e.dataTransfer)) return;
+            e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragSlot(idx);
+          }}
+          onDragLeave={e => { if (!(e.relatedTarget instanceof Node) || !e.currentTarget.contains(e.relatedTarget)) setDragSlot(null); }}
+          onDrop={e => {
+            if (!isSessionDrag(e.dataTransfer)) return;
+            e.preventDefault(); setDragSlot(null);
+            const id = droppedSession(e.dataTransfer);
+            if (historyIds.includes(id) || visibleSessions.some(s => s.sessionId === id && !s.archivedAt)) paneProps.onBindSlotSession(idx, id);
+          }}>
+        {history && renderHistory ? renderHistory(history, idx) : <SessionPane
+          key={slot?.sessionId || 'empty'}
           {...paneProps}
           slotIndex={idx}
           layoutMode={layout.layoutMode}
           isFocused={slot ? focusedSessionId === slot.sessionId || (!focusedSessionId && idx === 0) : false}
-          session={slot}
+          session={slot ?? null}
           availableSessions={visibleSessions}
           messages={slot ? messagesBySession[slot.sessionId] ?? [] : []}
           latestAudit={slot ? auditLog.find((entry) => entry.sessionId === slot.sessionId) : undefined}
           swarmState={slot ? swarmBySession[slot.sessionId] : undefined}
-        />
-      ))}
+        />}
+        </div>
+        );
+      })}
     </main>
   );
 }

@@ -3,8 +3,10 @@ import { ArrowRight, BookOpen, FolderGit2, Lock, X } from 'lucide-react';
 import type { ImportedHistoryDetail, ThoughtDisplayTrack } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { formatActionError } from '../i18n/locales';
-import { ImageWorkspace, AttachmentImages } from './MessageImage';
+import { ImageWorkspace } from './MessageImage';
 import { Markdown } from './Markdown';
+import { SentAnnotations } from './SentAnnotations';
+import { getDesktopBridge } from '../services/desktop-bridge';
 import { ThinkingBlock } from './ThinkingBlock';
 
 export interface ReadOnlyHistoryViewProps {
@@ -12,6 +14,20 @@ export interface ReadOnlyHistoryViewProps {
   defaultThoughtTrack?: ThoughtDisplayTrack;
   onContinueInGravity: (importedSessionId: string, cwd: string) => Promise<void>;
   onCloseHistoryView: () => void;
+}
+
+export function ImportedHistoryPane({ id, ...props }: Omit<ReadOnlyHistoryViewProps, 'detail'> & { id: string }) {
+  const [detail, setDetail] = useState<ImportedHistoryDetail>();
+  const [error, setError] = useState('');
+  const { dict } = useI18n();
+  useEffect(() => {
+    let active = true;
+    getDesktopBridge().getImportedHistoryDetail(id).then(value => { if (active) setDetail(value); })
+      .catch(reason => { if (active) setError(formatActionError(reason, dict)); });
+    return () => { active = false; };
+  }, [id, dict]);
+  if (detail) return <ReadOnlyHistoryView detail={detail} {...props} />;
+  return <div className="pane" aria-busy={!error}>{error ? <div role="alert">{error}</div> : dict.bootstrapLoading}</div>;
 }
 
 export function ReadOnlyHistoryView({
@@ -46,7 +62,7 @@ export function ReadOnlyHistoryView({
   }
 
   return (
-    <main className="pane" style={{ flex: 1 }} data-testid={`readonly-history-view-${detail.sessionId}`}>
+    <section className="pane" style={{ flex: 1 }} data-testid={`readonly-history-view-${detail.sessionId}`}>
       <header className="pane-header" style={{ borderBottom: '1px solid var(--border-subtle)', height: 46 }}>
         <BookOpen size={14} className="muted" />
         <span className="pane-title truncate" title={detail.title}>
@@ -102,7 +118,7 @@ export function ReadOnlyHistoryView({
               <div key={msg.id} className="turn">
                 <div className="cc-user-prompt">
                   <span className="cc-user-chevron">&gt;</span>
-                  <div className="cc-user-body"><Markdown text={msg.content} /><AttachmentImages items={msg.attachments} /></div>
+                  <div className="cc-user-body"><SentAnnotations items={msg.annotations} /><Markdown text={msg.content} attachments={msg.attachments} /></div>
                 </div>
               </div>
             ) : (
@@ -111,10 +127,9 @@ export function ReadOnlyHistoryView({
                   {msg.thoughts?.map((th) => (
                     <ThinkingBlock key={th.id} thought={th} defaultTrack={defaultThoughtTrack} />
                   ))}
-                  <AttachmentImages items={msg.attachments} />
                   <div className="cc-text">
                     <span className="cc-bullet">⏺</span>
-                    <Markdown text={msg.content} />
+                    <Markdown text={msg.content} attachments={msg.attachments} />
                   </div>
                 </div>
               </div>
@@ -122,6 +137,6 @@ export function ReadOnlyHistoryView({
           )}
         </div>
       </div></ImageWorkspace.Provider>
-    </main>
+    </section>
   );
 }

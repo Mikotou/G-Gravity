@@ -35,7 +35,8 @@ function receive(message: Rpc) {
     if (!pending) return;
     permissions.delete(String(message.id));
     if (message.error) { cancel(pending.sessionId); return; }
-    complete(pending.sessionId, pending.promptId, message.result?.outcome);
+    const outcome = message.result?.action ? { optionId: JSON.stringify(message.result) } : message.result?.outcome;
+    complete(pending.sessionId, pending.promptId, outcome);
     return;
   }
   const { id, method, params = {} } = message;
@@ -87,7 +88,16 @@ function receive(message: Rpc) {
           update(sessionId, { sessionUpdate: 'tool_call', toolCallId: `board-${sessionId}`, title: 'post_message', kind: 'other', status: 'completed',
             rawInput: { sender: '测试个体', content: '[done] 已核对', channel: 'main', mentions: ['lead'] } });
         }
-        if (text.includes('[permission]')) {
+        if (text.includes('[question]') || text.includes('[closed choice]')) {
+          const permissionId = 'question-' + ++permissionSequence;
+          run.permissionId = permissionId;
+          permissions.set(permissionId, { sessionId, promptId: id });
+          send({ jsonrpc: '2.0', id: permissionId, method: 'elicitation/create', params: { sessionId, mode: 'form', message: '你想选哪种颜色？',
+            requestedSchema: { type: 'object', required: ['color'], properties: {
+              color: { type: 'string', title: '颜色', oneOf: [{ const: 'teal', title: '青绿' }, { const: 'amber', title: '琥珀' }] },
+              ...(text.includes('[closed choice]') ? {} : { freeform_response: { type: 'string', title: '补充' } }),
+            } } } });
+        } else if (text.includes('[permission]')) {
           const permissionId = `permission-${++permissionSequence}`;
           run.permissionId = permissionId;
           permissions.set(permissionId, { sessionId, promptId: id });
@@ -96,7 +106,7 @@ function receive(message: Rpc) {
             options: [ { optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }, { optionId: 'allow-always', name: '始终允许', kind: 'allow_always' }, { optionId: 'reject-once', name: '拒绝', kind: 'reject_once' } ],
           } });
         } else complete(sessionId, id);
-      }, text.includes('[slow]') ? 250 : 15);
+      }, text.includes('[stream-during-drag]') ? 850 : text.includes('[slow]') ? 250 : 15);
       return;
     }
     default: fail(id, -32601, `未知方法：${method}`);

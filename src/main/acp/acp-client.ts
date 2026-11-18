@@ -95,7 +95,7 @@ export class AcpClient extends EventEmitter {
     child.once('close', () => { if (this.child === child) this.fail(new Error('官方 ACP 进程已退出')); });
     try {
       const result = await this.request<AcpInitializeResult>('initialize', {
-        protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } },
         clientInfo: { name: 'gravity', version: APP_BRAND.version },
       });
       if (result?.protocolVersion !== 1 || !result.agentCapabilities) throw new Error('官方 ACP 返回了不兼容的协议版本');

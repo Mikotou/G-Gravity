@@ -35,11 +35,14 @@ import { InspectorStore } from './session/inspector-store';
 import { prepareRevision, revisionContext } from '../shared/message-revision';
 import type { ReviseMessageInput } from '../shared/ipc-channels';
 import { withoutSession, type SessionAction } from '../shared/session-contract';
+import { AgentQuestions } from './session/agent-questions';
+import type { QuestionSubmission } from '../shared/user-question';
+import { modelMessage, restoreAnnotatedMessage } from './session/annotation-prompt';
 import { appendImage } from './session/message-images';
 import { LocalTranslator } from './translation/local-translator';
 
 export const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'gravity-claude-dark', defaultThoughtTrack: 'zh', translationEngine: 'local', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [] };
-export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, tertiarySessionId: null, quaternarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context' };
+export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context' };
 export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; setIcon?: (iconId: GravityIconId) => void | Promise<void>; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
 /** 主进程的业务入口。窗口请求进入此处，ACP 更新按会话分发给消息、审批、统计和检视器，再由事件通知渲染层。 */
 export class CoreService extends EventEmitter {
@@ -52,10 +55,19 @@ export class CoreService extends EventEmitter {
   private messages = new Map<string, ChatMessageItem[]>();
   private assistantMessages = new Map<string, ChatMessageItem>();
   private thoughtOwners = new Map<string, { sessionId: string; message: ChatMessageItem }>();
+  private customAnswers = new Map<string, string[]>();
+  private questions = new AgentQuestions(m => {
+    if (m.question?.state === 'open') this.finishAssistantMessage(m.sessionId);
+    this.upsert(m);
+  }, id => this.sessions.isActive(id), (id, text) => {
+    this.customAnswers.set(id, [...this.customAnswers.get(id) || [], text]);
+  });
   private feedback = new Map<string, string[]>();
   private compactAvailable = new Set<string>();
   private reactiveTurnTimers = new Map<string, NodeJS.Timeout>();
   private reactiveWakeupActive = new Set<string>();
+  private replayedUsers = new Map<string, ChatMessageItem>();
+  private disposed = false;
   private skipReplayedMessages = new Set<string>();
   private quotaRequests = new Map<string, ReturnType<typeof readAccountQuota>>();
   private managing = new Set<string>();
@@ -74,7 +86,14 @@ export class CoreService extends EventEmitter {
     if (!THEME_PRESETS.some(theme => theme.id === this.preferences.theme) && !['custom', 'system'].includes(this.preferences.theme)) this.preferences.theme = DEFAULT_PREFERENCES.theme;
     if (!GRAVITY_ICON_VARIANTS.some(icon => icon.id === this.preferences.appIcon)) this.preferences.appIcon = DEFAULT_PREFERENCES.appIcon;
     if (this.preferences.customTheme) { try { this.preferences.customTheme = validateCustomThemeConfig(this.preferences.customTheme); } catch { delete this.preferences.customTheme; this.preferences.theme = DEFAULT_PREFERENCES.theme; } }
-    this.layout = { ...DEFAULT_LAYOUT, ...this.store.read<Partial<WorkspaceLayoutState>>('layout.json', {}) };
+    const stored = this.store.read<Partial<Omit<WorkspaceLayoutState, 'layoutMode'>> & {
+      layoutMode?: WorkspaceLayoutState['layoutMode'] | 'grid-4'; tertiarySessionId?: string; quaternarySessionId?: string;
+    }>('layout.json', {});
+    const { tertiarySessionId, quaternarySessionId, layoutMode, ...saved } = stored;
+    this.layout = { ...DEFAULT_LAYOUT, ...saved, layoutMode: layoutMode === 'grid-4' || layoutMode === 'split-2' ? 'split-2' : 'single' };
+    if (layoutMode === 'grid-4') {
+      this.layout.openTabSessionIds = [...new Set([...this.layout.openTabSessionIds, tertiarySessionId, quaternarySessionId].filter((id): id is string => Boolean(id)))];
+    }
     if (!isRightInspectorTab(this.layout.activeInspectorTab)) this.layout.activeInspectorTab = DEFAULT_LAYOUT.activeInspectorTab;
     this.client = options.acp || new AcpClient({ ...options.acpOptions, args: options.acpOptions?.args || ['acp', ...(this.preferences.processPerSession ? ['--process-per-session'] : [])] });
     this.sessions = new SessionMultiplexer(this.client, this.store);
@@ -95,7 +114,7 @@ export class CoreService extends EventEmitter {
     this.plugins = new PluginsManager({ store: this.store, binaryPath: options.acpOptions?.binaryPath, executor: options.pluginsExecutor, homeDir: options.homeDir });
     // 切换账号要跨越两套会话状态。旧消息在切换前保存，新账号的消息在窗格和内存索引清空后载入。
     this.accounts = new AccountManager({ store: this.store, client: this.client, sessions: this.sessions,
-      beforeSwitch: async () => { if (this.managing.size) throw new Error('正在保存会话变更'); this.approval.dispose(); this.feedback.clear(); this.saveMessages(); },
+      beforeSwitch: async () => { if (this.managing.size) throw new Error('正在保存会话变更'); this.questions.cancel(); this.customAnswers.clear(); this.approval.dispose(); this.feedback.clear(); this.saveMessages(); },
       afterSwitch: profileId => {
         this.thoughts.dispose();
         for (const id of this.reactiveTurnTimers.keys()) this.clearReactiveTurnTimer(id);
@@ -103,7 +122,7 @@ export class CoreService extends EventEmitter {
         for (const id of this.messages.keys()) this.telemetry.remove(id);
         this.assistantMessages.clear(); this.thoughtOwners.clear(); this.compactAvailable.clear(); this.messages.clear();
         this.preferences.activeProfileId = profileId; this.store.write('preferences.json', this.preferences);
-        this.layout = { ...this.layout, openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, tertiarySessionId: null, quaternarySessionId: null };
+        this.layout = { ...this.layout, openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null };
         this.store.write('layout.json', this.layout); this.loadProfileData();
       },
     });
@@ -112,20 +131,22 @@ export class CoreService extends EventEmitter {
     this.history.on('updated', records => this.emit('history-updated', records));
     this.inspector.on('updated', data => this.emit('inspector-updated', data));
     // 权限请求由代理反向发起。先确认会话仍激活，再把请求交给审批引擎等待决定。
+    this.client.registerRequestHandler('elicitation/create', (raw, id) => this.questions.request(raw, id));
+    this.client.on('$/cancel_request', ({ requestId } = {}) => { if (requestId !== undefined) this.questions.cancel(undefined, requestId); });
     this.client.registerRequestHandler('session/request_permission', (raw) => {
       const params = raw as AcpRequestPermissionParams;
       if (!params?.sessionId || !this.sessions.isActive(params.sessionId)) return { outcome: { outcome: 'cancelled' } };
       return this.approval.requestPermission(params, this.sessions.get(params.sessionId).cwd);
     });
-    this.client.on('disconnected', () => { this.approval.dispose(); });
+    this.client.on('disconnected', () => { this.questions.cancel(); this.customAnswers.clear(); this.approval.dispose(); });
     this.client.on('rateLimited', (warning: string) => {
       for (const session of this.sessions.sessions.values()) if (this.sessions.isActive(session.sessionId)) this.upsert({ id: randomUUID(), sessionId: session.sessionId, role: 'system', content: warning, createdAt: new Date().toISOString() });
     });
     this.sessions.on('session', (session: ManagedSessionSummary) => this.emit('session-updated', this.titles.apply(session)));
     this.sessions.on('update', (payload: AcpSessionUpdateNotification) => this.consumeUpdate(payload));
     this.sessions.on('localPreference', ({ sessionId, text }) => this.upsert({ id: randomUUID(), sessionId, role: 'system', content: text, createdAt: new Date().toISOString() }));
-    this.sessions.on('cancelled', (id: string) => { this.approval.cancelSession(id); this.feedback.delete(id); });
-    this.sessions.on('closed', (id: string) => { this.approval.cancelSession(id); this.telemetry.cancelTurn(id); });
+    this.sessions.on('cancelled', (id: string) => { this.questions.cancel(id); this.customAnswers.delete(id); this.approval.cancelSession(id); this.feedback.delete(id); });
+    this.sessions.on('closed', (id: string) => { this.questions.cancel(id); this.customAnswers.delete(id); this.approval.cancelSession(id); this.telemetry.cancelTurn(id); });
     this.approval.on('requested', request => { this.sessions.setStatus(request.sessionId, 'waiting_approval'); this.emit('approval-requested', request); });
     this.approval.on('resolved', payload => {
       if (!this.approval.listPending().some(item => item.sessionId === payload.sessionId)) this.sessions.setStatus(payload.sessionId, this.sessions.isBusy(payload.sessionId) ? 'streaming' : 'idle');
@@ -188,7 +209,8 @@ export class CoreService extends EventEmitter {
     for (const [id, items] of Object.entries(saved || {})) {
       if (!Array.isArray(items) || (hasLedger && !this.sessions.sessions.has(id))) continue;
       const normalizedItems = items.slice(-500).filter(item => item && typeof item.id === 'string').map(item => ({
-        ...item, isStreaming: false,
+        ...restoreAnnotatedMessage(item), isStreaming: false,
+        question: item.question?.state === 'open' ? { ...item.question, state: 'cancelled' as const } : item.question,
         thoughts: item.thoughts?.map(block => ({ ...block, isStreaming: false, isTranslating: false })),
       }));
       this.messages.set(id, normalizedItems);
@@ -220,9 +242,13 @@ export class CoreService extends EventEmitter {
   }
   /** 按 ACP 更新类型合并增量。回复正文、思考、工具状态和用量共享 sessionId，各自维护自己的累计方式。 */
   private consumeUpdate({ sessionId, update }: AcpSessionUpdateNotification): void {
+    if (this.disposed) return;
     const replaying = this.sessions.isResuming(sessionId);
     if (replaying && this.skipReplayedMessages.has(sessionId) &&
         !['available_commands_update', 'current_mode_update', 'config_option_update'].includes(update.sessionUpdate)) return;
+    if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'plan'].includes(update.sessionUpdate)) {
+      this.finishReplayedUser(sessionId);
+    }
     if (update.sessionUpdate === 'plan') {
       this.inspector.consume(sessionId, update);
       const todos = this.inspector.get(sessionId).todos;
@@ -264,7 +290,16 @@ export class CoreService extends EventEmitter {
     }
 
     if (update.sessionUpdate === 'user_message_chunk') {
-      if (replaying) this.finishAssistantMessage(sessionId);
+      if (replaying) {
+        this.finishAssistantMessage(sessionId);
+        const message = this.replayedUsers.get(sessionId) || { id: randomUUID(), sessionId, role: 'user', content: '', createdAt: new Date().toISOString() };
+        message.content += text;
+        appendImage(message, update.content);
+        this.replayedUsers.set(sessionId, message);
+        return;
+      }
+      // Our outgoing turn was already published with the user's structured annotations.
+      if (this.sessions.isBusy(sessionId)) return;
       const items = this.messages.get(sessionId) || []; const previous = items.at(-1);
       const message: ChatMessageItem = previous?.role === 'user' && previous.isStreaming ? previous : { id: randomUUID(), sessionId, role: 'user', content: '', isStreaming: true, createdAt: new Date().toISOString() };
       appendImage(message, update.content);
@@ -359,6 +394,13 @@ export class CoreService extends EventEmitter {
   private completeStreamingThoughts(message: ChatMessageItem): void {
     if (!message.thoughts?.length) return;
     message.thoughts = message.thoughts.map(block => (block.isStreaming ? this.thoughts.complete(block.id) || block : block));
+  }
+  private finishReplayedUser(sessionId: string): void {
+    const message = this.replayedUsers.get(sessionId);
+    if (message) {
+      this.replayedUsers.delete(sessionId);
+      this.upsert(restoreAnnotatedMessage(message));
+    }
   }
   private finishAssistantMessage(sessionId: string): void {
     const message = this.assistantMessages.get(sessionId);
@@ -520,6 +562,7 @@ export class CoreService extends EventEmitter {
     let session: ManagedSessionSummary;
     try {
       session = await this.sessions.resumeSession(sessionId, cwd);
+      this.finishReplayedUser(sessionId);
     } catch (error) {
       if (!hadLocalMessages) {
         this.messages.delete(sessionId);
@@ -536,14 +579,14 @@ export class CoreService extends EventEmitter {
       } else {
         throw error;
       }
-    } finally { this.skipReplayedMessages.delete(sessionId); }
+    } finally { this.skipReplayedMessages.delete(sessionId); this.replayedUsers.delete(sessionId); }
     this.approval.setSessionExecutionMode(session.sessionId, session.executionMode);
     this.telemetry.hydrateFromMessages(sessionId, session.modelId, this.messages.get(sessionId) || []);
     this.syncSessionCheckpointWindow(sessionId);
     this.finishMessage(sessionId);
     return this.titles.apply(session);
   }
-  async closeSession(sessionId: string): Promise<void> { this.clearReactiveTurnTimer(sessionId); this.swarm.markWorkingSubagentsCompleted(sessionId, '会话已关闭'); this.approval.cancelSession(sessionId); await this.sessions.closeSession(sessionId); this.finishMessage(sessionId); }
+  async closeSession(sessionId: string): Promise<void> { this.questions.cancel(sessionId); this.customAnswers.delete(sessionId); this.clearReactiveTurnTimer(sessionId); this.swarm.markWorkingSubagentsCompleted(sessionId, '会话已关闭'); this.approval.cancelSession(sessionId); await this.sessions.closeSession(sessionId); this.finishMessage(sessionId); }
   private finishDeletion(id: string): void {
     const profile = this.accounts.activeProfileId;
     for (const [key, owner] of this.thoughtOwners) if (owner.sessionId === id) {
@@ -601,7 +644,7 @@ export class CoreService extends EventEmitter {
   async getSessionMessages(sessionId: string): Promise<ChatMessageItem[]> { return structuredClone(this.messages.get(sessionId) || []); }
   private userMessage(input: SendPromptInput): ChatMessageItem {
     return {
-      id: randomUUID(), sessionId: input.sessionId, role: 'user', content: input.text,
+      id: randomUUID(), sessionId: input.sessionId, role: 'user', content: input.text, annotations: input.annotations,
       references: input.references, createdAt: new Date().toISOString(),
       attachments: (input.attachments || []).map(item => ({
         id: randomUUID(), name: item.name, mimeType: item.mimeType, sizeBytes: item.sizeBytes, uri: item.uri,
@@ -618,7 +661,7 @@ export class CoreService extends EventEmitter {
         this.sessions.isBusy(origin.sessionId) || this.revising.has(origin.sessionId) || this.managing.has(origin.sessionId)) {
       throw new Error('请等当前回合结束后再编辑');
     }
-    const { prefix, references, attachments } = prepareRevision(this.messages.get(origin.sessionId) || [], input);
+    const { prefix, references, attachments, annotations } = prepareRevision(this.messages.get(origin.sessionId) || [], input);
     let branch: ManagedSessionSummary | undefined;
     this.revising.add(origin.sessionId);
     try {
@@ -640,9 +683,9 @@ export class CoreService extends EventEmitter {
       });
       this.messages.set(id, [...history, ...(this.messages.get(id) || [])]);
       this.saveMessages();
-      const revision = { sessionId: id, text: input.text, references, attachments };
+      const revision = { sessionId: id, text: input.text, references, attachments, annotations };
       void this.sendPrompt(revision).catch(error => {
-        if (this.accounts.activeProfileId !== profile || !this.sessions.sessions.has(id)) return;
+        if (this.disposed || this.accounts.activeProfileId !== profile || !this.sessions.sessions.has(id)) return;
         if (!(this.messages.get(id) || []).some(m => m.role === 'user' && !m.revisionHistory)) {
           this.upsert({ ...this.userMessage(revision), sendFailed: true });
         }
@@ -662,12 +705,15 @@ export class CoreService extends EventEmitter {
   async sendPrompt(input: SendPromptInput): Promise<void> {
     this.accounts.assertReady();
     if (this.revising.has(input.sessionId) || this.managing.has(input.sessionId)) throw new Error('该会话正在创建修订分支');
-    if (typeof input?.text !== 'string' || input.text.length > 1000000 || (!input.text.trim() && !input.attachments?.length)) throw new Error('请输入有效的提示词');
+    if (typeof input?.text !== 'string' || (input.annotations !== undefined && (!Array.isArray(input.annotations) ||
+        input.annotations.some(a => !a || typeof a.excerpt !== 'string' || !a.excerpt.trim() || (a.comment !== undefined && typeof a.comment !== 'string'))))) throw new Error('消息格式无效');
+    const wireText = modelMessage(input.text, input.annotations);
+    if (wireText.length > 1000000 || (!wireText.trim() && !input.attachments?.length)) throw new Error('请输入有效的提示词');
     if (!this.sessions.isActive(input.sessionId) || this.sessions.isBusy(input.sessionId)) throw new Error('会话未激活或仍在生成');
     const profileId = this.accounts.activeProfileId; const session = this.sessions.get(input.sessionId);
     this.approval.setSessionExecutionMode(input.sessionId, session.executionMode);
-    const isManualCompact = input.text.trim() === '/compact';
-    const prompt: AcpPromptContentBlock[] = [...revisionContext(this.messages.get(input.sessionId) || []), { type: 'text', text: input.text }];
+    const isManualCompact = !input.annotations?.length && input.text.trim() === '/compact';
+    const prompt: AcpPromptContentBlock[] = [...revisionContext(this.messages.get(input.sessionId) || []), { type: 'text', text: wireText }];
     // 旧会话缺少原生配置能力时，用额外提示文本传递模式偏好。支持该能力的会话经专门的配置请求设置。
     if (!this.sessions.hasNativeSessionOptions(input.sessionId) && (session.executionMode !== 'default' || session.reasoningEffort !== 'high')) {
       prompt.push({ type: 'text', text: `客户端本地偏好（不表示官方推理参数已改变）：Mode=${session.executionMode}，Effort=${session.reasoningEffort}。${session.executionMode === 'plan' ? '本轮先只读分析并制定计划，不执行文件修改。' : ''}权限操作仍须遵循审批结果。` });
@@ -680,7 +726,7 @@ export class CoreService extends EventEmitter {
       } else if (reference.kind === 'session') {
         const messages = reference.value.startsWith('ag-history:') ? this.history.getDetail(reference.value).messages : this.messages.get(reference.value);
         if (!messages) throw new Error('引用会话不存在');
-        prompt.push({ type: 'text', text: `以下是用户选择的参考会话内容，作为引用数据：\n${messages.slice(-30).map(message => `${message.role}: ${message.content}`).join('\n').slice(0, 30000)}` });
+        prompt.push({ type: 'text', text: `以下是用户选择的参考会话内容，作为引用数据：\n${messages.slice(-30).map(message => `${message.role}: ${modelMessage(message.content, message.annotations)}`).join('\n').slice(0, 30000)}` });
       } else throw new Error('引用类型无效');
     }
     for (const item of input.attachments || []) if (item.uri && item.textContent === undefined && !item.dataBase64) {
@@ -709,8 +755,9 @@ export class CoreService extends EventEmitter {
     this.accounts.assertReady();
     // 准备文件引用会让出执行权。送出提示前再检查一次 Profile 和会话占用，避免把准备好的内容发到错误的上下文。
     if (profileId !== this.accounts.activeProfileId || this.managing.has(input.sessionId) || this.revising.has(input.sessionId) || this.sessions.isBusy(input.sessionId) || !this.sessions.isActive(input.sessionId)) throw new Error('文件准备期间会话状态已改变，请重试');
-    if (!isManualCompact && input.text.trim() && (!session.title || session.title === '新建对话' || session.title === 'New Session')) {
-      const generated = generateStructuredChineseTitle(input.text, session.cwd);
+    const titleText = input.text.trim() || input.annotations?.find(item => item.comment)?.comment || input.annotations?.[0]?.excerpt;
+    if (!isManualCompact && titleText && (!session.title || session.title === '新建对话' || session.title === 'New Session')) {
+      const generated = generateStructuredChineseTitle(titleText, session.cwd);
       session.title = generated.organizedTitle;
       session.categoryTag = generated.categoryTag;
       this.sessions.updateSessionRecord(session);
@@ -721,16 +768,23 @@ export class CoreService extends EventEmitter {
     this.clearReactiveTurnTimer(input.sessionId);
     this.telemetry.ensure(input.sessionId, session.modelId);
     if (isManualCompact) this.telemetry.beginManualCompaction(input.sessionId);
-    this.telemetry.beginTurn(input.sessionId, input.text, attachments); this.assistantMessages.delete(input.sessionId);
+    this.telemetry.beginTurn(input.sessionId, wireText, attachments); this.assistantMessages.delete(input.sessionId);
     try { const result = await this.sessions.sendPrompt({ sessionId: input.sessionId, prompt }); if (result.usage) this.telemetry.applyUsage(input.sessionId, result.usage); }
     catch (error) {
+      this.customAnswers.delete(input.sessionId);
       if (profileId === this.accounts.activeProfileId) { submitted.sendFailed = true; this.upsert(submitted); }
       throw error;
     } finally {
+      this.questions.cancel(input.sessionId);
       this.finishMessage(input.sessionId);
       this.telemetry.endTurn(input.sessionId);
       this.syncSessionCheckpointWindow(input.sessionId);
       if (isManualCompact) this.telemetry.finishManualCompaction(input.sessionId);
+    }
+    const custom = this.customAnswers.get(input.sessionId);
+    this.customAnswers.delete(input.sessionId);
+    if (custom?.length && this.sessions.isActive(input.sessionId) && profileId === this.accounts.activeProfileId) {
+      await this.sendPrompt({ sessionId: input.sessionId, text: custom.join('\n\n') });
     }
     const feedback = this.feedback.get(input.sessionId); this.feedback.delete(input.sessionId);
     if (feedback?.length && this.sessions.isActive(input.sessionId)) {
@@ -741,6 +795,10 @@ export class CoreService extends EventEmitter {
       try { const result = await this.sessions.sendPrompt({ sessionId: input.sessionId, prompt: [{ type: 'text', text }] }); if (result.usage) this.telemetry.applyUsage(input.sessionId, result.usage); }
       finally { this.finishMessage(input.sessionId); this.telemetry.endTurn(input.sessionId); }
     }
+  }
+  async answerQuestion(input: QuestionSubmission): Promise<void> {
+    this.accounts.assertReady();
+    this.questions.answer(input);
   }
   async cancelPrompt(sessionId: string): Promise<void> {
     this.clearReactiveTurnTimer(sessionId);
@@ -754,7 +812,7 @@ export class CoreService extends EventEmitter {
   }
   async saveWorkspaceLayout(patch: Partial<WorkspaceLayoutState>): Promise<WorkspaceLayoutState> {
     const next = { ...this.layout, ...patch };
-    if (!Array.isArray(next.openTabSessionIds) || next.openTabSessionIds.length > 4 || !next.openTabSessionIds.every(id => typeof id === 'string') || !['single', 'split-2', 'grid-4'].includes(next.layoutMode) || typeof next.hideLegacyPollutionSessions !== 'boolean') throw new Error('工作台布局无效');
+    if (!Array.isArray(next.openTabSessionIds) || !next.openTabSessionIds.every(id => typeof id === 'string') || !['single', 'split-2'].includes(next.layoutMode) || typeof next.hideLegacyPollutionSessions !== 'boolean') throw new Error('工作台布局无效');
     if (typeof next.leftSidebarCollapsed !== 'boolean' || typeof next.rightInspectorCollapsed !== 'boolean' || !Number.isFinite(next.leftSidebarWidth) || next.leftSidebarWidth < 160 || next.leftSidebarWidth > 600 || !Number.isFinite(next.rightInspectorWidth) || next.rightInspectorWidth < 240 || next.rightInspectorWidth > 1000 || !isRightInspectorTab(next.activeInspectorTab)) throw new Error('Inspector 布局或栏宽无效');
     this.layout = next; this.store.write('layout.json', next); return structuredClone(next);
   }
@@ -886,7 +944,10 @@ export class CoreService extends EventEmitter {
   async getSessionInspector(sessionId: string) { return this.inspector.get(sessionId); }
   async listWorkspaceFiles(cwd: string, query?: string) { return this.workspaceFiles.list(cwd, query); }
   async listImportedHistory() { return this.history.refresh(); }
-  async getImportedHistoryDetail(sessionId: string) { return this.history.getDetail(sessionId); }
+  async getImportedHistoryDetail(sessionId: string) {
+    const detail = this.history.getDetail(sessionId);
+    return { ...detail, messages: detail.messages.map(restoreAnnotatedMessage) };
+  }
   /** 续聊创建新的实时会话，用历史摘要构造首条提示。导入记录的标识继续只用于定位原始记录。 */
   async continueHistoryInGravity(input: ContinueHistoryInGravityInput) {
     const history = this.history.getDetail(input.importedSessionId);
@@ -902,6 +963,8 @@ export class CoreService extends EventEmitter {
   async getSwarmState(sessionId: string) { return this.swarm.getState(sessionId); }
   /** 退出时先终止定时器与事件来源，再刷新用量账本。即便写盘抛错，finally 也会关闭 ACP 连接。 */
   async dispose(): Promise<void> {
+    this.disposed = true;
+    this.questions.cancel(); this.customAnswers.clear();
     for (const timer of this.reactiveTurnTimers.values()) clearTimeout(timer);
     this.reactiveTurnTimers.clear();
     this.reactiveWakeupActive.clear();

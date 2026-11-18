@@ -26,7 +26,7 @@ import { InlineRequestView } from './InlineRequestView';
 import type { ReviseMessageInput } from '@shared';
 import { useAnnotationDraft, showAnnotationRanges } from '../lib/annotation-drafts';
 import { EditUserMessage } from './EditUserMessage';
-import { ImageWorkspace, AttachmentImages } from './MessageImage';
+import { ImageWorkspace } from './MessageImage';
 import { Markdown } from './Markdown';
 import {
   detectContextTargetFromElement,
@@ -37,6 +37,10 @@ import {
   type TextNotationItem,
   type TextQuoteItem,
 } from './SelectionAnnotationTools';
+import { writtenQuestion } from '@shared';
+import { getDesktopBridge } from '../services/desktop-bridge';
+import { QuestionBar } from './QuestionBar';
+import { SentAnnotations } from './SentAnnotations';
 import { ThinkingBlock } from './ThinkingBlock';
 import { AccountQuotaFooter } from './AccountQuotaView';
 import { PaneStatusChip, ToolActivityStream, TurnOutcomeBar } from './TurnActivity';
@@ -161,28 +165,30 @@ function MessageTurn({
   busy: boolean;
   onInspectDiff: (filePath: string) => void;
 }): React.ReactElement | null {
+  const { locale } = useI18n();
+  if (message.question) {
+    const q = message.question;
+    if (q.state === 'open') return null;
+    return <div className="question-history" data-message-id={message.id}><strong>{q.message}</strong>
+      <div>{q.answer || (locale === 'zh-CN' ? (q.state === 'declined' ? '已跳过' : '已取消') :
+        (q.state === 'declined' ? 'Skipped' : 'Cancelled'))}</div></div>;
+  }
   if (message.role === 'user') {
-    const files = (message.attachments ?? []).filter((a) => !(a.mimeType.startsWith('image/') && (a.dataUrl || a.uri)));
     const body = (
       <div className="cc-user-prompt" data-testid={`user-msg-${message.id}`} data-message-id={message.id}>
         <span className="cc-user-chevron">&gt;</span>
         <div className="cc-user-body" data-message-body="true">
-          {(message.references?.length || files.length) ? (
+          {message.references?.length ? (
             <div className="cc-user-chips">
               {message.references?.map((r) => (
                 <span key={`${r.kind}-${r.value}`} className="badge badge-accent badge-mono">
                   @{r.label}
                 </span>
               ))}
-              {files.map((f) => (
-                <span key={f.id} className="badge">
-                  {f.name}
-                </span>
-              ))}
             </div>
           ) : null}
-          <Markdown text={message.content} />
-          <AttachmentImages items={message.attachments} />
+          <SentAnnotations items={message.annotations} />
+          <Markdown text={message.content} attachments={message.attachments} />
         </div>
       </div>
     );
@@ -244,13 +250,12 @@ function MessageTurn({
           ))}
         </div>
       )}
-      <AttachmentImages items={message.attachments} />
-      {message.content && (
+      {(message.content || message.attachments?.length) ? (
         <div className="cc-text" data-message-body="true" data-testid={`assistant-body-${message.id}`}>
           <span className={`cc-bullet ${message.isStreaming ? 'is-streaming' : ''}`}>⏺</span>
-          <Markdown text={message.content} streaming={message.isStreaming} />
+          <Markdown text={message.content} attachments={message.attachments} streaming={message.isStreaming} />
         </div>
-      )}
+      ) : null}
       {!message.isStreaming && !message.toolCalls?.length && (
         <TurnOutcomeBar message={message} turnStartedAt={turnStartedAt} onInspectDiff={onInspectDiff} />
       )}
@@ -304,6 +309,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
   } | null>(null);
   const [composerFocusSeq, setComposerFocusSeq] = useState(0);
   const [openTargetError, setOpenTargetError] = useState<string | null>(null);
+  const [dismissedQuestion, setDismissedQuestion] = useState<string>();
   const [awayFromBottom, setAwayFromBottom] = useState(false);
   const [hasUnseen, setHasUnseen] = useState(false);
 
@@ -491,6 +497,10 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
 
   // 生成状态可能先于助手的首个分片抵达。只有末条消息还未显示流式回复时才额外展示等待状态。
   const last = messages[messages.length - 1];
+  const nativeQuestion = messages.find(m => m.question?.state === 'open');
+  const questionSource = nativeQuestion || (last?.role === 'assistant' && !last.question && !last.isStreaming &&
+    session.status === 'idle' && !last.revisionHistory && last.id !== dismissedQuestion ? last : undefined);
+  const question = questionSource?.question || (questionSource ? writtenQuestion(questionSource.content) : undefined);
   const showWorking =
     session.status === 'streaming' && !(last && last.role === 'assistant' && last.isStreaming);
 
@@ -700,6 +710,16 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
         />
       )}
 
+      {!session.readOnly && question && questionSource && <QuestionBar key={questionSource.id} question={question}
+        draftKey={JSON.stringify([session.profileId, session.sessionId, questionSource.id])} native={Boolean(nativeQuestion)}
+        submit={async reply => {
+          if (nativeQuestion) {
+            await getDesktopBridge().answerQuestion({ sessionId: session.sessionId, messageId: nativeQuestion.id, ...reply });
+          } else {
+            if (reply.action === 'accept') await props.onSendPrompt({ sessionId: session.sessionId, text: reply.customReply! });
+            setDismissedQuestion(questionSource.id);
+          }
+        }} />}
       {session.readOnly ? <div className="composer-dock">
         <div className="composer-wrap">
           <div className="offline-conversation">

@@ -79,7 +79,6 @@ export interface UiDictionary {
   // 布局 / 主区
   layoutSingle: string;
   layoutSplit2: string;
-  layoutGrid4: string;
   maxParallelReached: string;
   switchPaneSession: string;
   emptyPaneTitle: string;
@@ -475,7 +474,6 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
 
     layoutSingle: '单栏',
     layoutSplit2: '双栏',
-    layoutGrid4: '四宫格',
     maxParallelReached: '最多同时打开 4 个会话，已替换当前标签',
     switchPaneSession: '选择会话',
     emptyPaneTitle: '空闲窗格',
@@ -888,7 +886,6 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
 
     layoutSingle: 'Single',
     layoutSplit2: 'Split',
-    layoutGrid4: 'Grid',
     maxParallelReached: 'Up to 4 threads can be open; replaced the current tab.',
     switchPaneSession: 'Choose thread',
     emptyPaneTitle: 'Empty pane',
@@ -1264,8 +1261,6 @@ export function getLayoutLabel(mode: WorkspaceSplitMode, dict: UiDictionary): st
       return dict.layoutSingle;
     case 'split-2':
       return dict.layoutSplit2;
-    case 'grid-4':
-      return dict.layoutGrid4;
   }
 }
 

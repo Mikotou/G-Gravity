@@ -70,6 +70,7 @@ export const IPC_CHANNELS = {
   SESSION_RESUME: 'gravity:session:resume',
   SESSION_MANAGE: 'gravity:session:manage',
   ACCOUNT_QUOTA: 'gravity:account:quota',
+  SESSION_ANSWER_QUESTION: 'gravity:session:answer-question',
   SESSION_CLOSE: 'gravity:session:close',
   SESSION_REVISE_MESSAGE: 'gravity:session:revise-message',
   SESSION_SEND_PROMPT: 'gravity:session:send-prompt',
@@ -164,9 +165,11 @@ export interface ReviseMessageInput {
   messageId: string;
   text: string;
   attachmentIds?: string[];
+  annotations?: import('./session-contract').MessageAnnotation[];
 }
 
 export interface SendPromptInput {
+  annotations?: import('./session-contract').MessageAnnotation[];
   sessionId: string;
   text: string;
   references?: Array<{ kind: 'file' | 'session'; label: string; value: string }>;
@@ -218,6 +221,7 @@ export interface GravityDesktopBridge {
   resumeSession(sessionId: string, cwd: string): Promise<ManagedSessionSummary>;
   closeSession(sessionId: string): Promise<void>;
   manageSession(id: string, action: import('./session-contract').SessionAction): Promise<{ sessions: ManagedSessionSummary[]; layout: WorkspaceLayoutState }>;
+  answerQuestion(input: import('./user-question').QuestionSubmission): Promise<void>;
   getAccountQuota(): Promise<import('./accounts-history-contract').AccountQuota>;
   setSessionMode(sessionId: string, mode: AgentExecutionMode): Promise<ManagedSessionSummary>;
   setSessionEffort(

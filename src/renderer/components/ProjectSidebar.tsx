@@ -30,6 +30,7 @@ import {
   type SessionAction,
   type WorkspaceProjectConfig,
 } from '@shared';
+import { startSessionDrag } from '../lib/session-drag';
 import { useI18n } from '../i18n/I18nContext';
 import { formatRelativeTime } from '../i18n/locales';
 import { resolveGravityIconVariant } from '../styles/theme';
@@ -409,6 +410,7 @@ export function ProjectSidebar({
                           if (!editing) onSelectSession(s);
                         }}
                         role="group"
+                        draggable={!editing} onDragStart={e => startSessionDrag(e.dataTransfer, s.sessionId)}
                         tabIndex={0}
                         aria-label={s.title}
                         onKeyDown={e => {
@@ -538,6 +540,7 @@ export function ProjectSidebar({
                 visibleHistory.map((rec) => (
                   <div
                     key={rec.sessionId}
+                    draggable onDragStart={e => startSessionDrag(e.dataTransfer, rec.sessionId)}
                     className={`thread-item ${selectedHistoryId === rec.sessionId ? 'is-selected' : ''}`}
                     onClick={() => onSelectHistory(rec)}
                     title={rec.cwd ? `${rec.title}\n${rec.cwd}` : rec.title}

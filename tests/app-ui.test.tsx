@@ -91,8 +91,7 @@ describe('App 主界面演示桥接交互（不等同真实服务）', () => {
     await mount();
     fireEvent.click(screen.getByTestId('layout-btn-split-2'));
     await waitFor(() => expect(screen.getByTestId('workspace-grid').children).toHaveLength(2));
-    fireEvent.click(screen.getByTestId('layout-btn-grid-4'));
-    await waitFor(() => expect(screen.getByTestId('workspace-grid').children).toHaveLength(4));
+    expect(screen.queryByTestId('layout-btn-grid-4')).toBeNull();
     expect(screen.queryByTestId('sidebar-session-sess-legacy-pollution-1')).toBeNull();
     fireEvent.click(screen.getByTestId('btn-toggle-pollution'));
     await screen.findByTestId('sidebar-session-sess-legacy-pollution-1');
@@ -149,7 +148,7 @@ describe('App 主界面演示桥接交互（不等同真实服务）', () => {
   it('零打开标签时不能把未恢复的历史会话渲染成可输入工作台', async () => {
     const bridge = getFallbackDesktopBridge(); const boot = await bridge.getBootstrap();
     boot.sessions = boot.sessions.map((session) => ({ ...session, status: 'closed' }));
-    boot.layout = { ...boot.layout, openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, tertiarySessionId: null, quaternarySessionId: null };
+    boot.layout = { ...boot.layout, openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null };
     window.agyDesktop = { ...bridge, getBootstrap: async () => boot };
     await mount();
     expect(screen.queryByTestId('composer-input-sess-primary')).toBeNull();

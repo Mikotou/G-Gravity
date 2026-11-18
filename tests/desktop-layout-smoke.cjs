@@ -161,7 +161,7 @@ async function checkActivitySeam(page) {
     });
     await pane.getByTestId('composer-image-tray').waitFor();
     const reads = await page.evaluate(() => window.fixture.quotaReads);
-    for (const [mode, width, height] of [['single', 950, 800], ['single', 365, 700], ['split-2', 1160, 840], ['grid-4', 1280, 1060]]) {
+    for (const [mode, width, height] of [['single', 950, 800], ['single', 365, 700], ['split-2', 1160, 840]]) {
       await page.setViewportSize({ width, height });
       await page.getByTestId('layout-btn-' + mode).press('Enter');
       const stream = pane.locator('.stream');
@@ -190,7 +190,8 @@ async function checkActivitySeam(page) {
     assert.equal(await pane.getByTestId('turn-notation-pins').count(), 0);
     assert.equal(await pane.getByTestId('composer-annotations-layout-test').count(), 0);
     assert.equal(await page.evaluate(() => CSS.highlights.has('gravity-annotations')), false);
-    const prompt = await page.evaluate(() => window.fixture.calls[0].text);
+    const prompt = await page.evaluate(() => JSON.stringify(window.fixture.calls[0].annotations));
+    assert.equal(await page.evaluate(() => window.fixture.calls[0].text), '');
     await checkActivitySeam(page);
     await annotate('strong', '留给下一轮');
     await page.evaluate(() => window.fixture.settle());
@@ -244,7 +245,27 @@ async function checkActivitySeam(page) {
     const saved = await page.evaluate(async ([a, b]) => Promise.all([a, b].map(async sid => (await window.fixtureBridge.getSessionMessages(sid))
       .filter(m => m.role === 'user').map(m => m.content))), [id, newId]);
     assert.deepEqual(saved, [['First keyboard message'], ['Edited keyboard message']]);
-    console.log('Local keyboard workspace: welcome, settings, explicit new conversation, typed first message, edited and resent into a new branch.');
+    await page.getByTestId('layout-btn-split-2').press('Enter');
+    const left = page.getByTestId('workspace-slot-0'), right = page.getByTestId('workspace-slot-1');
+    await left.getByTestId('session-pane-' + newId).waitFor();
+    await page.getByTestId('sidebar-session-' + id).dragTo(right);
+    await right.getByTestId('session-pane-' + id).waitFor();
+    await page.getByTestId('tab-item-' + newId).dragTo(right);
+    await right.getByTestId('session-pane-' + newId).waitFor();
+    await left.getByTestId('session-pane-' + id).waitFor();
+    assert.ok(await page.getByTestId('tab-item-' + id).isVisible());
+    assert.ok(await page.getByTestId('tab-item-' + newId).isVisible());
+    await type(left.getByTestId('composer-input-' + id), 'My unsent draft survives a move');
+    const historyId = 'ag-history:conv-cli-002';
+    await page.getByTestId('history-item-' + historyId).dragTo(left);
+    await left.getByTestId('readonly-history-view-' + historyId).waitFor();
+    await right.getByTestId('session-pane-' + newId).waitFor();
+    assert.ok(await page.getByTestId('tab-item-' + id).isVisible());
+    await page.getByTestId('tab-close-' + historyId).press('Enter');
+    await left.getByTestId('session-pane-' + id).waitFor();
+    assert.equal(await left.getByTestId('composer-input-' + id).inputValue(), 'My unsent draft survives a move');
+    console.log('Imported read-only history: sidebar drag into a pane, displaced tab retained, close restored the chat.');
+    console.log('Local keyboard workspace: new chat from welcome, edit and resend, native sidebar drag into right pane, then tab drag to swap panes.');
     assert.deepEqual(errors, []);
     console.log('Chromium: stable thought typography and paragraph gaps ' + settled.map(p => p[7]).join('/') +
       'px; 3 viewport sizes, both message roles, image tray and zoom, previous-message editing, highlights, reload and combined send passed.');

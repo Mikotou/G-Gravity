@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/renderer/App';
 import { CoreService } from '../src/main/core-service';
@@ -22,16 +22,18 @@ describe('App → 真正 CoreService → ACP 桩子进程', () => {
     const spawnSpy = vi.fn((_binary, _args, options) => spawn(fixture.executable, fixture.args, options));
     core = new CoreService({ dataDir, acpOptions: { spawn: spawnSpy } });
     const sessions = await Promise.all(Array.from({ length: count }, (_, n) => core!.createSession({ cwd: `F:\\UI联调${n}`, title: `测试${n}` })));
-    await core.saveWorkspaceLayout({ openTabSessionIds: sessions.map((session) => session.sessionId), activePrimarySessionId: sessions[0].sessionId, layoutMode: count === 4 ? 'grid-4' : 'single' });
+    await core.saveWorkspaceLayout({ openTabSessionIds: sessions.map((session) => session.sessionId), activePrimarySessionId: sessions[0].sessionId, layoutMode: count > 1 ? 'split-2' : 'single' });
     window.agyDesktop = createCoreBridge(core);
     render(<App />); await screen.findByTestId('agy-app-root');
     return { core, sessions, spawnSpy };
   }
-  it('四窗格实际内核并行流、蜂群事件、消息隔离，只有一个 ACP 主进程', async () => {
+  it('四个标签与双栏实际内核并行流、蜂群事件、消息隔离，只有一个 ACP 主进程', async () => {
     const { core, sessions, spawnSpy } = await setup(4);
-    expect(screen.getByTestId('workspace-grid').children).toHaveLength(4);
+    expect(screen.getByTestId('workspace-grid').children).toHaveLength(2);
     await act(async () => { await Promise.all(sessions.map((session) => core.sendPrompt({ sessionId: session.sessionId, text: '[swarm]' }))); });
     for (const session of sessions) {
+      fireEvent.click(screen.getByTestId('tab-item-' + session.sessionId));
+      await screen.findByTestId('session-pane-' + session.sessionId);
       const pane = screen.getByTestId(`session-pane-${session.sessionId}`);
       expect(pane.textContent).toContain(`完成:${session.sessionId}`);
       for (const other of sessions.filter((item) => item.sessionId !== session.sessionId)) expect(pane.textContent).not.toContain(`完成:${other.sessionId}`);
@@ -39,6 +41,87 @@ describe('App → 真正 CoreService → ACP 桩子进程', () => {
     }
     expect(spawnSpy).toHaveBeenCalledTimes(1);
   });
+  it('拖动侧栏和标签可以指定左右栏，换出的会话继续生成', async () => {
+    const { core, sessions } = await setup(3);
+    const [a, b, c] = sessions.map(s => s.sessionId);
+    let run!: Promise<void>;
+    const started = new Promise<void>(resolve => {
+      function onThought(event: { sessionId: string; message: { role: string } }) {
+        if (event.sessionId === b && event.message.role === 'assistant') {
+          core.off('message-upserted', onThought);
+          resolve();
+        }
+      }
+      core.on('message-upserted', onThought);
+    });
+    await act(async () => { run = core.sendPrompt({ sessionId: b, text: '[stream-during-drag]' }); await started; });
+    const drag = async (source: string, slot: number, id: string) => {
+      const store = new Map<string, string>();
+      const dataTransfer = { get types() { return [...store.keys()]; }, setData(key: string, v: string) { store.set(key, v); },
+        getData(key: string) { return store.get(key) || ''; }, files: [] };
+      const target = screen.getByTestId('workspace-slot-' + slot);
+      fireEvent.dragStart(screen.getByTestId(source), { dataTransfer });
+      fireEvent.dragOver(target, { dataTransfer });
+      fireEvent.drop(target, { dataTransfer });
+      await within(target).findByTestId('session-pane-' + id);
+    };
+    await drag('sidebar-session-' + c, 1, c);
+    expect(within(screen.getByTestId('workspace-slot-0')).getByTestId('session-pane-' + a)).toBeTruthy();
+    expect(screen.getByTestId('tab-item-' + b)).toBeTruthy();
+    expect(core.sessions.isBusy(b)).toBe(true);
+    await act(async () => { await run; });
+    expect(core.sessions.get(b).status).toBe('idle');
+    expect(screen.queryByTestId('session-pane-' + b)).toBeNull();
+    await drag('tab-item-' + b, 0, b);
+    expect(within(screen.getByTestId('workspace-slot-1')).getByTestId('session-pane-' + c)).toBeTruthy();
+    expect(screen.getByTestId('session-pane-' + b).textContent).toContain('完成:' + b);
+    await drag('tab-item-' + c, 0, c);
+    expect(within(screen.getByTestId('workspace-slot-1')).getByTestId('session-pane-' + b)).toBeTruthy();
+    expect((await core.getBootstrap()).layout.openTabSessionIds).toEqual([a, b, c]);
+  });
+
+  it.each(['[question]', '[closed choice]'])('模型通过表单收到用户改过的选项 %s', async marker => {
+    const { core, sessions } = await setup();
+    const sessionId = sessions[0].sessionId;
+    const request = vi.spyOn(core.client, 'request');
+    let run!: Promise<void>;
+    await act(async () => { run = core.sendPrompt({ sessionId, text: marker }); });
+    const form = await screen.findByTestId('question-bar');
+    expect(screen.queryByTestId('inline-request-view')).toBeNull();
+    fireEvent.click(within(form).getByRole('button', { name: '青绿' }));
+    fireEvent.change(within(form).getByRole('textbox', { name: '修改选项 青绿' }), { target: { value: '海玻璃绿' } });
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: '发送回答' })); await run; });
+    expect(screen.queryByTestId('question-bar')).toBeNull();
+    const saved = await core.getSessionMessages(sessionId);
+    expect(saved.find(m => m.question)?.question).toMatchObject({ state: 'answered', answer: expect.stringContaining('海玻璃绿') });
+    if (marker === '[question]') {
+      expect(saved.find(m => m.content.includes('"action":"accept"'))?.content).toContain('"freeform_response":"颜色 · 海玻璃绿"');
+    } else {
+      expect(saved.some(m => m.role === 'assistant' && m.content.includes('"action":"decline"'))).toBe(true);
+      expect(request.mock.calls.filter(([method]) => method === 'session/prompt').at(-1)?.[1]).toMatchObject({ prompt: expect.arrayContaining([{ type: 'text', text: '海玻璃绿' }]) });
+    }
+  });
+
+  it('只在模型消息中组合批注，原对话和修改后的分支都呈现干净的原文与评论', async () => {
+    const { core, sessions } = await setup();
+    const sessionId = sessions[0].sessionId;
+    const annotations = [{ excerpt: 'La', comment: '这是什么意思？', messageNumber: 7 }];
+    const spy = vi.spyOn(core.client, 'request');
+    await act(async () => { await core.sendPrompt({ sessionId, text: '', annotations }); });
+    const sent = (await core.getSessionMessages(sessionId)).find(m => m.role === 'user')!;
+    expect(sent).toMatchObject({ content: '', annotations });
+    expect(screen.getByTestId('session-pane-' + sessionId).textContent).not.toContain('User-selected passages');
+    expect(screen.getByText('这是什么意思？')).toBeTruthy();
+    const wire = spy.mock.calls.find(([method]) => method === 'session/prompt')?.[1];
+    expect(JSON.stringify(wire)).toContain('User-selected passages');
+    expect(JSON.stringify(wire)).toContain('这是什么意思？');
+    const revised = [{ ...annotations[0], comment: '请解释这个词' }];
+    const branch = await core.reviseMessage({ sessionId, messageId: sent.id, text: '法语', annotations: revised });
+    await waitFor(async () => expect((await core.getSessionMessages(branch.sessionId)).some(m => m.annotations?.[0].comment === '请解释这个词')).toBe(true));
+    await waitFor(async () => expect((await core.getSessionMessages(branch.sessionId)).some(m => m.role === 'assistant' && !m.isStreaming)).toBe(true));
+    expect((await core.getSessionMessages(sessionId)).find(m => m.id === sent.id)?.annotations).toEqual(annotations);
+  });
+
   it('真实权限挂起经 Request View 允许一次返回 ACP，并呈现审计', async () => {
     const { core, sessions, spawnSpy } = await setup(); const sessionId = sessions[0].sessionId;
     const requested = once(core, 'approval-requested'); let run!: Promise<void>;

@@ -11,6 +11,7 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
   const zh = useI18n().locale === 'zh-CN';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  const [annotations, setAnnotations] = useState(message.annotations || []);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
@@ -20,6 +21,7 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
   const seenRequest = useRef(editRequest);
   function start() {
     setDraft(message.content);
+    setAnnotations(message.annotations || []);
     setAttachments((message.attachments || []).filter(canResendAttachment).map(a => a.id));
     setError('');
     setEditing(true);
@@ -36,9 +38,9 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
     setEditing(false); requestAnimationFrame(() => button.current?.focus());
   }
   async function send() {
-    if (busy || lock.current || (!draft.trim() && !attachments.length)) return;
+    if (busy || lock.current || (!draft.trim() && !attachments.length && !annotations.length)) return;
     lock.current = true; setPending(true); setError('');
-    try { await submit({ sessionId: message.sessionId, messageId: message.id, text: draft, attachmentIds: attachments }); setEditing(false); }
+    try { await submit({ sessionId: message.sessionId, messageId: message.id, text: draft, attachmentIds: attachments, ...(annotations.length ? { annotations } : {}) }); setEditing(false); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { lock.current = false; setPending(false); }
   }
@@ -53,6 +55,12 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void send(); }
       }} />
+    {annotations.map((item, index) => <div className="sent-annotation" key={index}>
+      <blockquote>{item.excerpt}</blockquote>
+      {item.comment !== undefined && <textarea aria-label={(zh ? '编辑批注 ' : 'Edit annotation ') + (index + 1)}
+        disabled={pending} value={item.comment} onChange={e => setAnnotations(annotations.map((a, i) =>
+          i === index ? { ...a, comment: e.target.value } : a))} />}
+    </div>)}
     {message.attachments?.map(a => <label key={a.id}><input type="checkbox" checked={attachments.includes(a.id)}
       disabled={pending || !canResendAttachment(a)} onChange={e => setAttachments(e.target.checked ? [...attachments, a.id] : attachments.filter(id => id !== a.id))} />
       {a.name}{!canResendAttachment(a) && (zh ? '（原文件不可用）' : ' (original unavailable)')}</label>)}
@@ -60,7 +68,7 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
     {error && <div role="alert">{error}</div>}
     <div className="message-editor-actions">
       <button className="btn btn-sm" type="button" onClick={cancel} disabled={pending}>{zh ? '取消' : 'Cancel'}</button>
-      <button className="btn btn-primary btn-sm" type="submit" disabled={busy || pending || (!draft.trim() && !attachments.length)}>{zh ? '重新发送' : 'Resend'}</button>
+      <button className="btn btn-primary btn-sm" type="submit" disabled={busy || pending || (!draft.trim() && !attachments.length && !annotations.length)}>{zh ? '重新发送' : 'Resend'}</button>
     </div>
   </form>;
 }

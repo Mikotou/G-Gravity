@@ -29,9 +29,9 @@ async function seedRecordedSession(profile, cwd) {
     profileId: 'default', modelId: '', executionMode: 'default', reasoningEffort: 'high', status: 'closed', pinned: false, isLegacyApprovalPollution: false } });
   await save('layout.json', { openTabSessionIds: [], activePrimarySessionId: null, activeInspectorTab: 'plan' });
   await save('messages-default.json', { [recordedId]: [
-    { id: 'qa-user', sessionId: recordedId, role: 'user', content: '显示本地图片', createdAt: date },
+    { id: 'qa-user', sessionId: recordedId, role: 'user', content: '【逐处标记批注 (Notations)】\n1. 针对原文「示意图」：显示本地图片（第 7 条消息）\n\n请严格结合以上逐处标记位置与批注说明进行修改或解答。', createdAt: date },
     { id: 'qa-agent', sessionId: recordedId, role: 'assistant', createdAt: date, completedAt: date,
-      content: '![本地图片](<./本地 示意图.png>)',
+      content: '配图见 ![本地图片](<./本地 示意图.png>)。\n\n这是正文的最后一段。',
       thoughts: [{ id: 'qa-thought', originalText: 'The image is ready.', translatedZhText: '图片准备好了。', translationSource: 'local-model', languageDetected: 'en', isStreaming: false }],
       toolCalls: [card('qa-read', 'Read', 'sample.txt'), card('qa-command', 'Bash', longCommand)] },
   ] });
@@ -78,6 +78,14 @@ async function checkRecordedSession(page, firstLaunch) {
   assert.equal(await group.evaluate(el => el.open), false);
   await group.locator('summary').click();
   assert.equal(await group.locator('.tool-group-body > .cc-tool').count(), 2);
+  const userMessage = page.getByTestId('user-msg-qa-user');
+  assert.equal(await userMessage.locator('.sent-annotation blockquote').textContent(), '示意图');
+  assert.equal(await userMessage.locator('.sent-annotation p').textContent(), '显示本地图片');
+  assert.doesNotMatch(await userMessage.textContent(), /Notations|请严格结合|针对原文/);
+  const markdown = page.locator('.md').filter({ has: page.locator('img[alt="本地图片"]') });
+  assert.ok((await markdown.locator('p').first().textContent()).includes('./本地 示意图.png'));
+  assert.equal(await markdown.locator('p img').count(), 0);
+  assert.equal(await markdown.locator('[data-testid="message-previews"]').evaluate(el => el.previousElementSibling.textContent), '这是正文的最后一段。');
   const image = page.getByRole('button', { name: '本地图片' });
   await image.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector('img[alt="本地图片"]')?.naturalWidth > 0);
@@ -147,6 +155,27 @@ async function exerciseLiveChat(page, cwd) {
   if (process.env.GRAVITY_DESKTOP_LIVE === 'quota') return;
   let step = 'sending the first user message';
   try {
+    if (process.env.GRAVITY_DESKTOP_LIVE === 'question') {
+      step = 'asking the model to present two color choices';
+      await typeInField(composer, 'Use your native ask_question tool to ask me which accent color I prefer. Offer Teal and Amber as two choices. Wait for my answer, then repeat my chosen color in a short sentence. No files or commands.');
+      await composer.press('Enter');
+      const form = page.getByTestId('question-bar');
+      await form.waitFor({ timeout: 70000 });
+      const native = await page.evaluate(async id => (await window.gravityDesktop.getSessionMessages(id)).some(m => m.question?.state === 'open'), sessionId);
+      step = 'editing and submitting a color choice';
+      const choice = form.getByRole('button', { name: /teal|青绿/i }).first();
+      await choice.press('Enter');
+      await typeInField(form.getByRole('textbox', { name: /修改选项|Edit option/i }).first(), 'Sea glass green');
+      await form.getByRole('button', { name: '发送回答' }).press('Enter');
+      await form.waitFor({ state: 'detached' });
+      step = 'confirming the model received the edited color';
+      await page.waitForFunction(async id => (await window.gravityDesktop.getSessionMessages(id))
+        .some(m => m.role === 'assistant' && !m.isStreaming && /sea glass green/i.test(m.content)), sessionId, { timeout: 85000 });
+      await checkLiveQuota(page);
+      console.log('Official model answered the edited choice Sea glass green; question source = ' + (native ? 'native form' : 'chat options'));
+      await page.evaluate(id => window.gravityDesktop.closeSession(id), sessionId);
+      return;
+    }
     await typeInField(composer, 'Reply only with GRAVITY_OK. No tools are needed.');
     await composer.press('Enter');
     step = 'waiting for the official reply in the chat window';
@@ -188,13 +217,13 @@ async function exerciseLiveChat(page, cwd) {
     console.log('Portable live chat — created from the UI, original and revised prompts answered, local branch has no translation member');
   } catch (error) {
     if (!page.isClosed()) {
-      const diagnostic = await page.evaluate(async () => {
+      const diagnostic = await page.evaluate(async id => {
         const { sessions, layout } = await window.gravityDesktop.getBootstrap();
-        const testSessions = sessions.filter(s => s.title.startsWith('Gravity Windows QA'));
+        const testSessions = sessions.filter(s => s.sessionId === id);
         return { tabs: layout.openTabSessionIds, alert: document.querySelector('.message-editor [role="alert"]')?.textContent,
           sessions: await Promise.all(testSessions.map(async s => ({ id: s.sessionId, status: s.status, model: s.modelId,
-            messages: (await window.gravityDesktop.getSessionMessages(s.sessionId)).map(m => ({ role: m.role, streaming: m.isStreaming, failed: m.sendFailed, text: m.content.slice(0, 180) })) }))) };
-      }).catch(() => undefined);
+            messages: (await window.gravityDesktop.getSessionMessages(s.sessionId)).map(m => ({ role: m.role, streaming: m.isStreaming, failed: m.sendFailed, text: m.content.slice(0, 400), question: m.question, tools: m.toolCalls?.map(t => t.canonicalToolName) })) }))) };
+      }, sessionId).catch(() => undefined);
       console.error('Disposable QA conversation state: ' + JSON.stringify(diagnostic));
       await page.evaluate(id => window.gravityDesktop.closeSession(id), sessionId).catch(() => {});
     }
@@ -269,7 +298,7 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace) {
         hasText: /\b(?:403|429)\b|rate.?limit|too many requests|captcha|verification required|限流|安全验证|人机验证|请求过于频繁/i,
       }).first();
       await Promise.race([
-        (async () => { await exerciseLiveChat(page, liveWorkspace); await checkLiveQuota(page); })(),
+        (async () => { await exerciseLiveChat(page, liveWorkspace); if (process.env.GRAVITY_DESKTOP_LIVE !== 'question') await checkLiveQuota(page); })(),
         notice.waitFor({ timeout: 0 }).then(() => { throw new Error('Official service requested verification or reported a rate limit. Live checks stopped.'); }),
       ]);
     }

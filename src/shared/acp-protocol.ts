@@ -105,6 +105,7 @@ export const REASONING_EFFORT_ORDER: readonly AgentReasoningEffort[] = [
 ] as const;
 
 export interface AcpClientCapabilities {
+  elicitation?: { form: Record<string, never> };
   fs?: {
     readTextFile?: boolean;
     writeTextFile?: boolean;

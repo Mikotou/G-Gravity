@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import type { MessageAttachmentPreview } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 
 export const ImageWorkspace = createContext('');
@@ -56,10 +55,4 @@ export function MessageImage({ source, alt, title }: { source: string; alt: stri
       <img src={url} alt={alt} />
     </dialog>, document.body)}
   </>;
-}
-export function AttachmentImages({ items }: { items?: MessageAttachmentPreview[] }) {
-  const images = items?.filter(item => item.mimeType.startsWith('image/') && (item.dataUrl || item.uri));
-  if (!images?.length) return null;
-  return <div className="message-images">{images.map(item =>
-    <MessageImage key={item.id} source={(item.dataUrl || item.uri)!} alt={item.name} />)}</div>;
 }

@@ -33,6 +33,32 @@ describe('Gravity v0.2 真内核与标准ACP桩整合', () => {
       expect(layout).toMatchObject({ leftSidebarCollapsed: true, rightInspectorWidth: 420, activeInspectorTab: 'context' });
     } finally { await cleanup(); }
   });
+  it('四格布局升级为双栏并保留全部标签', async () => {
+    const { core, cleanup } = setup([], { layoutMode: 'grid-4', openTabSessionIds: ['a', 'b'], activePrimarySessionId: 'a',
+      splitSecondarySessionId: 'b', tertiarySessionId: 'c', quaternarySessionId: 'd' });
+    try {
+      const updated = await core.saveWorkspaceLayout({});
+      expect(updated.layoutMode).toBe('split-2');
+      expect(updated.openTabSessionIds).toEqual(['a', 'b', 'c', 'd']);
+      expect(updated).not.toHaveProperty('tertiarySessionId');
+    } finally { await cleanup(); }
+  });
+  it('无本地副本时合并回放分片，前端全程只收到用户批注', async () => {
+    const { core, cleanup } = setup();
+    try {
+      const { sessionId } = await core.createSession({ cwd: 'F:\\回放测试' });
+      vi.spyOn(core.sessions, 'isResuming').mockReturnValue(true);
+      const events: string[] = [];
+      core.on('message-upserted', ({ message }) => { if (message.role === 'user') events.push(message.content); });
+      const chunk = (sessionUpdate: string, text: string) => core.sessions.emit('update', { sessionId, update: { sessionUpdate, content: { type: 'text', text } } });
+      chunk('user_message_chunk', 'User-selected passages and comments:\n{"message":"","annotations":[');
+      chunk('user_message_chunk', '{"excerpt":"La","comment":"这个词是什么意思？"}]}');
+      expect(events).toEqual([]);
+      chunk('agent_message_chunk', '这是一个定冠词。');
+      expect(events).toEqual(['']);
+      expect((await core.getSessionMessages(sessionId))[0].annotations?.[0].comment).toBe('这个词是什么意思？');
+    } finally { await cleanup(); }
+  });
   it('重新打开旧额度页时保留侧栏尺寸并进入上下文页', async () => {
     const { core, cleanup } = setup([], { activeInspectorTab: 'quota', rightInspectorWidth: 405 });
     try {

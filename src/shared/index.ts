@@ -12,3 +12,5 @@ export * from './theme-i18n-contract';
 export * from './plugins-contract';
 export * from './accounts-history-contract';
 export * from './ipc-channels';
+
+export * from './user-question';

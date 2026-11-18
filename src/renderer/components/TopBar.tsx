@@ -1,16 +1,17 @@
 import React from 'react';
-import { Columns2, Grid2x2, PanelLeftOpen, PanelRight, Plus, ShieldAlert, Square, X } from 'lucide-react';
+import { Columns2, PanelLeftOpen, PanelRight, Plus, ShieldAlert, Square, X } from 'lucide-react';
 import {
-  MAX_PARALLEL_ACTIVE_SESSIONS,
   type ManagedSessionSummary,
   type PendingApprovalRequest,
   type WorkspaceLayoutState,
   type WorkspaceSplitMode,
 } from '@shared';
+import { startSessionDrag } from '../lib/session-drag';
 import { useI18n } from '../i18n/I18nContext';
 
+type TabSession = Pick<ManagedSessionSummary, 'sessionId' | 'title' | 'cwd' | 'status' | 'readOnly'>;
 export interface TopBarProps {
-  sessions: ManagedSessionSummary[];
+  sessions: TabSession[];
   layout: WorkspaceLayoutState;
   focusedSessionId: string | null;
   pendingApprovals: PendingApprovalRequest[];
@@ -25,7 +26,6 @@ export interface TopBarProps {
 const LAYOUTS: ReadonlyArray<{ mode: WorkspaceSplitMode; Icon: typeof Square }> = [
   { mode: 'single', Icon: Square },
   { mode: 'split-2', Icon: Columns2 },
-  { mode: 'grid-4', Icon: Grid2x2 },
 ];
 
 /** 主区顶部：已打开会话标签 + 布局切换 + Inspector 开关 */
@@ -44,13 +44,11 @@ export function TopBar({
   const { dict } = useI18n();
   // 按已保存的标签 ID 顺序重建标签栏。过滤已关闭或缺少摘要的 ID，避免在恢复阶段展示不可用的标签。
   const openTabs = layout.openTabSessionIds
-    .slice(0, MAX_PARALLEL_ACTIVE_SESSIONS)
     .map((id) => sessions.find((s) => s.sessionId === id && (s.status !== 'closed' || s.readOnly)))
-    .filter((s): s is ManagedSessionSummary => Boolean(s));
+    .filter((s): s is TabSession => Boolean(s));
   const layoutLabels: Record<WorkspaceSplitMode, string> = {
     single: dict.layoutSingle,
     'split-2': dict.layoutSplit2,
-    'grid-4': dict.layoutGrid4,
   };
 
   return (
@@ -81,6 +79,7 @@ export function TopBar({
               key={tab.sessionId}
               className={`tab ${active ? 'is-active' : ''}`}
               data-tab-state={tabState}
+              draggable onDragStart={e => startSessionDrag(e.dataTransfer, tab.sessionId)}
               onClick={() => onSelectTab(tab.sessionId)}
               onAuxClick={(e) => {
                 if (e.button === 1) onCloseTab(tab.sessionId);

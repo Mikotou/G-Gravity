@@ -322,7 +322,7 @@ describe('v0.5 六项核心增强验收测试', () => {
     });
 
     // 右击 .exe 可执行文件超链接 -> 仅提供在文件管理器中定位，避免误执行二进制
-    const exeLink = screen.getByText('Gravity.exe').closest('a')!;
+    const exeLink = screen.getByTestId('session-pane-sess-annot').querySelector<HTMLAnchorElement>('p a[href$="/Gravity.exe"]')!;
     fireEvent.contextMenu(exeLink, { clientX: 220, clientY: 180 });
     expect(screen.queryByTestId('ctx-open-default-app')).toBeNull();
     fireEvent.click(screen.getByTestId('ctx-reveal-folder'));
@@ -349,13 +349,15 @@ describe('v0.5 六项核心增强验收测试', () => {
     // 重试时完整发送同一组引用和批注。
     fireEvent.click(screen.getByTestId('send-prompt-btn-sess-annot'));
     await waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(2));
-    const sentText = sendPromptMock.mock.calls[1][0].text as string;
+    const sent = sendPromptMock.mock.calls[1][0];
     await waitFor(() => expect(screen.queryAllByTestId(/^composer-notation-/)).toHaveLength(0));
-    expect(sentText).toContain('> 第一处关键逻辑负责权限快筛');
-    expect(sentText).toContain('【逐处标记批注 (Notations)】');
-    expect(sentText).toContain('1. 针对原文「检查本地文件 src/main/core-service.ts」：请补充空路径异常校验');
-    expect(sentText).toContain('2. 针对原文「第二处关键逻辑负责压缩窗口读取」：缓存命中后避免重复读取 SQLite');
-    expect(sentText.match(/发送途中新增的批注/g)).toHaveLength(1);
+    expect(sent.text).toBe('');
+    expect(sent.annotations).toEqual([
+      expect.objectContaining({ excerpt: '第一处关键逻辑负责权限快筛' }),
+      expect.objectContaining({ excerpt: '检查本地文件 src/main/core-service.ts', comment: '请补充空路径异常校验' }),
+      expect.objectContaining({ excerpt: '第二处关键逻辑负责压缩窗口读取', comment: '缓存命中后避免重复读取 SQLite' }),
+      expect.objectContaining({ comment: '发送途中新增的批注' }),
+    ]);
   });
 
   it('4) AI 代审转交人工审理时清晰解析并展示代码与命令的明确用意', async () => {

@@ -5,7 +5,7 @@ import {
   DEFAULT_MODEL_RATE_CARDS,
   EXECUTION_MODE_ORDER,
   GRAVITY_BUILTIN_CAPABILITIES,
-  MAX_PARALLEL_ACTIVE_SESSIONS,
+  MAX_PARALLEL_ACTIVE_SESSIONS, placeSession, workspaceSlots, withoutSession,
   type AccountsStateSnapshot,
   type AcpConnectionStatus,
   type AgentExecutionMode,
@@ -18,7 +18,6 @@ import {
   type ClientLocale,
   type ClientPreferences,
   type GravityIconId,
-  type ImportedHistoryDetail,
   type ImportedHistorySessionRecord,
   type ManagedSessionSummary,
   type McpActionInput,
@@ -37,10 +36,11 @@ import {
   type WorkspaceSplitMode,
 } from '@shared';
 import { NewSessionModal } from './components/NewSessionModal';
+import { ComposerDrafts } from './lib/composer-draft';
 import { clearAnnotationDraft } from './lib/annotation-drafts';
 import type { SessionAction } from '../shared/session-contract';
 import { ProjectSidebar } from './components/ProjectSidebar';
-import { ReadOnlyHistoryView } from './components/ReadOnlyHistoryView';
+import { ImportedHistoryPane } from './components/ReadOnlyHistoryView';
 import { RightInspector } from './components/RightInspector';
 import { SessionWorkspaceGrid } from './components/SessionWorkspaceGrid';
 import { SettingsView, type SettingsSection } from './components/SettingsView';
@@ -56,7 +56,7 @@ import {
   subscribeSystemThemeChange,
 } from './styles/theme';
 
-const SPLIT_CYCLE: readonly WorkspaceSplitMode[] = ['single', 'split-2', 'grid-4'];
+const SPLIT_CYCLE: readonly WorkspaceSplitMode[] = ['single', 'split-2'];
 
 const ZERO_COST: TokenCostSummary = {
   inputTokens: 0,
@@ -142,15 +142,17 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       timeoutMs: 2500,
     },
   });
+  const [composerDrafts] = useState(() => new Map() as NonNullable<React.ContextType<typeof ComposerDrafts>>);
   const [sessions, setSessions] = useState<ManagedSessionSummary[]>([]);
   const [importedHistory, setImportedHistory] = useState<ImportedHistorySessionRecord[]>([]);
-  const [activeHistoryDetail, setActiveHistoryDetail] = useState<ImportedHistoryDetail | null>(null);
+  const historyIds = useMemo(() => importedHistory.map(h => h.sessionId), [importedHistory]);
+  const tabSessions = useMemo(() => [...sessions.filter(s => !s.archivedAt),
+    ...importedHistory.map(({ sessionId, title, cwd, readOnly }) => ({ sessionId, title, cwd, readOnly, status: 'closed' as const }))],
+    [sessions, importedHistory]);
   const [layout, setLayout] = useState<WorkspaceLayoutState>({
     openTabSessionIds: [],
     activePrimarySessionId: null,
     splitSecondarySessionId: null,
-    tertiarySessionId: null,
-    quaternarySessionId: null,
     layoutMode: 'single',
     hideLegacyPollutionSessions: true,
     leftSidebarCollapsed: false,
@@ -215,10 +217,8 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
         // 恢复上次打开的标签前，先与本次取得的会话列表取交集。
         // 单个关闭会话恢复失败时保留摘要，继续处理其他标签。
-        const openSet = new Set(boot.layout.openTabSessionIds);
-        const tabCandidates = boot.sessions
-          .filter((s) => !s.archivedAt && !s.isLegacyApprovalPollution && openSet.has(s.sessionId))
-          .slice(0, MAX_PARALLEL_ACTIVE_SESSIONS);
+        const tabCandidates = boot.layout.openTabSessionIds.map(id => boot.sessions.find(s => s.sessionId === id))
+          .filter((s): s is ManagedSessionSummary => Boolean(s && !s.archivedAt && !s.isLegacyApprovalPollution));
 
         const resumedMap = new Map<string, ManagedSessionSummary>();
         for (const cand of tabCandidates) {
@@ -236,7 +236,8 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
         const mergedSessions = boot.sessions.map((s) => resumedMap.get(s.sessionId) ?? s);
         const openSessions = tabCandidates.map((s) => resumedMap.get(s.sessionId) ?? s);
-        const validOpenIds = openSessions.map((s) => s.sessionId);
+        const validOpenIds = boot.layout.openTabSessionIds.filter(id => resumedMap.has(id) ||
+          boot.importedHistory?.some(h => h.sessionId === id));
         const primaryId =
           boot.layout.activePrimarySessionId && validOpenIds.includes(boot.layout.activePrimarySessionId)
             ? boot.layout.activePrimarySessionId
@@ -405,30 +406,35 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     [reportError]
   );
 
-  const openSessionInWorkspace = useCallback(
-    async (sessionId: string) => {
-      const bridge = getDesktopBridge();
-      let tabs = [...layout.openTabSessionIds];
-      // 打开已有标签仅切换焦点。加入新标签时遵守上限，已满则替换首个标签并提示用户。
-      if (!tabs.includes(sessionId)) {
-        if (tabs.length < MAX_PARALLEL_ACTIVE_SESSIONS) tabs.push(sessionId);
-        else {
-          tabs = [sessionId, ...tabs.slice(1, MAX_PARALLEL_ACTIVE_SESSIONS)];
-          showToast(UI_DICTIONARIES[preferences.locale].maxParallelReached);
-        }
-      }
-      setLayout(await bridge.saveWorkspaceLayout({ openTabSessionIds: tabs, activePrimarySessionId: sessionId }));
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const profileRef = useRef(preferences.activeProfileId);
+  profileRef.current = preferences.activeProfileId;
+  const placementQueue = useRef(Promise.resolve());
+  const openSessionInWorkspace = useCallback((sessionId: string, slotIndex?: number) => {
+    const profile = preferences.activeProfileId;
+    const apply = async () => {
+      if (profile !== profileRef.current) return;
+      const current = layoutRef.current;
+      const visible = workspaceSlots(current);
+      const target = slotIndex ?? (visible.includes(sessionId) ? visible.indexOf(sessionId) : Math.max(0, visible.indexOf(focusedSessionId)));
+      const next = await getDesktopBridge().saveWorkspaceLayout(placeSession(current, target, sessionId));
+      if (profile !== profileRef.current) return;
+      layoutRef.current = next;
+      setLayout(next);
       setFocusedSessionId(sessionId);
-    },
-    [layout.openTabSessionIds, preferences.locale, showToast]
-  );
+    };
+    const result = placementQueue.current.then(apply);
+    placementQueue.current = result.catch(() => {});
+    return result;
+  }, [focusedSessionId, preferences.activeProfileId]);
 
   const handleActivateSession = useCallback(
     async (session: ManagedSessionSummary) => {
       if (session.isLegacyApprovalPollution) return;
       try {
         const bridge = getDesktopBridge();
-        setActiveHistoryDetail(null);
+
         replaceSession(await bridge.resumeSession(session.sessionId, session.cwd));
         void bridge.getConnectionStatus().then(setConnection).catch(() => {});
         void bridge.getAccountsState().then(setAccounts).catch(() => {});
@@ -441,34 +447,18 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     [loadSessionData, openSessionInWorkspace, replaceSession, reportError]
   );
 
-  const handleSelectHistory = useCallback(
-    async (rec: ImportedHistorySessionRecord) => {
-      try {
-        setActiveHistoryDetail(await getDesktopBridge().getImportedHistoryDetail(rec.sessionId));
-      } catch (err) {
-        reportError(err);
-      }
-    },
-    [reportError]
-  );
-
   const handleContinueHistory = useCallback(
-    async (importedSessionId: string, cwd: string) => {
+    async (importedSessionId: string, cwd: string, slot?: number) => {
       const created = await getDesktopBridge().continueHistoryInGravity({
         importedSessionId,
         targetCwd: cwd || undefined,
       });
-      setActiveHistoryDetail(null);
+
       replaceSession(created);
       await loadSessionData(created.sessionId);
-      const tabs = [created.sessionId, ...layout.openTabSessionIds.filter((id) => id !== created.sessionId)].slice(
-        0,
-        MAX_PARALLEL_ACTIVE_SESSIONS
-      );
-      setLayout(await getDesktopBridge().saveWorkspaceLayout({ openTabSessionIds: tabs, activePrimarySessionId: created.sessionId }));
-      setFocusedSessionId(created.sessionId);
+      await openSessionInWorkspace(created.sessionId, slot);
     },
-    [layout.openTabSessionIds, loadSessionData, replaceSession]
+    [openSessionInWorkspace, loadSessionData, replaceSession]
   );
 
   const handleRefreshHistory = useCallback(async () => {
@@ -481,18 +471,16 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
   const handleSelectTab = useCallback(
     async (sessionId: string) => {
-      setActiveHistoryDetail(null);
-      const slots = [layout.activePrimarySessionId, layout.splitSecondarySessionId, layout.tertiarySessionId, layout.quaternarySessionId];
-      const visibleCount = layout.layoutMode === 'grid-4' ? 4 : layout.layoutMode === 'split-2' ? 2 : 1;
-      // 已在可见窗格中的标签只切换焦点，不重排布局
-      if (slots.slice(0, visibleCount).includes(sessionId) && layout.layoutMode !== 'single') {
+
+      if (workspaceSlots(layout).includes(sessionId)) {
         setFocusedSessionId(sessionId);
         return;
       }
       const target = sessions.find((s) => s.sessionId === sessionId);
-      if (target) await handleActivateSession(target);
+      if (target && target.status === 'closed' && !target.readOnly) await handleActivateSession(target);
+      else if (target || importedHistory.some(h => h.sessionId === sessionId)) await openSessionInWorkspace(sessionId).catch(reportError);
     },
-    [handleActivateSession, layout, sessions]
+    [handleActivateSession, importedHistory, openSessionInWorkspace, layout, sessions, reportError]
   );
 
   const handleCloseTab = useCallback(
@@ -500,16 +488,17 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       try {
         const bridge = getDesktopBridge();
         // 先让主进程关闭会话，再保存剩余标签。如果关掉主标签，还要从余下标签中选出新的主会话。
-        await bridge.closeSession(sessionId);
-        const remaining = layout.openTabSessionIds.filter((id) => id !== sessionId);
-        const nextPrimary = layout.activePrimarySessionId === sessionId ? remaining[0] ?? null : layout.activePrimarySessionId;
-        setLayout(await bridge.saveWorkspaceLayout({ openTabSessionIds: remaining, activePrimarySessionId: nextPrimary }));
-        if (focusedSessionId === sessionId) setFocusedSessionId(nextPrimary);
+        if (!sessionId.startsWith('ag-history:')) await bridge.closeSession(sessionId);
+        composerDrafts.delete(sessionId);
+        const next = await bridge.saveWorkspaceLayout(withoutSession(layoutRef.current, sessionId));
+        layoutRef.current = next;
+        setLayout(next);
+        if (focusedSessionId === sessionId) setFocusedSessionId(next.activePrimarySessionId);
       } catch (err) {
         reportError(err);
       }
     },
-    [focusedSessionId, layout.activePrimarySessionId, layout.openTabSessionIds, reportError]
+    [composerDrafts, focusedSessionId, layout.activePrimarySessionId, layout.openTabSessionIds, reportError]
   );
 
   const handleManageSession = async (id: string, action: SessionAction) => {
@@ -518,6 +507,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     setLayout(result.layout);
     if (action !== 'restore' && focusedSessionId === id) setFocusedSessionId(result.layout.activePrimarySessionId);
     if (action === 'delete') {
+      composerDrafts.delete(id);
       clearAnnotationDraft(accounts.activeProfileId, id);
       try { localStorage.removeItem('gravity.terminal.read.' + accounts.activeProfileId + '.' + id); } catch { /* optional storage */ }
       setMessagesBySession(prev => { const next = { ...prev }; delete next[id]; return next; });
@@ -531,44 +521,38 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       try {
         const bridge = getDesktopBridge();
         const target = sessions.find((s) => s.sessionId === sessionId);
-        if (target && (target.status === 'closed' || !layout.openTabSessionIds.includes(sessionId))) {
+        if (importedHistory.some(h => h.sessionId === sessionId)) {
+          await openSessionInWorkspace(sessionId, slotIndex);
+          return;
+        }
+        if (!target || target.archivedAt || target.isLegacyApprovalPollution || target.profileId !== preferences.activeProfileId) return;
+
+        if (target.status === 'closed') {
           replaceSession(await bridge.resumeSession(sessionId, target.cwd));
+          await loadSessionData(sessionId);
+        } else if (!layoutRef.current.openTabSessionIds.includes(sessionId)) {
+          await loadSessionData(sessionId);
         }
-        await loadSessionData(sessionId);
-        const patch: Partial<WorkspaceLayoutState> = {};
-        if (slotIndex === 0) patch.activePrimarySessionId = sessionId;
-        else if (slotIndex === 1) patch.splitSecondarySessionId = sessionId;
-        else if (slotIndex === 2) patch.tertiarySessionId = sessionId;
-        else patch.quaternarySessionId = sessionId;
-        if (!layout.openTabSessionIds.includes(sessionId)) {
-          patch.openTabSessionIds = [...layout.openTabSessionIds.slice(0, MAX_PARALLEL_ACTIVE_SESSIONS - 1), sessionId];
-        }
-        setLayout(await bridge.saveWorkspaceLayout(patch));
-        setFocusedSessionId(sessionId);
+        await openSessionInWorkspace(sessionId, slotIndex);
       } catch (err) {
         reportError(err);
       }
     },
-    [layout.openTabSessionIds, loadSessionData, replaceSession, reportError, sessions]
+    [importedHistory, loadSessionData, openSessionInWorkspace, preferences.activeProfileId, replaceSession, reportError, sessions]
   );
 
   const handleCreateSession = useCallback(
     async (cwd: string, title?: string, executionMode?: AgentExecutionMode) => {
       const bridge = getDesktopBridge();
       const created = await bridge.createSession({ cwd, title, executionMode });
-      setActiveHistoryDetail(null);
+
       replaceSession(created);
       void bridge.getConnectionStatus().then(setConnection).catch(() => {});
       void bridge.getAccountsState().then(setAccounts).catch(() => {});
       await loadSessionData(created.sessionId);
-      const tabs = [created.sessionId, ...layout.openTabSessionIds.filter((id) => id !== created.sessionId)].slice(
-        0,
-        MAX_PARALLEL_ACTIVE_SESSIONS
-      );
-      setLayout(await bridge.saveWorkspaceLayout({ openTabSessionIds: tabs, activePrimarySessionId: created.sessionId }));
-      setFocusedSessionId(created.sessionId);
+      await openSessionInWorkspace(created.sessionId);
     },
-    [layout.openTabSessionIds, loadSessionData, replaceSession]
+    [openSessionInWorkspace, loadSessionData, replaceSession]
   );
 
   const handleOrganizeTitles = useCallback(
@@ -633,8 +617,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     await loadSessionData(branch.sessionId);
     const replace = (id: string | null) => id === input.sessionId ? branch.sessionId : id;
     setLayout(await bridge.saveWorkspaceLayout({ openTabSessionIds: layout.openTabSessionIds.map(id => replace(id)!),
-      activePrimarySessionId: replace(layout.activePrimarySessionId), splitSecondarySessionId: replace(layout.splitSecondarySessionId),
-      tertiarySessionId: replace(layout.tertiarySessionId), quaternarySessionId: replace(layout.quaternarySessionId) }));
+      activePrimarySessionId: replace(layout.activePrimarySessionId), splitSecondarySessionId: replace(layout.splitSecondarySessionId) }));
     setFocusedSessionId(branch.sessionId);
   }, [layout, loadSessionData, replaceSession]);
   const handleSendPrompt = useCallback(async (input: SendPromptInput) => getDesktopBridge().sendPrompt(input), []);
@@ -884,14 +867,14 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           importedHistory={importedHistory}
           openTabSessionIds={layout.openTabSessionIds}
           selectedSessionId={stageSessionId}
-          selectedHistoryId={activeHistoryDetail?.sessionId ?? null}
+          selectedHistoryId={stageSessionId}
           hideLegacyPollutionSessions={layout.hideLegacyPollutionSessions}
           organizingTitles={organizing}
           pluginCount={pluginsSnap.plugins.length + pluginsSnap.mcpServers.length}
           projects={preferences.projects}
           onToggleCollapse={() => void patchLayout({ leftSidebarCollapsed: true })}
           onSelectSession={(s) => void handleActivateSession(s)}
-          onSelectHistory={(r) => void handleSelectHistory(r)}
+          onSelectHistory={r => void openSessionInWorkspace(r.sessionId).catch(reportError)}
           onRefreshHistory={handleRefreshHistory}
           onOpenNewSession={() => setNewSessionOpen(true)}
           onCreateSessionInProject={(cwd, mode) => void handleCreateSession(cwd, undefined, mode).catch(reportError)}
@@ -909,7 +892,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
         <div className="main">
           <TopBar
-            sessions={sessions.filter(s => !s.archivedAt)}
+            sessions={tabSessions}
             layout={layout}
             focusedSessionId={focusedSessionId}
             pendingApprovals={pendingApprovals}
@@ -921,16 +904,14 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
             onChangeLayoutMode={(mode) => void patchLayout({ layoutMode: mode })}
           />
 
-          {activeHistoryDetail ? (
-            <ReadOnlyHistoryView
-              detail={activeHistoryDetail}
-              defaultThoughtTrack={preferences.defaultThoughtTrack}
-              onContinueInGravity={handleContinueHistory}
-              onCloseHistoryView={() => setActiveHistoryDetail(null)}
-            />
-          ) : (
+          <ComposerDrafts.Provider value={composerDrafts}>
             <SessionWorkspaceGrid
               layout={layout}
+              historyIds={historyIds}
+              renderHistory={(id, slot) => <ImportedHistoryPane key={id} id={id}
+                defaultThoughtTrack={preferences.defaultThoughtTrack}
+                onContinueInGravity={(source, cwd) => handleContinueHistory(source, cwd, slot)}
+                onCloseHistoryView={() => void handleCloseTab(id)} />}
               focusedSessionId={focusedSessionId}
               sessions={sessions.filter(s => !s.archivedAt)}
               availableModels={connection.availableModels}
@@ -963,7 +944,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
               onInspectDiffFile={(id, fp) => openInspectorAt(id, 'diff', fp)}
               onTriggerDemoApproval={handleTriggerDemoApproval}
             />
-          )}
+          </ComposerDrafts.Provider>
         </div>
 
         <RightInspector

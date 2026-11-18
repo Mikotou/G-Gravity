@@ -19,7 +19,7 @@ async function main() {
   const bridge = getFallbackDesktopBridge();
   if (location.search === '?keyboard-workspace') {
     await bridge.saveWorkspaceLayout({ openTabSessionIds: [], activePrimarySessionId: null,
-      splitSecondarySessionId: null, tertiarySessionId: null, quaternarySessionId: null, layoutMode: 'single' });
+      splitSecondarySessionId: null, layoutMode: 'single' });
     Object.assign(window, { fixtureBridge: bridge });
     root.render(<App />);
     return;
@@ -51,8 +51,7 @@ async function main() {
       const sessions = [other, primary];
       const layout = { ...boot.layout, layoutMode: state.mode,
         openTabSessionIds: state.opened ? [primary.sessionId, other.sessionId] : [],
-        activePrimarySessionId: state.opened ? primary.sessionId : null, splitSecondarySessionId: other.sessionId,
-        tertiarySessionId: null, quaternarySessionId: null };
+        activePrimarySessionId: state.opened ? primary.sessionId : null, splitSecondarySessionId: other.sessionId };
       const reply = messages[1];
       const thought = { ...reply.thoughts![0], isStreaming: streaming, isTranslating: streaming };
       const transcript = [messages[0], { ...reply, thoughts: [thought] }];

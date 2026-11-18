@@ -349,8 +349,6 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     openTabSessionIds: ['sess-primary', 'sess-ui-theme'],
     activePrimarySessionId: 'sess-primary',
     splitSecondarySessionId: 'sess-ui-theme',
-    tertiarySessionId: 'sess-gateway',
-    quaternarySessionId: null,
     layoutMode: 'single',
     hideLegacyPollutionSessions: true,
     leftSidebarCollapsed: false,
@@ -1209,7 +1207,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       if (profileId === accounts.activeProfileId) return structuredClone(accounts);
       for (const session of sessions) if (session.profileId === accounts.activeProfileId) session.status = 'closed';
       pendingApprovals = [];
-      layout = { ...layout, openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, tertiarySessionId: null, quaternarySessionId: null };
+      layout = { ...layout, openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null };
       accounts.activeProfileId = profileId;
       target.lastActivatedAt = new Date().toISOString();
       preferences.activeProfileId = profileId;
@@ -1319,6 +1317,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       } else { target.archivedAt = action === 'archive' ? new Date().toISOString() : undefined; }
       return { sessions: structuredClone(sessions.filter(s => s.profileId === accounts.activeProfileId)), layout: structuredClone(layout) };
     },
+    async answerQuestion() { throw new Error('这条提问已结束'); },
     async getAccountQuota() { throw new Error('请在 Gravity 桌面端查看官方账户额度。'); },
     async closeSession(sessionId: string): Promise<void> {
       layout.openTabSessionIds = layout.openTabSessionIds.filter((id) => id !== sessionId);
@@ -1396,7 +1395,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       messagesBySession[branch.sessionId] = revision.prefix.map(m => ({ ...structuredClone(m),
         id: crypto.randomUUID(), sessionId: branch.sessionId, revisionHistory: true, isStreaming: false }));
       await this.closeSession(origin.sessionId);
-      await this.sendPrompt({ sessionId: branch.sessionId, text: input.text, references: revision.references, attachments: revision.attachments });
+      await this.sendPrompt({ sessionId: branch.sessionId, text: input.text, references: revision.references, attachments: revision.attachments, annotations: revision.annotations });
       return branch;
     },
     async sendPrompt(input: SendPromptInput): Promise<void> {
@@ -1410,6 +1409,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
         sessionId: input.sessionId,
         role: 'user',
         content: input.text,
+        annotations: input.annotations,
         references: input.references,
         attachments: input.attachments?.map((a, idx) => ({
           id: `att-${Date.now()}-${idx}`,
@@ -1517,10 +1517,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       layout = {
         ...layout,
         ...patch,
-        openTabSessionIds: (patch.openTabSessionIds ?? layout.openTabSessionIds).slice(
-          0,
-          MAX_PARALLEL_ACTIVE_SESSIONS
-        ),
+        openTabSessionIds: [...new Set(patch.openTabSessionIds ?? layout.openTabSessionIds)],
       };
       return { ...layout, openTabSessionIds: [...layout.openTabSessionIds] };
     },

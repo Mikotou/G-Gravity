@@ -136,7 +136,7 @@ describe('v0.6 右击真实点击链路、Reactive 子个体收口、Swarm 折�
       )
     );
 
-    const fileAnchor = screen.getByText('antigravity_character_sheet.md').closest('a')!;
+    const fileAnchor = document.querySelector<HTMLAnchorElement>('p a[href*="antigravity_character_sheet.md"]')!;
     fireEvent.contextMenu(fileAnchor, { clientX: 220, clientY: 180 });
 
     const defaultAppBtn = screen.getByTestId('ctx-open-default-app');

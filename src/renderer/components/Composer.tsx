@@ -34,20 +34,11 @@ import { MessageImage } from './MessageImage';
 import { ContextStatusBar } from './ContextStatusBar';
 import { AccountQuotaFooter } from './AccountQuotaView';
 import {
-  composePromptWithQuotesAndNotations,
   type TextNotationItem,
   type TextQuoteItem,
 } from './SelectionAnnotationTools';
 
-interface DraftAttachment {
-  id: string;
-  name: string;
-  mimeType: string;
-  dataBase64?: string;
-  textContent?: string;
-  previewUrl?: string;
-  sizeBytes: number;
-}
+import { useComposerDraft, type DraftAttachment } from '../lib/composer-draft';
 
 type Reference = { kind: 'file' | 'session'; label: string; value: string };
 
@@ -224,13 +215,9 @@ export function Composer({
   onTriggerDemoApproval,
 }: ComposerProps): React.ReactElement {
   const { locale, dict } = useI18n();
-  const [draft, setDraft] = useState('');
-  const [references, setReferences] = useState<Reference[]>([]);
-  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
+  const { text: draft, setDraft, references, setReferences, attachments, setAttachments, sending, setSending, isSending } = useComposerDraft(session.sessionId);
   const [mentionFiles, setMentionFiles] = useState<string[]>([]);
   const [menuIndex, setMenuIndex] = useState(0);
-  const sendLock = useRef(false);
-  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [approvalMenuOpen, setApprovalMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -383,7 +370,7 @@ export function Composer({
   const sendLabel = notations.length ? (locale === 'zh-CN' ? '发送 ' + notations.length + ' 条批注' : 'Send annotations (' + notations.length + ')') : dict.sendMessageBtn;
   async function submit(): Promise<void> {
     const text = draft.trim();
-    if ((!text && attachments.length === 0 && !hasQuotesOrNotations) || sendLock.current || isStreaming) return;
+    if ((!text && attachments.length === 0 && !hasQuotesOrNotations) || isSending() || isStreaming) return;
     setError(null);
 
     // 独立输入的 /compact 和 /plan 走各自的操作入口。带有引用摘录或批注时，草稿会与它们一起构造成消息。
@@ -408,22 +395,23 @@ export function Composer({
     const prevQuotes = [...quotes];
     const prevNotations = [...notations];
     const hasImage = prevAtts.some((a) => Boolean(a.previewUrl));
-    const composedText =
-      prevQuotes.length > 0 || prevNotations.length > 0
-        ? composePromptWithQuotesAndNotations(text, prevQuotes, prevNotations, locale)
-        : text || `[${hasImage ? dict.pastedImageBadge : dict.attachedFileBadge}]`;
+    const annotations = [
+      ...prevQuotes.map(q => ({ messageId: q.messageId, excerpt: q.text })),
+      ...prevNotations.map(n => ({ messageId: n.messageId, messageNumber: n.messageNumber, excerpt: n.selectedText, comment: n.comment })),
+    ];
+    const visibleText = text || (annotations.length ? '' : `[${hasImage ? dict.pastedImageBadge : dict.attachedFileBadge}]`);
 
     // 先清空当前输入以反馈发送状态。如果发送失败，下方 catch 用快照还原正文、文件或会话引用以及附件。
     setDraft('');
     setReferences([]);
     setAttachments([]);
-    sendLock.current = true;
     setSending(true);
     const restoreAnnotations = onSubmitAnnotations?.(prevQuotes, prevNotations);
     try {
       await onSendPrompt({
         sessionId: session.sessionId,
-        text: composedText,
+        text: visibleText,
+        annotations: annotations.length ? annotations : undefined,
         references: prevRefs.length ? prevRefs : undefined,
         attachments: prevAtts.length
           ? prevAtts.map((a) => ({
@@ -442,7 +430,6 @@ export function Composer({
       setAttachments(current => [...prevAtts, ...current]);
       reportError(err);
     } finally {
-      sendLock.current = false;
       setSending(false);
     }
   }

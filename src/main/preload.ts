@@ -28,6 +28,7 @@ const bridge: AgyDesktopBridge = {
   createSession: input => invoke('gravity:session:create', input),
   resumeSession: (id, cwd) => invoke('gravity:session:resume', id, cwd),
   manageSession: (id, action) => invoke('gravity:session:manage', id, action),
+  answerQuestion: input => invoke('gravity:session:answer-question', input),
   getAccountQuota: () => invoke('gravity:account:quota'),
   closeSession: id => invoke('gravity:session:close', id),
   setSessionMode: (id, mode) => invoke('gravity:session:set-mode', id, mode),

@@ -1119,10 +1119,6 @@ select.input {
   grid-template-columns: 1fr 1fr;
 }
 
-.workspace.mode-grid-4 {
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
-}
 
 /*
  * 每个窗格声明为名为 pane 的尺寸容器。
@@ -1139,7 +1135,7 @@ select.input {
   container-name: pane;
 }
 
-/* 窄窗格（分屏 / 四宫格）：收起次要文字，避免输入栏换行溢出 */
+/* 窄窗格（左右分屏）：收起次要文字，避免输入栏换行溢出 */
 @container pane (max-width: 720px) {
   .pane .mode-pill-hint,
   .pane .approval-label,
@@ -1167,8 +1163,7 @@ select.input {
   }
 }
 
-.workspace.mode-split-2 .pane.is-focused,
-.workspace.mode-grid-4 .pane.is-focused {
+.workspace.mode-split-2 .pane.is-focused {
   box-shadow: inset 0 2px 0 var(--accent-primary);
 }
 
@@ -1321,7 +1316,6 @@ select.input {
   padding: 18px 24px 28px;
 }
 
-.workspace.mode-grid-4 .stream-inner,
 .workspace.mode-split-2 .stream-inner {
   padding: 14px 16px 20px;
 }
@@ -2421,7 +2415,6 @@ select.input {
   padding: 0 24px 12px;
 }
 
-.workspace.mode-grid-4 .composer-dock,
 .workspace.mode-split-2 .composer-dock {
   padding: 0 14px 10px;
 }
@@ -4741,7 +4734,6 @@ select.input {
   font-size: var(--fs-sm);
 }
 .quota-buckets { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 0 14px; }
-.workspace.mode-grid-4 .quota-view { max-height: min(300px, calc(50dvh - 65px)); }
 @container pane (max-width: 440px) {
   .quota-footer { gap: 2px; padding-inline: 0; }
   .quota-trigger span, .quota-footer .status-seg-rate { display: none; }
@@ -4752,3 +4744,34 @@ select.input {
 .quota-view p, .quota-view small { color: var(--text-secondary); font-size: 12px; }
 .quota-view article { border-top: 1px solid var(--border-subtle); padding: 13px 0; }
 .quota-view progress { width: 100%; height: 6px; display: block; accent-color: var(--accent-primary); margin: 7px 0; }
+
+.workspace-slot { position: relative; display: flex; min-width: 0; min-height: 0; }
+.workspace-slot > .pane { flex: 1; }
+.workspace-slot.drag-target::after { content: ''; position: absolute; inset: 1px; z-index: 40; pointer-events: none;
+  border: 2px solid var(--accent-primary); border-radius: var(--radius-sm); background: var(--accent-soft); }
+.sent-annotations { display: grid; gap: 8px; }
+.sent-annotation blockquote { margin: 0; padding-inline-start: 9px; border-inline-start: 2px solid var(--accent-border);
+  color: var(--text-secondary); font-size: .91em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sent-annotation p { margin: 3px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sent-annotations + .md { margin-top: 8px; }
+
+.md-file-path { color: inherit; font-size: .93em; overflow-wrap: anywhere; }
+.message-previews { margin-top: 10px; }
+.message-file { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 7px 10px; overflow-wrap: anywhere; }
+.message-file pre { max-height: 140px; overflow: auto; white-space: pre-wrap; }
+.question-bar { align-self: center; flex: 0 1 auto; width: min(calc(100% - 28px), 812px);
+  min-height: 0; max-height: min(40vh, 350px); overflow: auto; padding: 10px 14px; margin: 5px 0 8px;
+  background: var(--bg-surface); border: 1px solid var(--accent-border); border-radius: var(--radius-md); }
+.question-bar header, .question-bar fieldset { display: grid; gap: 5px; }
+.question-bar small { display: block; color: var(--text-secondary); }
+.question-bar fieldset { border: 0; margin: 8px 0; padding: 0; min-width: 0; }
+.question-bar legend { font-weight: 600; }
+.question-options { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; }
+.question-options > div { max-width: 100%; display: grid; gap: 3px; min-width: 0; }
+.question-option { padding: 5px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  text-align: start; white-space: normal; overflow-wrap: anywhere; }
+.question-option[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent-primary); }
+.question-bar :is(input, textarea, select) { box-sizing: border-box; max-width: 100%; width: 100%; border: 1px solid var(--border-subtle);
+  background: var(--bg-app); border-radius: var(--radius-sm); padding: 5px 8px; color: var(--text-primary); }
+.question-bar footer { margin-top: 8px; display: flex; gap: 6px; justify-content: flex-end; }
+.question-history { padding-inline-start: 12px; border-inline-start: 2px solid var(--accent-border); white-space: pre-wrap; }

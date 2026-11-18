@@ -137,57 +137,6 @@ export function detectContextTargetFromElement(targetEl: HTMLElement | null): De
   return null;
 }
 
-/**
- * 将用户选中的 Quote 引用块、Codex 多处标记批注与输入框草稿组装为结构化 Prompt。
- */
-export function composePromptWithQuotesAndNotations(
-  draftText: string,
-  quotes: TextQuoteItem[],
-  notations: TextNotationItem[],
-  locale: ClientLocale
-): string {
-  const sections: string[] = [];
-
-  // 给摘录的每一行加 Markdown 引用前缀，保留换行。批注另带编号、所选原文和用户意见。
-  if (quotes.length > 0) {
-    const quoteBlocks = quotes.map((q) =>
-      q.text
-        .split('\n')
-        .map((line) => `> ${line}`)
-        .join('\n')
-    );
-    sections.push(quoteBlocks.join('\n\n'));
-  }
-
-  if (notations.length > 0) {
-    const header =
-      locale === 'zh-CN'
-        ? '【逐处标记批注 (Notations)】'
-        : '[Multi-spot Selection Notations]';
-    const items = notations.map((item, idx) => {
-      const snippet = item.selectedText.trim();
-      const origin = item.messageNumber ? (locale === 'zh-CN' ? '（第 ' + item.messageNumber + ' 条消息）' : ' (message ' + item.messageNumber + ')') : '';
-      return locale === 'zh-CN'
-        ? `${idx + 1}. 针对原文「${snippet}」：${item.comment.trim()}${origin}`
-        : `${idx + 1}. Regarding "${snippet}": ${item.comment.trim()}${origin}`;
-    });
-    sections.push(`${header}\n${items.join('\n')}`);
-  }
-
-  const trimmedDraft = draftText.trim();
-  if (trimmedDraft) {
-    sections.push(trimmedDraft);
-  } else if (notations.length > 0) {
-    sections.push(
-      locale === 'zh-CN'
-        ? '请严格结合以上逐处标记位置与批注说明进行修改或解答。'
-        : 'Please address each marked passage according to its notation above.'
-    );
-  }
-
-  return sections.join('\n\n');
-}
-
 /* ============================================================================
  * 1. 划词悬浮工具条（支持一键 Quote 引用 + Codex 式原地添加多处 Notation）
  * ========================================================================== */

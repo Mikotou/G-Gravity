@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { AlertCircle, AlertTriangle, Check, Copy, ExternalLink, FileCode2, Info, Lightbulb, ShieldAlert } from 'lucide-react';
-import { MessageImage } from './MessageImage';
+import { ImageWorkspace, MessageImage, resolveImage } from './MessageImage';
+import type { MessageAttachmentPreview } from '@shared';
+import { looksLikePlausibleLocalTarget } from './SelectionAnnotationTools';
 import { useFluidStreamText } from '../hooks/useFluidStreamText';
 import { useI18n } from '../i18n/I18nContext';
 
@@ -854,22 +856,28 @@ function renderAnchor(
   children: React.ReactNode,
   explicitTitle?: string
 ): React.ReactElement {
-  return (
+  return <TargetLink key={key} safe={safe} title={explicitTitle}>{children}</TargetLink>;
+}
+
+function TargetLink({ safe, title, children }: { safe: SafeHref; title?: string; children: React.ReactNode }) {
+  const [error, setError] = useState('');
+  return <>
     <a
-      key={key}
       className={safe.kind === 'file' ? 'md-link md-link-file' : 'md-link'}
       href={safe.href}
       data-link-href={safe.href}
       data-link-kind={safe.kind}
       target={safe.kind === 'anchor' ? undefined : '_blank'}
       rel={safe.kind === 'anchor' ? undefined : 'noopener noreferrer'}
-      title={explicitTitle || safe.tooltip}
+      title={title || safe.tooltip}
       onClick={
         safe.kind === 'file'
           ? (e) => {
               if (typeof window !== 'undefined' && window.agyDesktop?.openLinkOrFileTarget) {
                 e.preventDefault();
-                void window.agyDesktop.openLinkOrFileTarget({ target: safe.href, action: 'default-app' });
+                setError('');
+                void window.agyDesktop.openLinkOrFileTarget({ target: safe.href, action: 'default-app' })
+                  .catch(reason => setError(reason instanceof Error ? reason.message : String(reason)));
               }
             }
           : undefined
@@ -879,25 +887,65 @@ function renderAnchor(
       {safe.kind === 'external' && <ExternalLink size={11} className="md-link-icon" aria-hidden="true" />}
       {safe.kind === 'file' && <FileCode2 size={11} className="md-link-icon" aria-hidden="true" />}
     </a>
-  );
+    {error && <span role="alert" className="muted">{error}</span>}
+  </>;
 }
 
 function isImageLink(url: string): boolean {
   return /\.(?:png|jpe?g|gif|webp|avif|bmp|svg)(?:[?#][^ ]*)?$/i.test(url) && !/^(?:javascript|data|mailto):/i.test(url);
 }
 
+interface FilePreview { source: string; label: string; image: boolean; title?: string; text?: string }
+interface MarkdownContext { links: Map<string, LinkDef>; previews: Map<string, FilePreview>; workspace: string }
+
+function isFileReference(path: string): boolean {
+  return isImageLink(path) || looksLikePlausibleLocalTarget(path) ||
+    /^\/[^/].*\.[a-z0-9]{1,10}(?:#L\d+)?$/i.test(path) ||
+    /^https?:\/\/[^\s]+\.(?:pdf|docx?|xlsx?|pptx?|csv|txt|zip)(?:[?#].*)?$/i.test(path);
+}
+function addPreview(ctx: MarkdownContext, item: FilePreview) {
+  const url = resolveImage(item.source, ctx.workspace);
+  const key = url || (!ctx.workspace && !/^[a-z][\w+.-]*:|^[/\\]/i.test(item.source) ? 'unresolved:' + item.source : '');
+  if (key && !ctx.previews.has(key)) ctx.previews.set(key, item);
+  return url;
+}
+function fileMention(ctx: MarkdownContext, key: string, source: string, label = '', title?: string, explicitImage = false) {
+  const embedded = /^(?:data|blob):/i.test(source);
+  const name = label || source.split(/[\\\\/]/).at(-1) || source;
+  const url = addPreview(ctx, { source, label: name, image: explicitImage || isImageLink(source), title });
+  const body = embedded ? (label || '▧') : label && label !== source
+    ? <>{label} <code className="md-file-path">{source}</code></> : source;
+  const safe = url && !embedded ? resolveSafeHref(source) || resolveSafeHref(url) : null;
+  return safe ? renderAnchor(key, safe, body, title) : <span key={key}>{body}</span>;
+}
+
+function FilePreviews({ previews }: { previews: Map<string, FilePreview> }) {
+  if (!previews.size) return null;
+  return <div className="message-images message-previews" data-testid="message-previews">
+    {[...previews].map(([url, item]) => {
+      if (item.image) return <MessageImage key={url} source={item.source} alt={item.label} title={item.title} />;
+      const safe = resolveSafeHref(url);
+      return <div key={url} className="message-file">
+        {safe ? renderAnchor('file', safe, item.label) : <span>{item.label}</span>}
+        {item.text && <details><summary>{item.label}</summary><pre>{item.text.slice(0, 3000)}</pre></details>}
+      </div>;
+    })}
+  </div>;
+}
+
 function renderInline(
   text: string,
   keyPrefix: string,
-  refs: Map<string, LinkDef>,
+  refs: MarkdownContext,
   depth = 0
 ): React.ReactNode[] {
   if (!text) return [];
   if (depth > 6) return [text];
   const path = text.trim();
   if (depth === 0 && /^(?:[a-z]:[\\/]|file:\/\/\/|\.{0,2}[\\/])/i.test(path) &&
-      !/[\r\n<>]/.test(path) && isImageLink(path)) {
-    return [<MessageImage key={keyPrefix + '-file-img'} source={path} alt={path.split(/[\\/]/).at(-1) || path} />];
+      !/[\r\n<>`*"|]/.test(path) && /\.[a-z0-9]{1,10}(?:#L\d+)?$/i.test(path) &&
+      (!/\s/.test(path) || !/\.[a-z0-9]{1,10}\s/i.test(path)) && !/[，。；！？]/.test(path)) {
+    return [fileMention(refs, keyPrefix + '-file', path)];
   }
 
   const nodes: React.ReactNode[] = [];
@@ -915,6 +963,19 @@ function renderInline(
 
   while (i < text.length) {
     const ch = text[i];
+
+    const closingQuote = ch === '“' ? '”' : ch === '「' ? '」' : ch === '"' || ch === "'" ? ch : '';
+    if (closingQuote && depth === 0) {
+      const end = text.indexOf(closingQuote, i + 1);
+      const target = end > i ? text.slice(i + 1, end) : '';
+      if (/^(?:[a-z]:[\\/]|file:\/\/\/|\.{0,2}[\\/])/i.test(target) &&
+          !/[\r\n]/.test(target) && /\.[a-z0-9]{1,10}(?:#L\d+(?:-L?\d+)?)?$/i.test(target)) {
+        flushPlain();
+        nodes.push(ch, fileMention(refs, keyPrefix + n++, target), closingQuote);
+        i = end + 1;
+        continue;
+      }
+    }
 
     // 1. 反斜杠转义
     if (ch === '\\' && i + 1 < text.length) {
@@ -952,6 +1013,8 @@ function renderInline(
         if (codeContent.length >= 2 && codeContent.startsWith(' ') && codeContent.endsWith(' ') && codeContent.trim()) {
           codeContent = codeContent.slice(1, -1);
         }
+        if (isFileReference(codeContent) && !/[\r\n]/.test(codeContent)) addPreview(refs, { source: codeContent,
+          label: codeContent.split(/[\\\\/]/).at(-1) || codeContent, image: isImageLink(codeContent) });
         nodes.push(
           <code key={`${keyPrefix}-c${n++}`} className="inline" data-inline-code={codeContent}>
             {codeContent}
@@ -1006,7 +1069,7 @@ function renderInline(
         const src = attrs.get('src');
         if (src) {
           flushPlain();
-          nodes.push(<MessageImage key={keyPrefix + '-tag-img' + n++} source={src} alt={attrs.get('alt') || ''} title={attrs.get('title')} />);
+          nodes.push(fileMention(refs, keyPrefix + n++, src, attrs.get('alt'), attrs.get('title'), true));
           i += imageTag[0].length;
           continue;
         }
@@ -1049,7 +1112,7 @@ function renderInline(
         if (safe) {
           flushPlain();
           const label = autoLink[1].replace(/^mailto:/i, '');
-          if (isImageLink(autoLink[1])) nodes.push(<MessageImage key={keyPrefix + '-img' + n++} source={autoLink[1]} alt={label} />);
+          if (isFileReference(autoLink[1])) nodes.push(fileMention(refs, keyPrefix + n++, autoLink[1], label));
           else nodes.push(renderAnchor(`${keyPrefix}-al${n++}`, safe, label));
           i += autoLink[0].length;
           continue;
@@ -1070,12 +1133,12 @@ function renderInline(
           if (inline) end = inline.closeIdx + 1;
         } else {
           const ref = text[after] === '[' ? parseBracketContent(text, after) : undefined;
-          dest = refs.get((ref?.label || label.label).trim().toLowerCase());
+          dest = refs.links.get((ref?.label || label.label).trim().toLowerCase());
           if (ref) end = ref.closeIdx + 1;
         }
         if (dest) {
           flushPlain();
-          nodes.push(<MessageImage key={keyPrefix + '-img' + n++} source={dest.url} alt={label.label} title={dest.title} />);
+          nodes.push(fileMention(refs, keyPrefix + n++, dest.url, label.label, dest.title, true));
           i = end;
           continue;
         }
@@ -1093,8 +1156,8 @@ function renderInline(
             const safe = resolveSafeHref(dest.url);
             flushPlain();
             const children = renderInline(bracket.label || dest.url, `${keyPrefix}-lk${n}`, refs, depth + 1);
-            if (isImageLink(dest.url)) {
-              nodes.push(<MessageImage key={keyPrefix + '-img' + n++} source={dest.url} alt={bracket.label} title={dest.title} />);
+            if (isFileReference(dest.url)) {
+              nodes.push(fileMention(refs, keyPrefix + n++, dest.url, bracket.label, dest.title));
             } else if (safe) {
               nodes.push(renderAnchor(`${keyPrefix}-a${n++}`, safe, children, dest.title));
             } else {
@@ -1116,11 +1179,11 @@ function renderInline(
         } else {
           refKey = bracket.label.trim().toLowerCase();
         }
-        if (refKey && refs.has(refKey)) {
-          const def = refs.get(refKey)!;
-          if (isImageLink(def.url)) {
+        if (refKey && refs.links.has(refKey)) {
+          const def = refs.links.get(refKey)!;
+          if (isFileReference(def.url)) {
             flushPlain();
-            nodes.push(<MessageImage key={keyPrefix + '-img' + n++} source={def.url} alt={bracket.label} title={def.title} />);
+            nodes.push(fileMention(refs, keyPrefix + n++, def.url, bracket.label, def.title));
             i = endIdx + 1;
             continue;
           }
@@ -1165,11 +1228,19 @@ function renderInline(
         const safe = resolveSafeHref(candidate);
         if (safe) {
           flushPlain();
-          if (isImageLink(candidate)) nodes.push(<MessageImage key={keyPrefix + '-img' + n++} source={candidate} alt={candidate} />);
+          if (isFileReference(candidate)) nodes.push(fileMention(refs, keyPrefix + n++, candidate));
           else nodes.push(renderAnchor(`${keyPrefix}-bu${n++}`, safe, candidate));
           i += candidate.length;
           continue;
         }
+      }
+    }
+
+    if (depth === 0 && (i === 0 || /[\s(（「“：:,，"']/u.test(text[i - 1]) ||
+        (/[\u3400-\u9fff]/u.test(text[i - 1]) && /^(?:[a-z]:[\\/]|file:\/\/\/|\.{1,2}[\\/]|[\w.-]+[\\/]|\w[\w.-]*\.[a-z\d]{1,10})/i.test(text.slice(i)))) && /[\w.\\/]/.test(ch)) {
+      const token = /^(?:[A-Za-z]:[\\/]|file:\/\/\/|\.{1,2}[\\/]|\/(?!\/)|[\w.-]+[\\/])?[^\s<>`*"'|，。；：！？、（）「」【】()[\]]+\.[a-z0-9]{1,10}(?:#L\d+)?/i.exec(text.slice(i));
+      if (token && isFileReference(token[0])) {
+        flushPlain(); nodes.push(fileMention(refs, keyPrefix + n++, token[0])); i += token[0].length; continue;
       }
     }
 
@@ -1368,7 +1439,7 @@ const ALERT_META: Record<AlertKind, { label: string; Icon: React.ComponentType<{
 function renderBlockList(
   blocks: Block[],
   keyPrefix: string,
-  refs: Map<string, LinkDef>,
+  refs: MarkdownContext,
   streamingTail = false
 ): React.ReactNode[] {
   return blocks.map((block, idx) => {
@@ -1513,21 +1584,40 @@ export function Markdown({
   streaming,
   compact,
   forceAnimation,
+  attachments,
 }: {
   text: string;
   streaming?: boolean;
   compact?: boolean;
   forceAnimation?: boolean;
+  attachments?: MessageAttachmentPreview[];
 }): React.ReactElement {
   // 动效 3：正文输出连续滑入动画（区别于思考流雾化与译文跨语种覆盖）
   const streamState = useFluidStreamText(text, Boolean(streaming), 'assistant', Boolean(forceAnimation));
   // 输入流仍在增长时只解析已显示的文本前缀，后续分片到达后再补齐处于半截的 Markdown 结构。
   const { blocks, refs } = parseDocument(streamState.visibleText);
+  const workspace = React.useContext(ImageWorkspace);
+  const ctx: MarkdownContext = { links: refs, workspace, previews: new Map() };
+  const body = renderBlockList(blocks, 'root', ctx, Boolean(streaming));
+  for (const file of attachments || []) {
+    const image = file.mimeType.startsWith('image/');
+    const source = file.dataUrl || file.uri || '';
+    const prior = file.uri && resolveImage(file.uri, workspace);
+    const mention = prior ? ctx.previews.get(prior) : undefined;
+    if (mention) {
+      if (image && file.dataUrl) { mention.source = file.dataUrl; mention.image = true; }
+      if (file.textContent !== undefined) mention.text = file.textContent;
+      continue;
+    }
+    const key = (source && resolveImage(source, workspace)) || 'attachment:' + file.id;
+    if (!ctx.previews.has(key)) ctx.previews.set(key, { source, label: file.name, image: image && Boolean(source), text: file.textContent });
+  }
   return (
     <div
       className={`md ${compact ? 'md-compact' : ''} ${streaming ? 'cc-body-stream-active cc-streaming-cursor' : ''}`.trim()}
     >
-      {renderBlockList(blocks, 'root', refs, Boolean(streaming))}
+      {body}
+      <FilePreviews previews={ctx.previews} />
     </div>
   );
 }

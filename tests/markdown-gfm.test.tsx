@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { I18nProvider } from '../src/renderer/i18n/I18nContext';
+import { ImageWorkspace } from '../src/renderer/components/MessageImage';
 import { Markdown } from '../src/renderer/components/Markdown';
 
 function renderMd(md: string) {
@@ -64,6 +65,29 @@ describe('GFM Markdown 与富格式全量兼容测试', () => {
     // javascript: 绝不生成 <a>
     expect(hrefs.some((h) => h?.toLowerCase().startsWith('javascript:'))).toBe(false);
     expect(screen.getByText('点我').tagName).not.toBe('A');
+  });
+
+  it('文件路径在原位可读，图片和文档在完整正文末尾去重，代码块不会生成预览', () => {
+    const body = '请看图片C:\\demo\\one.png，然后读 “C:\\demo\\with spaces.txt”。\n\n![图示](one.png) 和 `with spaces.txt`。\n\n```text\nC:\\demo\\sample-only.png\n```\n\n结束。';
+    const { container } = render(<I18nProvider locale="zh-CN" onChangeLocale={() => {}}>
+      <ImageWorkspace.Provider value={'C:\\demo'}><Markdown text={body} attachments={[
+        { id: 'one', uri: 'file:///C:/demo/one.png', mimeType: 'image/png', name: 'one.png', sizeBytes: 120,
+          dataUrl: 'data:image/png;base64,AAAA' },
+        { id: 'doc', uri: 'file:///C:/demo/with%20spaces.txt', mimeType: 'text/plain', name: 'with spaces.txt',
+          textContent: '附件中的内容', sizeBytes: 21 },
+      ]} /></ImageWorkspace.Provider></I18nProvider>);
+    const message = container.querySelector('.md')!;
+    const previews = message.lastElementChild!;
+    expect(previews.getAttribute('data-testid')).toBe('message-previews');
+    expect(previews.previousElementSibling?.textContent).toBe('结束。');
+    expect(message.querySelector('p')?.textContent).toContain('C:\\demo\\one.png');
+    expect(message.querySelector('p')?.textContent).toContain('“C:\\demo\\with spaces.txt”');
+    expect(message.querySelector('p img')).toBeNull();
+    expect(previews.querySelectorAll('img')).toHaveLength(1);
+    expect(previews.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,AAAA');
+    expect(previews.querySelectorAll('.message-file')).toHaveLength(1);
+    expect(previews.textContent).toContain('with spaces.txt');
+    expect(previews.querySelector('details pre')?.textContent).toBe('附件中的内容');
   });
 
   it('正确渲染多级嵌套列表、保留有序列表起始序号及 GFM 任务复选框', () => {

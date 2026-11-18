@@ -279,7 +279,16 @@ export interface MessageAttachmentPreview {
   sizeBytes: number;
 }
 
+export interface MessageAnnotation {
+  excerpt: string;
+  comment?: string;
+  messageId?: string;
+  messageNumber?: number;
+}
+
 export interface ChatMessageItem {
+  question?: import('./user-question').UserQuestion;
+  annotations?: MessageAnnotation[];
   id: string;
   sessionId: string;
   role: 'user' | 'assistant' | 'system';
@@ -334,17 +343,36 @@ export interface ManagedSessionSummary {
 
 export type SessionAction = 'archive' | 'restore' | 'delete';
 
+export type WorkspaceSplitMode = 'single' | 'split-2';
+
+export function workspaceSlots(layout: WorkspaceLayoutState, tabs = layout.openTabSessionIds): Array<string | null> {
+  const ordered = layout.openTabSessionIds.filter(id => tabs.includes(id));
+  const has = (id: string | null) => id !== null && ordered.includes(id);
+  const reserved = layout.layoutMode === 'split-2' ? layout.splitSecondarySessionId : null;
+  const primary = has(layout.activePrimarySessionId) ? layout.activePrimarySessionId : ordered.find(id => id !== reserved) ?? null;
+  if (layout.layoutMode === 'single') return [primary];
+  const secondary = layout.splitSecondarySessionId;
+  return [primary, has(secondary) && secondary !== primary ? secondary : ordered.find(id => id !== primary) ?? null];
+}
+
+export function placeSession(layout: WorkspaceLayoutState, slot: number, id: string): Partial<WorkspaceLayoutState> {
+  const [left, right] = workspaceSlots(layout);
+  const tabs = layout.openTabSessionIds.includes(id) ? layout.openTabSessionIds : [...layout.openTabSessionIds, id];
+  if (slot === 1 && layout.layoutMode === 'split-2') {
+    return { openTabSessionIds: tabs, activePrimarySessionId: id === left ? right ?? null : left, splitSecondarySessionId: id };
+  }
+  return { openTabSessionIds: tabs, activePrimarySessionId: id,
+    splitSecondarySessionId: layout.layoutMode === 'split-2' ? (id === right ? left : right ?? null) :
+      (id === layout.splitSecondarySessionId ? left : layout.splitSecondarySessionId) };
+}
+
 export function withoutSession(layout: WorkspaceLayoutState, id: string): WorkspaceLayoutState {
   const tabs = layout.openTabSessionIds.filter(tab => tab !== id);
   const secondary = layout.splitSecondarySessionId === id ? null : layout.splitSecondarySessionId;
-  const third = layout.tertiarySessionId === id ? null : layout.tertiarySessionId;
-  const fourth = layout.quaternarySessionId === id ? null : layout.quaternarySessionId;
   return { ...layout, openTabSessionIds: tabs,
-    activePrimarySessionId: layout.activePrimarySessionId === id ? tabs.find(t => ![secondary, third, fourth].includes(t)) ?? null : layout.activePrimarySessionId,
-    splitSecondarySessionId: secondary, tertiarySessionId: third, quaternarySessionId: fourth };
+    activePrimarySessionId: layout.activePrimarySessionId === id ? tabs.find(t => t !== secondary) ?? tabs[0] ?? null : layout.activePrimarySessionId,
+    splitSecondarySessionId: secondary };
 }
-
-export type WorkspaceSplitMode = 'single' | 'split-2' | 'grid-4';
 
 const inspectorTabs = ['diff', 'files', 'plan', 'terminal', 'context', 'swarm'] as const;
 export type RightInspectorTab = (typeof inspectorTabs)[number];
@@ -356,8 +384,6 @@ export interface WorkspaceLayoutState {
   openTabSessionIds: string[];
   activePrimarySessionId: string | null;
   splitSecondarySessionId: string | null;
-  tertiarySessionId: string | null;
-  quaternarySessionId: string | null;
   layoutMode: WorkspaceSplitMode;
   hideLegacyPollutionSessions: boolean;
   /** 左栏折叠态（快捷键 Ctrl+B） */
