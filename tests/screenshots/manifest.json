@@ -1,0 +1,89 @@
+{
+  "capture": "Native Windows Electron production window via computer-use; original JPEG encoded to PNG without resize or retouch",
+  "screenshots": [
+    {
+      "themeId": "claude-code-dark",
+      "path": "F:\\插件-Gemini\\tests\\screenshots\\claude-code-dark.png",
+      "size": [
+        1429,
+        954
+      ],
+      "sha256": "a1d3c627341b486c82eb6a978040b94c4e64c113d420c3cb17b4eaee983d61eb",
+      "centerBackground": [
+        22,
+        21,
+        19
+      ]
+    },
+    {
+      "themeId": "claude-code-light",
+      "path": "F:\\插件-Gemini\\tests\\screenshots\\claude-code-light.png",
+      "size": [
+        1429,
+        954
+      ],
+      "sha256": "1959f37039b5168b963f5b5ec158d9e03e82fbdbb631618c60e12009729e4a76",
+      "centerBackground": [
+        247,
+        244,
+        237
+      ]
+    },
+    {
+      "themeId": "ubuntu-aubergine",
+      "path": "F:\\插件-Gemini\\tests\\screenshots\\ubuntu-aubergine.png",
+      "size": [
+        1429,
+        954
+      ],
+      "sha256": "088e290b07809ada060cca63249770db2c0227a3f7718ee90bacb564af635ff1",
+      "centerBackground": [
+        36,
+        7,
+        27
+      ]
+    },
+    {
+      "themeId": "macos-dark",
+      "path": "F:\\插件-Gemini\\tests\\screenshots\\macos-dark.png",
+      "size": [
+        1429,
+        954
+      ],
+      "sha256": "03808e5f15b2f34882ec1b1c3de99c4d32880afdcbd81015341677963651ed43",
+      "centerBackground": [
+        27,
+        28,
+        32
+      ]
+    },
+    {
+      "themeId": "macos-light",
+      "path": "F:\\插件-Gemini\\tests\\screenshots\\macos-light.png",
+      "size": [
+        1429,
+        954
+      ],
+      "sha256": "de22fab12b088ff033e87dae2c80d980e594f8f9441b8b9a77e575a1dbdf8e70",
+      "centerBackground": [
+        245,
+        245,
+        247
+      ]
+    },
+    {
+      "themeId": "solarized-dark",
+      "path": "F:\\插件-Gemini\\tests\\screenshots\\solarized-dark.png",
+      "size": [
+        1429,
+        954
+      ],
+      "sha256": "1d89aa44cb5c4b5a30096fa979b0feacf8de957e7458a2b70db7cc23ca8fac13",
+      "centerBackground": [
+        0,
+        42,
+        54
+      ]
+    }
+  ]
+}

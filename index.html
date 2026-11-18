@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="claude-code-dark">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 这里的策略约束渲染页面。资源加载和回环开发连接各有自己的来源范围，系统打开文件的操作另由主进程处理。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: file: https: http:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="./icons/gravity-claude-dark.svg" />
+    <title>Gravity</title>
+  </head>
+  <body>
+    <!-- 工作台由模块入口挂载到这个节点。生产构建时 Vite 会把脚本引用替换为打包后的资源路径。 -->
+    <div id="root"></div>
+    <script type="module" src="/src/renderer/main.tsx"></script>
+  </body>
+</html>

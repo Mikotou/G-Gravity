@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg-gravity-claude-dark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1c1917" />
+      <stop offset="100%" stop-color="#141210" />
+    </linearGradient>
+  </defs>
+  <!-- Original Gravity Squircle Base -->
+  <rect x="14" y="14" width="228" height="228" rx="54" fill="url(#bg-gravity-claude-dark)" stroke="#443a32" stroke-width="6" />
+  <!-- Gravitational Outer Orbit Arc -->
+  <path d="M 192 98 A 74 74 0 1 0 182 178" fill="none" stroke="#d97757" stroke-width="16" stroke-linecap="round" />
+  <!-- Orbital Satellite Node -->
+  <circle cx="194" cy="82" r="13" fill="#eba080" />
+  <!-- Minimalist Terminal Prompt ">_" inside Gravity Well -->
+  <path d="M 88 102 L 122 128 L 88 154" fill="none" stroke="#f5efe6" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" />
+  <line x1="134" y1="154" x2="172" y2="154" stroke="#d97757" stroke-width="15" stroke-linecap="round" />
+</svg>

@@ -1,0 +1,73 @@
+{
+  "name": "g-gravity",
+  "productName": "Gravity",
+  "version": "0.1.1",
+  "private": true,
+  "description": "Gravity — 基于官方 agy acp 协议的本地智能编码工作台",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev:renderer": "vite --host 127.0.0.1 --port 5173",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build",
+    "build": "npm run build:main && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "start:electron": "electron .",
+    "typecheck:shared": "tsc -p tsconfig.shared.json --noEmit",
+    "typecheck:main": "tsc -p tsconfig.main.json --noEmit",
+    "typecheck:renderer": "tsc -p tsconfig.renderer.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "npm run typecheck:shared && npm run typecheck:main && npm run typecheck:renderer && npm run typecheck:tests",
+    "test": "vitest run",
+    "test:desktop": "node tests/windows-package-smoke.cjs",
+    "test:watch": "vitest",
+    "dist:exe": "npm run build && electron-builder --win portable dir"
+  },
+  "build": {
+    "appId": "com.gravity.desktop",
+    "productName": "Gravity",
+    "directories": {
+      "output": "release"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "asar": false,
+    "npmRebuild": false,
+    "files": [
+      "dist/**/*",
+      "assets/icons/**/*",
+      "assets/local-translation/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "win": {
+      "icon": "assets/icons/gravity-claude-dark.ico",
+      "target": [
+        "portable",
+        "dir"
+      ]
+    },
+    "portable": {
+      "artifactName": "Gravity.exe"
+    }
+  },
+  "dependencies": {
+    "lucide-react": "^0.475.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^35.0.0",
+    "electron-builder": "^26.18.0",
+    "jsdom": "^26.0.0",
+    "playwright-core": "1.65.1",
+    "rcedit": "^5.0.2",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0",
+    "vitest": "^3.0.7"
+  }
+}

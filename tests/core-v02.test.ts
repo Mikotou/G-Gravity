@@ -1,0 +1,48 @@
+// @vitest-environment node
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { CoreService } from '../src/main/core-service';
+import { createCoreBridge } from './helpers/core-bridge';
+import { createHistoryFixture, snapshotHistoryTree } from './helpers/history-fixture';
+import { prepareMockAcp } from './helpers/stdio-rpc';
+
+describe('Gravity v0.2 真内核与标准ACP桩整合', () => {
+  let fixture: Awaited<ReturnType<typeof prepareMockAcp>>;
+  beforeAll(async () => { fixture = await prepareMockAcp(); }); afterAll(async () => { await fixture?.cleanup(); });
+  function setup(historyRoots: string[] = []) {
+    const directory = mkdtempSync(path.join(tmpdir(), 'gravity-qa-core-v02-'));
+    const spawnSpy = vi.fn((_binary, _args, options) => spawn(fixture.executable, fixture.args, options));
+    const executor = vi.fn(async () => ({ stdout: '[]' }));
+    const core = new CoreService({ dataDir: directory, acpOptions: { spawn: spawnSpy }, historyRoots, pluginsExecutor: executor, homeDir: path.join(directory, 'fake-home') });
+    return { core, spawnSpy, cleanup: async () => { await core.dispose(); rmSync(directory, { recursive: true, force: true }); } };
+  }
+  it('完整桥接方法存在，自定义主题导出导入安全、图标与布局持久化', async () => {
+    const { core, cleanup } = setup();
+    try {
+      const bridge = createCoreBridge(core); expect(Object.keys(bridge).length).toBeGreaterThan(50);
+      const json = await core.exportCustomTheme(); const custom = JSON.parse(json); custom.tokens.accentPrimary = '#123456';
+      const preferences = await core.importCustomTheme(JSON.stringify(custom));
+      expect(preferences.theme).toBe('custom'); expect(preferences.customTheme!.tokens.accentPrimary).toBe('#123456');
+      await expect(core.importCustomTheme('{"tokens":{"bgApp":"url(https://evil.example)"}}')).rejects.toThrow('非法');
+      expect((await core.setAppIcon('gravity-ubuntu')).appIcon).toBe('gravity-ubuntu');
+      const layout = await core.saveWorkspaceLayout({ leftSidebarCollapsed: true, rightInspectorWidth: 420, activeInspectorTab: 'context' });
+      expect(layout).toMatchObject({ leftSidebarCollapsed: true, rightInspectorWidth: 420, activeInspectorTab: 'context' });
+    } finally { await cleanup(); }
+  });
+  it('本地历史继续创建新ACP会话带入摘要，源树前后完全不变', async () => {
+    const history = createHistoryFixture(); const { core, spawnSpy, cleanup } = setup([history.root]);
+    try {
+      const before = snapshotHistoryTree(history.root); const records = await core.listImportedHistory();
+      const target = records.find((record) => record.title === '只读历史测试')!;
+      const continued = await core.continueHistoryInGravity({ importedSessionId: target.sessionId, targetCwd: 'F:\\历史续聊' });
+      expect(continued.sessionId).not.toBe(target.sessionId); expect(continued.originKind).toBe('acp-live'); expect(continued.readOnly).toBe(false);
+      const messages = await core.getSessionMessages(continued.sessionId);
+      expect(messages.find((message) => message.role === 'user')!.content).toContain('测试合成会话摘要');
+      expect(spawnSpy).toHaveBeenCalledTimes(1); expect(snapshotHistoryTree(history.root)).toEqual(before);
+      expect(core.history.getDetail(target.sessionId).readOnly).toBe(true);
+    } finally { await cleanup(); rmSync(history.directory, { recursive: true, force: true }); }
+  });
+});

@@ -1,0 +1,993 @@
+/* ============================================================================
+ * Gravity Design System v0.7 — 信息层级 / 语义色 / 动效节奏
+ *
+ * 原则：
+ *   1. 噪音降权：只读探索、成功的常规操作使用低对比度灰阶，退到背景。
+ *   2. 关键升权：文件改动（琥珀）、命令执行（紫）、失败（红）、待审批（橙黄）始终高对比。
+ *   3. 状态即颜色：同一语义在标签页、窗格头、工具行、Inspector 中使用同一套色。
+ *   4. 动效有目的：入场轻、反馈快、注意力提示克制；尊重 prefers-reduced-motion。
+ *
+ * 全部颜色基于主题 23 个 Token 派生，或按明暗极性提供一组可读性校准过的类别色。
+ * ========================================================================== */
+
+:root {
+  /* ---------- 动效 ---------- */
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+  --dur-4: 520ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+
+  /* ---------- 排版尺度 ---------- */
+  --fs-2xs: 10.5px;
+  --fs-xs: 11.5px;
+  --fs-sm: 12.5px;
+  --fs-md: 13.5px;
+  --fs-lg: 15px;
+
+  /* ---------- 语义色（暗色默认） ---------- */
+  --info: #60a5fa;
+  --tool-explore: #8fa3b8;
+  --tool-edit: #f5b84a;
+  --tool-exec: #b197fc;
+  --tool-web: #34d1bf;
+  --tool-agent: #f38bc4;
+  --tool-other: var(--text-muted);
+
+  --info-soft: color-mix(in srgb, var(--info) 14%, transparent);
+  --edit-soft: color-mix(in srgb, var(--tool-edit) 13%, transparent);
+  --exec-soft: color-mix(in srgb, var(--tool-exec) 13%, transparent);
+  --danger-border: color-mix(in srgb, var(--status-danger) 42%, transparent);
+  --warning-border: color-mix(in srgb, var(--status-warning) 45%, transparent);
+
+  /* 表面层级：在主题底色上微调明度，形成 3 层深度 */
+  --surface-1: color-mix(in srgb, var(--bg-surface) 55%, var(--bg-app));
+  --surface-2: var(--bg-surface);
+  --surface-3: var(--bg-elevated);
+}
+
+/* theme.ts 给根节点写入明暗标识。浅色画布单独设置工具色和浅底色，定制主题也能使用相同的类别样式。 */
+[data-polarity='light'] {
+  --info: #2563eb;
+  --tool-explore: #5f7489;
+  --tool-edit: #b45309;
+  --tool-exec: #6d28d9;
+  --tool-web: #0f766e;
+  --tool-agent: #be185d;
+  --edit-soft: color-mix(in srgb, var(--tool-edit) 10%, transparent);
+  --exec-soft: color-mix(in srgb, var(--tool-exec) 9%, transparent);
+}
+
+@keyframes gv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes gv-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes gv-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes gv-attention {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-warning) 0%, transparent), var(--shadow-sm);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--status-warning) 18%, transparent), var(--shadow-sm);
+  }
+}
+
+@keyframes gv-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+
+.spin {
+  animation: gv-spin 0.9s linear infinite;
+}
+
+/* ============================================================================
+ * 对话流：层级与节奏
+ * ========================================================================== */
+
+.turn {
+  animation: gv-rise var(--dur-3) var(--ease-out) both;
+}
+
+.stream-inner {
+  gap: 20px;
+}
+
+/* 用户提问：最强的视觉锚点，滚动长对话时可快速定位每一轮 */
+.cc-user-prompt {
+  position: relative;
+  border-color: color-mix(in srgb, var(--accent-primary) 22%, var(--border-subtle));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-primary) 5%, var(--surface-2)) 0%,
+    var(--surface-2) 100%
+  );
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+  padding-left: 16px;
+}
+
+.cc-user-body {
+  font-weight: 450;
+}
+
+.cc-assistant {
+  gap: 7px;
+}
+
+/* 正文层级：标题带强调色标记，粗体更亮，方便扫读结论 */
+.md h1,
+.md h2,
+.md h3 {
+  color: var(--text-primary);
+}
+
+.md h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 3px;
+}
+
+.md h2::before {
+  content: '';
+  flex-shrink: 0;
+  width: 3px;
+  height: 0.95em;
+  border-radius: 2px;
+  background: var(--accent-primary);
+}
+
+.md h3::before {
+  content: '▸ ';
+  color: var(--accent-primary);
+  font-size: 0.85em;
+}
+
+.md strong {
+  color: var(--text-primary);
+  font-weight: 680;
+}
+
+.md p,
+.md li {
+  color: color-mix(in srgb, var(--text-primary) 92%, var(--text-secondary));
+}
+
+/* 系统提示分级 */
+.cc-system.tone-warning {
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  color: var(--text-primary);
+}
+
+.cc-system.tone-warning svg {
+  color: var(--status-warning);
+}
+
+.cc-system.tone-info {
+  background: color-mix(in srgb, var(--info) 7%, transparent);
+}
+
+.cc-system.tone-info svg {
+  color: var(--info);
+}
+
+/* ============================================================================
+ * Thinking：完成后收起，用一句预览代替整段推理
+ * ========================================================================== */
+
+.cc-thinking-preview {
+  flex: 1;
+  min-width: 0;
+  max-width: 62%;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.cc-thinking-head:hover .cc-thinking-preview {
+  color: var(--text-secondary);
+}
+
+.cc-thinking-body {
+  animation: gv-rise var(--dur-2) var(--ease-out) both;
+}
+
+/* ============================================================================
+ * 工具行：按类别着色；只读探索降权，改动/命令/失败升权
+ * ========================================================================== */
+
+.tool-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cc-tool {
+  --tool-color: var(--tool-other);
+  position: relative;
+  border-radius: var(--radius-sm);
+  animation: gv-slide-in var(--dur-2) var(--ease-out) both;
+  transition: background var(--dur-1);
+}
+
+.cc-tool.tool-cat-explore {
+  --tool-color: var(--tool-explore);
+}
+.cc-tool.tool-cat-edit {
+  --tool-color: var(--tool-edit);
+}
+.cc-tool.tool-cat-exec {
+  --tool-color: var(--tool-exec);
+}
+.cc-tool.tool-cat-web {
+  --tool-color: var(--tool-web);
+}
+.cc-tool.tool-cat-agent {
+  --tool-color: var(--tool-agent);
+}
+
+.cc-tool-line {
+  gap: 7px;
+  min-height: 26px;
+  padding: 2px 8px 2px 4px;
+}
+
+.cc-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  color: var(--tool-color);
+  background: color-mix(in srgb, var(--tool-color) 13%, transparent);
+  transition: background var(--dur-1), color var(--dur-1);
+}
+
+.cc-tool-name {
+  color: var(--text-primary);
+  font-weight: 620;
+}
+
+.cc-tool-arg {
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+/* 只读探索：整体降权 */
+.cc-tool.tool-cat-explore .cc-tool-name {
+  color: var(--text-secondary);
+  font-weight: 550;
+}
+
+.cc-tool.tool-cat-explore .cc-tool-arg {
+  color: var(--text-muted);
+}
+
+/* 文件改动：琥珀色左轨 + 浅底，最容易被扫到 */
+.cc-tool.tool-cat-edit {
+  background: var(--edit-soft);
+  box-shadow: inset 2px 0 0 var(--tool-edit);
+}
+
+.cc-tool.tool-cat-edit .cc-tool-arg {
+  color: var(--text-primary);
+}
+
+/* 命令执行：紫色左轨 */
+.cc-tool.tool-cat-exec {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--tool-exec) 70%, transparent);
+}
+
+/* 失败：红色覆盖一切类别 */
+/* 失败状态写在工具类别样式之后，让失败时的左边线和背景覆盖编辑、执行等类别提示。 */
+.cc-tool.is-failed {
+  --tool-color: var(--status-danger);
+  background: var(--danger-soft);
+  box-shadow: inset 2px 0 0 var(--status-danger);
+}
+
+.cc-tool.is-failed .cc-tool-name,
+.cc-tool.is-failed .cc-tool-arg {
+  color: var(--text-primary);
+}
+
+/* 运行中：轻扫光提示仍在进行 */
+.cc-tool.is-active {
+  overflow: hidden;
+}
+
+.cc-tool.is-active::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--tool-color) 10%, transparent),
+    transparent
+  );
+  animation: gv-sweep 1.8s var(--ease-in-out) infinite;
+}
+
+.cc-tool-status {
+  padding: 1px 7px;
+  border-radius: 99px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+}
+
+.cc-tool-status.is-failed {
+  background: color-mix(in srgb, var(--status-danger) 20%, transparent);
+  color: var(--status-danger);
+}
+
+.cc-tool-status.is-active {
+  background: color-mix(in srgb, var(--tool-color) 16%, transparent);
+  color: var(--tool-color);
+}
+
+.cc-tool-duration {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  opacity: 0;
+  transition: opacity var(--dur-1);
+}
+
+.cc-tool-line:hover .cc-tool-duration {
+  opacity: 1;
+}
+
+.cc-tool-result {
+  padding-left: 31px;
+}
+
+.cc-tool-result.is-failed {
+  color: var(--diff-removed-text);
+}
+
+.cc-tool-detail {
+  margin-left: 31px;
+  animation: gv-rise var(--dur-2) var(--ease-out) both;
+}
+
+.cc-tool.is-nested {
+  animation: none;
+}
+
+.cc-tool.is-nested .cc-tool-line {
+  min-height: 22px;
+}
+
+.cc-tool.is-nested .cc-tool-icon {
+  width: 18px;
+  height: 18px;
+  background: transparent;
+}
+
+.cc-add {
+  color: var(--diff-added-text);
+  font-weight: 600;
+}
+
+.cc-del {
+  color: var(--diff-removed-text);
+  font-weight: 600;
+}
+
+/* 探索分组 */
+.tool-group {
+  border-radius: var(--radius-sm);
+  animation: gv-slide-in var(--dur-2) var(--ease-out) both;
+}
+
+.tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 26px;
+  padding: 2px 8px 2px 4px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  text-align: left;
+  color: var(--text-secondary);
+}
+
+.tool-group-head:hover {
+  background: var(--hover);
+}
+
+.tool-group-head .cc-tool-name {
+  color: var(--text-secondary);
+  font-weight: 550;
+}
+
+.tool-cat-explore-icon {
+  --tool-color: var(--tool-explore);
+}
+
+.tool-group-meta {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+}
+
+.tool-group-preview {
+  min-width: 0;
+  color: color-mix(in srgb, var(--text-muted) 75%, transparent);
+  font-size: var(--fs-2xs);
+}
+
+.tool-group.is-open .cc-tool-chev,
+.tool-group-head[aria-expanded='true'] .cc-tool-chev {
+  transform: rotate(90deg);
+}
+
+.tool-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 2px 0 4px 13px;
+  padding-left: 10px;
+  border-left: 1px dashed var(--border-strong);
+  animation: gv-rise var(--dur-2) var(--ease-out) both;
+}
+
+/* Todo 进度 */
+.cc-todos-progress {
+  position: relative;
+  display: inline-block;
+  width: 64px;
+  height: 4px;
+  border-radius: 99px;
+  background: var(--active);
+  overflow: hidden;
+}
+
+.cc-todos-progress > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 99px;
+  background: var(--status-success);
+  transition: width var(--dur-3) var(--ease-out);
+}
+
+/* ============================================================================
+ * 回合结果条
+ * ========================================================================== */
+
+.turn-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 2px 0 0 24px;
+  padding-top: 7px;
+  border-top: 1px dashed color-mix(in srgb, var(--border-subtle) 85%, transparent);
+  animation: gv-rise var(--dur-3) var(--ease-out) 60ms both;
+}
+
+/* 结果条的前景和浅底共用局部颜色变量，具体成功、等待或失败状态只需覆盖这一个值。 */
+.outcome-chip {
+  --chip: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 21px;
+  padding: 0 8px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--chip) 11%, transparent);
+  color: var(--chip);
+  font-size: var(--fs-2xs);
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.outcome-chip.tone-success {
+  --chip: var(--status-success);
+}
+.outcome-chip.tone-danger {
+  --chip: var(--status-danger);
+}
+.outcome-chip.tone-warning {
+  --chip: var(--status-warning);
+}
+.outcome-chip.tone-edit {
+  --chip: var(--tool-edit);
+}
+.outcome-chip.tone-exec {
+  --chip: var(--tool-exec);
+}
+.outcome-chip.tone-muted {
+  --chip: var(--text-muted);
+  background: var(--hover);
+}
+
+.outcome-chip .cc-add,
+.outcome-chip .cc-del {
+  font-family: var(--font-mono);
+}
+
+.outcome-files {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.outcome-file {
+  height: 21px;
+  max-width: 180px;
+  padding: 0 7px;
+  border-radius: var(--radius-xs);
+  border: 1px solid color-mix(in srgb, var(--tool-edit) 30%, var(--border-subtle));
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color var(--dur-1), color var(--dur-1), background var(--dur-1);
+}
+
+.outcome-file:hover {
+  border-color: var(--tool-edit);
+  background: var(--edit-soft);
+  color: var(--text-primary);
+}
+
+.outcome-more {
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+}
+
+/* ============================================================================
+ * 窗格：状态胶囊、待审批注意力、回到最新
+ * ========================================================================== */
+
+.pane-status-chip {
+  --chip: var(--accent-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--chip) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--chip) 30%, transparent);
+  color: var(--chip);
+  font-size: var(--fs-2xs);
+  font-weight: 620;
+  flex-shrink: 0;
+  animation: gv-rise var(--dur-2) var(--ease-out) both;
+}
+
+.pane-status-chip.is-waiting_approval {
+  --chip: var(--status-warning);
+  animation: gv-attention 2.2s var(--ease-in-out) infinite;
+}
+
+.pane-status-chip.is-error {
+  --chip: var(--status-danger);
+}
+
+.pane-status-time {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.pane {
+  transition: box-shadow var(--dur-2) var(--ease-out);
+}
+
+.pane[data-pane-state='waiting_approval']::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  z-index: 3;
+  background: linear-gradient(90deg, transparent, var(--status-warning), transparent);
+  opacity: 0.85;
+}
+
+.pane[data-pane-state='streaming']::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  z-index: 3;
+  overflow: hidden;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--accent-primary) 80%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: gv-pane-progress 1.6s var(--ease-in-out) infinite;
+}
+
+@keyframes gv-pane-progress {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
+
+.jump-latest {
+  position: absolute;
+  left: 50%;
+  bottom: 150px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 13px;
+  transform: translateX(-50%);
+  border-radius: 99px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 560;
+  box-shadow: var(--shadow-md);
+  animation: gv-rise var(--dur-2) var(--ease-spring) both;
+  transition: color var(--dur-1), border-color var(--dur-1), background var(--dur-1);
+}
+
+.jump-latest:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-border);
+}
+
+.jump-latest.has-unseen {
+  background: var(--accent-primary);
+  border-color: transparent;
+  color: #fff;
+}
+
+/* 内联审批卡：唯一需要用户立即行动的元素，给予持续但克制的注意力提示 */
+.request-view {
+  border-left-width: 3px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--status-warning) 6%, var(--surface-2)) 0%,
+    var(--surface-2) 70%
+  );
+  animation: pop-in var(--dur-2) var(--ease-out), gv-attention 2.6s var(--ease-in-out) 0.4s 3;
+}
+
+.request-view.risk-high,
+.request-view.risk-critical {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--status-danger) 7%, var(--surface-2)) 0%,
+    var(--surface-2) 70%
+  );
+}
+
+.option-btn {
+  transition: background var(--dur-1), border-color var(--dur-1), transform var(--dur-1) var(--ease-out);
+}
+
+.option-btn:hover:not(:disabled) {
+  transform: translateX(2px);
+}
+
+/* ============================================================================
+ * 顶部标签页：状态色指示
+ * ========================================================================== */
+
+.tab {
+  position: relative;
+  transition: background var(--dur-1), color var(--dur-1);
+}
+
+.tab::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: transparent;
+  transition: background var(--dur-2);
+}
+
+.tab.is-active::after {
+  background: var(--accent-primary);
+}
+
+/* 标签使用同一条底线表示焦点和运行状态。状态规则放在选中样式之后，以便待审或错误仍能被看见。 */
+.tab[data-tab-state='waiting_approval']::after {
+  background: var(--status-warning);
+}
+
+.tab[data-tab-state='error']::after {
+  background: var(--status-danger);
+}
+
+.tab[data-tab-state='streaming']::after {
+  background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: gv-pane-progress 1.6s var(--ease-in-out) infinite;
+}
+
+.tab-alert-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 99px;
+  background: var(--status-warning);
+  color: #1a1206;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+ * Inspector：计数语义色、变更总览、失败命令高亮
+ * ========================================================================== */
+
+.tab-count.tone-danger {
+  background: var(--status-danger);
+  color: #fff;
+}
+
+.tab-count.tone-muted {
+  background: var(--active);
+  color: var(--text-secondary);
+}
+
+.inspector-tab {
+  transition: color var(--dur-1), background var(--dur-1);
+}
+
+.inspector-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.inspector-summary > svg {
+  color: var(--tool-edit);
+}
+
+.inspector-summary-bar {
+  display: flex;
+  flex: 1;
+  height: 5px;
+  margin-left: 6px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--active);
+}
+
+.inspector-summary-bar .is-add {
+  background: var(--status-success);
+}
+
+.inspector-summary-bar .is-del {
+  background: var(--status-danger);
+}
+
+.term {
+  transition: border-color var(--dur-1);
+}
+
+.term.is-failed {
+  border-color: var(--danger-border);
+  box-shadow: inset 3px 0 0 var(--status-danger);
+}
+
+.term.is-failed .term-prompt {
+  color: var(--status-danger);
+}
+
+.file-row {
+  transition: background var(--dur-1);
+}
+
+/* ============================================================================
+ * 卡片与通用控件微交互
+ * ========================================================================== */
+
+.card {
+  transition: border-color var(--dur-2);
+}
+
+.card:hover {
+  border-color: var(--border-strong);
+}
+
+.btn,
+.icon-btn,
+.segmented-btn,
+.mode-pill,
+.select-chip {
+  transition:
+    background var(--dur-1),
+    border-color var(--dur-1),
+    color var(--dur-1),
+    transform var(--dur-1) var(--ease-out);
+}
+
+.btn:active:not(:disabled),
+.icon-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.popover {
+  animation: pop-in var(--dur-1) var(--ease-out);
+}
+
+.thread-item {
+  transition: background var(--dur-1), color var(--dur-1);
+}
+
+.thread-item.is-selected {
+  box-shadow: inset 2px 0 0 var(--accent-primary);
+}
+
+/* 侧栏：运行 / 待审批的会话标题着色，便于在长列表中定位 */
+.thread-item:has(.status-dot.is-waiting_approval) .thread-title {
+  color: var(--status-warning);
+}
+
+.thread-item:has(.status-dot.is-error) .thread-title {
+  color: var(--status-danger);
+}
+
+.thread-item:has(.status-dot.is-streaming) .thread-title {
+  color: var(--text-primary);
+}
+
+/* ============================================================================
+ * 窄窗格（分屏 / 四宫格）：优先保留标题与状态，次要信息收起
+ * ========================================================================== */
+
+.pane-title {
+  min-width: 72px;
+  flex: 0 1 auto;
+}
+
+.pane-header .pane-switch,
+.pane-header .pane-status-chip,
+.pane-header [data-testid^='swarm-active-pill-'] {
+  flex-shrink: 0;
+}
+
+.pane-header .pane-switch {
+  min-width: 72px;
+}
+
+/* 分屏变窄时先隐藏耗时、文件预览等辅助内容，将宽度留给状态标识和会话选择器。 */
+@container pane (max-width: 720px) {
+  .pane .pane-switch {
+    max-width: 96px;
+  }
+  .pane [data-testid^='swarm-active-pill-'] span {
+    display: none;
+  }
+  .pane .pane-status-time {
+    display: none;
+  }
+  .pane .outcome-file,
+  .pane .outcome-more {
+    display: none;
+  }
+  .pane .tool-group-preview {
+    display: none;
+  }
+}
+
+@container pane (max-width: 460px) {
+  .pane .pane-switch {
+    max-width: 84px;
+    min-width: 56px;
+  }
+  .pane .turn-outcome .tone-muted {
+    display: none;
+  }
+}
+
+/* 内联审批卡片选项双栏说明优化 */
+.request-view .option-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.request-view .option-primary {
+  font-weight: 550;
+  flex-shrink: 0;
+}
+
+.request-view .option-desc {
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container pane (max-width: 620px) {
+  .request-view .option-desc {
+    display: none;
+  }
+}
+
+/* ============================================================================
+ * 无障碍：减少动效
+ * ========================================================================== */
+
+/* 系统要求减少动效时，同时缩短元素与伪元素的动画和过渡，结束后仍显示相应状态样式。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
