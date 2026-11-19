@@ -1,0 +1,150 @@
+name: Release Gravity (Windows & macOS)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (defaults to current ref, e.g. v0.2.0)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows x64 Portable
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck, test, and build
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Package Windows portable executable
+        run: npx electron-builder --win portable --publish never
+
+      - name: Verify Windows artifact
+        shell: pwsh
+        run: |
+          Get-Item release\Gravity.exe | Select-Object Name, Length
+          (Get-FileHash release\Gravity.exe -Algorithm SHA256).Hash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: release/Gravity.exe
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS (Apple Silicon & Intel)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck, test, and build
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Package macOS arm64 & x64 (DMG + ZIP)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json','utf8')); delete p.build.electronDist; fs.writeFileSync('package.json', JSON.stringify(p, null, 2));"
+          npx electron-builder --mac dmg zip --arm64 --x64 --publish never
+
+      - name: Verify macOS artifacts
+        run: |
+          ls -lh release/*.dmg release/*.zip
+          shasum -a 256 release/*.dmg release/*.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        working-directory: release-artifacts
+        run: |
+          sha256sum Gravity.exe Gravity-*-mac-*.dmg Gravity-*-mac-*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag || github.ref_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          cat <<EOF > release-notes.md
+          ## Gravity ${TAG_NAME}（Windows x64 & macOS Apple Silicon / Intel）
+
+          面向 Google Antigravity (\`agy\`) 的本地桌面智能编码工作台——100% 遵循官方公开 \`agy acp\` 协议，零私密接口、零凭据触碰、零账号轮换。
+
+          ### 下载选择
+          - **Windows 10 / 11 (x64)**：\`Gravity.exe\`（单文件便携版，双击即用）
+          - **macOS Apple Silicon (M1 / M2 / M3 / M4)**：\`Gravity-${VERSION}-mac-arm64.dmg\`（或 \`.zip\`）
+          - **macOS Intel (x64)**：\`Gravity-${VERSION}-mac-x64.dmg\`（或 \`.zip\`）
+
+          > **首次启动提示（开源未签名包）**
+          > - **Windows**：若 SmartScreen 弹窗拦截，点击「更多信息」→「仍要运行」。
+          > - **macOS**：首次打开若提示“已损坏”或“无法验证开发者”，拖入「应用程序」后在终端执行一次：\`xattr -cr /Applications/Gravity.app\` 即可正常打开。
+          > - **前置条件**：请先在本机安装并登录官方原版 \`agy\` CLI（终端运行 \`agy --version\` 正常可用）。
+
+          ### 本版亮点
+          - **Claude Code Studio 全新布局**：48px 常驻极窄活动栏 + 可调宽会话抽屉 + 单/双栏主舞台（统一左侧柔砂竖胶囊与表面景深焦点指示）+ 可停靠/悬浮右侧检视器。
+          - **右下角独立色系额度条 & Bento 弹层**：移除 \`ctx\` 左侧重复入口，右下角以钴蓝渐变进度条 + 百分比展示（与上下文绿色区分），配玻璃拟态 Bento 额度详情卡片（Windows 支持自动读取；macOS 请在终端通过 \`agy\` 查看）。
+          - **实时 TPS vs 会话平均 TPS & 缓存命中率**：输入框底栏展示实时滑窗 \`tok/s\`；Context 检视器展示当前会话平均速率与平均缓存命中率。
+          - **内置 \`Hydrogen (medium)\` 按需标题整理**：仅用户主动点击时执行，支持「全部整理（跳过已整理）/ 项目单独整理 / 单会话整理」，实时提示所用模型，三者共享 1 分钟最多 4 次冷却。
+          - **中文思考平滑显影动效 + 正文图片一键复制**：优化英文思考转为中文时的渐进显影与流光左轨；正文末尾图片支持悬浮按钮、大图工具栏、\`Ctrl+C / Cmd+C\` 与右键菜单复制到系统剪贴板。
+
+          ### SHA-256 校验值
+          \`\`\`text
+          $(cat release-artifacts/SHA256SUMS.txt)
+          \`\`\`
+          EOF
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release edit "${TAG_NAME}" --title "Gravity ${TAG_NAME}" --notes-file release-notes.md
+            gh release upload "${TAG_NAME}" release-artifacts/* --clobber
+          else
+            gh release create "${TAG_NAME}" release-artifacts/* --title "Gravity ${TAG_NAME}" --notes-file release-notes.md
+          fi

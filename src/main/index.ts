@@ -44,9 +44,14 @@ async function launchLogin(binary: string, args = ['acp', '--login']): Promise<v
     // 登录按钮明确打开可见的官方终端；参数为固定字面量，路径使用 PowerShell 单引号转义。
     const quotedArgs = args.map(arg => `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`).join(' ');
     const command = `$p = Start-Process -FilePath '${binary.replace(/'/g, "''")}' -ArgumentList '${quotedArgs.replace(/'/g, "''")}' -WindowStyle Normal -PassThru; $p.WaitForExit(); exit $p.ExitCode`;
+    const posixShellQuote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+    const macLoginCmd = [binary, ...args].map(posixShellQuote).join(' ');
+    const appleScript = `tell application "Terminal"\nactivate\nset w to do script "${macLoginCmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"\nrepeat while busy of w\ndelay 0.5\nend repeat\nend tell`;
     loginProcess = process.platform === 'win32'
       ? spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true, shell: false, stdio: 'ignore' })
-      : spawn(binary, args, { stdio: 'inherit', shell: false });
+      : process.platform === 'darwin'
+        ? spawn('osascript', ['-e', appleScript], { shell: false, stdio: 'ignore' })
+        : spawn(binary, args, { stdio: 'inherit', shell: false });
     loginProcess.once('error', () => { loginProcess = undefined; reject(new Error('无法打开官方登录终端')); });
     loginProcess.once('close', code => { loginProcess = undefined; code === 0 ? resolve() : reject(new Error('官方登录取消或未成功完成')); });
   });
@@ -61,7 +66,10 @@ async function createWindow(): Promise<void> {
   service = new CoreService({
     dataDir: app.getPath('userData'),
     acpOptions: { binaryPath: process.env.AGY_BINARY_PATH, loginLauncher: launchLogin },
-    setIcon: id => { window?.setIcon(iconPath(id)); },
+    setIcon: id => {
+      if (process.platform === 'darwin') app.dock?.setIcon(iconPath(id));
+      else window?.setIcon(iconPath(id));
+    },
     setZoom: factor => { window?.webContents.setZoomFactor(clampUiScale(factor)); },
     openTargetHandler: async (resolvedTarget, mode, isDir) => {
       if (mode === 'copy') {
@@ -101,7 +109,12 @@ async function createWindow(): Promise<void> {
     width, height, minWidth: 960, minHeight: 640, title: 'Gravity', backgroundColor: '#171513', icon: iconPath(preferences.appIcon),
     webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
   });
-  Menu.setApplicationMenu(null);
+  if (process.platform === 'darwin') {
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
+    app.dock?.setIcon(iconPath(preferences.appIcon));
+  } else {
+    Menu.setApplicationMenu(null);
+  }
   // 缩放倍率由偏好决定。页面每次加载完成后重新写入，避免导航重置 zoomFactor。
   window.webContents.on('did-finish-load', () => { window?.webContents.setZoomFactor(clampUiScale(service?.getPreferences().uiScale)); });
   // 同时拦截弹窗和当前页导航，让点击消息中的链接时工作台仍停留在原页面。

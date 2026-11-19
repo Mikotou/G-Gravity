@@ -1,8 +1,8 @@
 # G-Gravity 整体验收记录
 
-## 本机 Windows 版 v0.2.0
+## 已发布的 Windows / macOS 版 v0.2.0
 
-2026-11-19，Windows x64。产品名为 Gravity。便携版位于 `release/v0.2.0/Gravity.exe`，大小为 121,394,971 字节，SHA-256 为 `028E880E761231F4373FD382FCBAFCC2A5C6D3809A2A45A57D0ACF55AFD38F91`。源码压缩包位于 `release/v0.2.0/G-Gravity-v0.2.0-source.zip`（对应本地 `v0.2.0` 分支，未推送 GitHub）。
+2026-11-19，Windows x64 & macOS (Apple Silicon `arm64` / Intel `x64`)。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.0/Gravity.exe`，大小为 121,521,923 字节，SHA-256 为 `D986DF2340F3B794265561BB512D14C14632641DA080AFB92D8B97B969FF6CC3`。源码压缩包位于 `release/v0.2.0/G-Gravity-v0.2.0-source.zip`（对应 `main` 分支与 `v0.2.0` 标签，并由 GitHub Actions `.github/workflows/release.yml` 自动产出 Windows + macOS `arm64`/`x64` `.dmg`/`.zip` Release）。
 
 | 项目 | 验证结果 |
 | --- | --- |
@@ -11,6 +11,7 @@
 | 内置 Hydrogen (medium) 标题整理与共享冷却 | 取消自动分类整理，仅在用户主动点击时执行；通过官方 `agy acp` 临时只读会话切换 `gemini-4-hydrogen` + `thought_level=medium` 并实时在侧栏状态条与轻提示中告知当前使用的内置模型；「全部整理」自动跳过先前已整理的会话（`titleOrganizedAt` 持久化于 `titles.json`），同时为每个 Project 分组和每条 Session 增加单独整理按钮，三类按钮共享 1 分钟最多 4 次滑动窗口冷却限制。 |
 | 中文思考显影动效 | `useFluidStreamText` 的 `morph` 模式改为按最长公共前缀渐进推进，解决英文思考被更短中文译文替换时一帧闪切的问题；`ThinkingBlock` 外层在翻译/切换轨道时叠加柔和流光左轨与 260ms 模糊淡入，且不改变段落 DOM 节点与行距指标（`test:layout` 段距保持 `0/5/5px` 零抖动）。 |
 | 正文图片复制与分屏焦点美化 | `openLinkOrFileTarget` 新增 `copy-image` 动作（主进程通过 `nativeImage` + `clipboard.writeImage` 写入系统位图剪贴板，继续经敏感凭据路径拦截）；正文末尾图片支持缩略图悬浮复制按钮、大图工具栏复制 + `Ctrl+C` 快捷键以及右键菜单「复制图片」。双栏模式去除标题间生硬的整条横线，改为与活动栏/侧栏统一的「标题左侧 3px 柔砂竖胶囊 + 前景/退后表面景深 + 非聚焦输入区柔和退隐」，不影响 `streaming` 流光接缝动画。 |
+| macOS 适配与发布流水线 | 新增 1024×1024 macOS 原创图标 `assets/icons/gravity-claude-dark-mac.png`、`package.json` macOS `dmg/zip` 配置、`acp-client.ts` 非 Windows 常见目录只读检索、`index.ts` macOS 菜单栏（保留 `Cmd+C/V/A/Z`）+ Dock 图标 + Terminal 登录拉起、`approval-engine.ts` 跨平台路径边界兼容，以及 `.github/workflows/release.yml` 自动双平台构建发布流水线；重写 `README.md` 完整覆盖反代/CLI 对比、合规防封号、并发限制、内置插件与双平台使用注意事项。 |
 | 回归与打包 | 四组 TypeScript 类型检查（shared / main / renderer / tests）0 错误；35 个测试文件共 369 项自动化测试全部通过（1 项联机 smoke 跳过，含新增 `v020-features.test.ts` 与 `v020-ui.test.tsx`）；Playwright 实拍深浅主题与填充态额度弹层/图片复制/双栏聚焦 6 组界面 0 报错；生产构建、`test:layout`、以及 `test:desktop` 目录版 + 便携版双启动冒烟均通过。打包目录 96 个运行产物文件与 `dist/` 逐一校验一致。 |
 
 ## 本机 Windows 版 v0.1.6

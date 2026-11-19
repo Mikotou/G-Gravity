@@ -21,7 +21,8 @@
     "test:layout": "node tests/desktop-layout-smoke.cjs",
     "test:desktop": "node tests/windows-package-smoke.cjs",
     "test:watch": "vitest",
-    "dist:exe": "npm run build && electron-builder --win portable dir"
+    "dist:exe": "npm run build && electron-builder --win portable dir",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip"
   },
   "build": {
     "appId": "com.gravity.desktop",
@@ -49,6 +50,19 @@
     },
     "portable": {
       "artifactName": "Gravity.exe"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icons/gravity-claude-dark-mac.png",
+      "identity": null,
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "Gravity-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "Gravity ${version}"
     }
   },
   "dependencies": {

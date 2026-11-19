@@ -1,156 +1,264 @@
 <div align="center">
 
-<img src="./assets/icons/gravity-claude-dark.svg" width="84" height="84" alt="Gravity Logo" />
+<img src="./assets/icons/gravity-claude-dark.svg" width="88" height="88" alt="Gravity Logo" />
 
 # G-Gravity
 
-**面向 Google Antigravity (`agy`) 的本地桌面智能编码工作台**
+**面向 Google Antigravity (`agy`) 的本地桌面智能编码工作台（Windows & macOS）**
 
-融合 Claude Code 与 Codex Desktop 的三栏工程交互 · 零额度本地离线思考汉化 · 100% 遵循官方公开协议
+Claude Code Studio 桌面交互 · 零额度本地离线思考汉化 · 100% 遵循官方公开 `agy acp` 协议
 
-[**⬇️ 下载 Windows 便携版**](https://github.com/Mikotou/G-Gravity/releases) · [快速上手](#quick-start) · [界面一览](#layout) · [核心亮点](#features) · [快捷键速查](#shortcuts) · [账号安全](#security)
+[**⬇️ 下载 Windows / macOS 发行版**](https://github.com/Mikotou/G-Gravity/releases) · [与反代及 CLI 区别](#comparison) · [为什么不会封号](#compliance) · [为什么限制并发](#concurrency) · [内置插件说明](#builtin-plugins) · [使用注意事项](#precautions) · [快速上手](#quick-start)
 
 </div>
 
 ---
 
-## 👋 它是什么？
+## 👋 一、它是什么？
 
-如果你正在使用官方 `agy` 命令行工具写代码，但希望拥有**更直观的可视化界面、清晰的代码改动对比（Diff）以及顺手的中文阅读体验**，**Gravity**（源码仓库名 `G-Gravity`）就是为你准备的桌面客户端：
+如果你正在使用官方 `agy` 命令行工具进行 AI 辅助编码，但希望获得**更清爽的可视化界面、红绿行级代码 Diff、零额度离线中文思考阅读、以及可控的内联权限审批体验**，**Gravity**（仓库名 `G-Gravity`）就是为此打造的本地桌面工作台：
 
-- **即插即用**：直接连接本机已安装的官方原版 `agy` CLI，无需配置第三方中转或代理。
-- **清爽好读**：模型的英文思考过程自动翻译为中文（支持「中文 / 原文」一键切换），繁杂的文件读写与终端命令自动收纳进每回合的「操作记录」。
-- **安心合规**：底层 100% 仅通过官方公开的 `agy acp` 标准协议通信，**不读取任何私有账号凭据、不修改官方目录、不自动轮换切号**。
+- **跨平台桌面端**：支持 **Windows 10/11 (x64)** 单文件便携版，以及 **macOS (Apple Silicon `arm64` & Intel `x64`)** `.dmg` / `.zip` 安装包。
+- **即插即用、零中转**：直接连接你本机已安装并登录的官方原版 `agy` CLI，**不需要任何第三方反代、代理池或外泄账号 Token**。
+- **安心合规**：底层 100% 仅通过官方公开标准协议 **`agy acp`（Agent Client Protocol，JSON-RPC 2.0 over `stdio`）** 通信，所有核心合规边界由自动化测试套件长期守卫。
 
-> 📌 **说明**：本仓库为桌面端独立源码项目 `G-Gravity`，打包后的应用程序、窗口标题与任务栏名称均为 **Gravity**，用户配置与本地会话默认保存在 `%APPDATA%\Gravity`。
+> 📌 **命名与数据目录说明**：源码仓库名为 `G-Gravity`，打包后的应用与窗口名称均为 **Gravity**。客户端自身设置与会话记录独立保存在本地应用数据目录（Windows：`%APPDATA%\Gravity`；macOS：`~/Library/Application Support/Gravity`），**绝不修改官方 `~/.gemini` 目录**。
+
+---
+
+<a id="comparison"></a>
+
+## ⚖️ 二、Gravity 与「第三方反代」及「原生 CLI」有什么区别？
+
+很多用户容易把桌面客户端与市面上的“反代 / 中转站 / 号池工具”混淆，下面从协议、安全与体验三个维度做清晰对比：
+
+| 对比维度 | 第三方反代 / 号池工具 | 原生 `agy` CLI | **Gravity（本项目）** |
+| :--- | :--- | :--- | :--- |
+| **底层通信方式** | 抓包逆向私有内部 API（如 `cloudcode-pa`），伪造客户端请求头 | 官方原版 `agy` 进程直连 Google 服务 | **100% 调用你本机未修改的原版 `agy acp`（标准 `stdio` JSON-RPC）** |
+| **账号凭据处理** | 通常需要提取/导入你的 OAuth Token / Cookie，或上传到中转服务器 | 由官方 CLI 自行管理 | **零触碰任何私有凭据文件**，认证与鉴权 100% 留在官方 `agy` 内部 |
+| **账号封禁风险** | **极高**（违反 Google ToS：私有端点滥用、伪造 UA、多号轮换池化） | 官方原生行为 | **客户端层遵循官方公开协议与并发/冷却守卫，不引入外挂或反代风控因素** |
+| **代码与对话隐私** | 请求经过第三方中转服务器，存在泄露风险 | 仅本机直连官方 | **纯本机进程间 `stdio` 通信**，无任何第三方中转服务器 |
+| **交互与可视化** | 依赖外部套壳聊天页，通常缺失本地工作区 Diff / 终端 / 审批联动 | 纯终端文本流，长输出易刷屏、Diff 与多会话切换不够直观 | **Claude Code Studio 桌面工作台**：活动栏 + 项目抽屉 + 单/双分屏 + 可悬浮检视器（Diff / Files / Plan / Terminal / Context / Swarm） |
+| **英文思考汉化** | 无或额外消耗模型额度翻译 | 原样输出英文思考 | **内置离线 Bergamot 模型本地实时英译简中**，零联网、零额度消耗、支持中/原文切换 |
+| **权限审批与安全** | 常见粗暴跳过权限（`--dangerously-skip-permissions`） | 终端逐条确认 | **内联 `1`–`4` 键帽审批卡 + 本地 Shell AST 安全快筛 + 会话前缀记忆 + 审计日志** |
+| **多账号管理** | 自动轮换号池绕过配额（高危违规） | 手动命令行切环境 | 基于官方公开 `--app-data-dir` 物理隔离，**100% 人工手动切号，严禁自动轮换** |
+
+**一句话总结**：
+- **相对反代**：Gravity **不是反代、不是代理、不是号池**，而是官方原版 `agy` CLI 的**本地官方协议可视化外壳**。
+- **相对原生 CLI**：底层完全还是你电脑里的官方 `agy`，但把命令行升级成了更适合复杂工程研发的现代化桌面 IDE 级工作台。
+
+---
+
+<a id="compliance"></a>
+
+## 🛡️ 三、为什么不会违反用户使用规定导致封号？
+
+Gravity 在架构立项阶段就确立了**十大不可逾越的合规红线**（完整技术细则见 [`CLAUDE.md`](./CLAUDE.md)，逐项代码审计报告见 [`docs/compliance/audit-report.md`](./docs/compliance/audit-report.md)），并通过 `tests/security-baseline.test.ts`、`tests/acp-boundaries.test.ts`、`tests/accounts-v02.test.ts`、`tests/history-import-v02.test.ts` 在每次构建前自动校验：
+
+1. **只走官方公开协议，零私有接口**
+   - 仅通过 `agy acp` 公开标准协议通信。源码静态扫描守卫确保全仓库**不包含**任何 `cloudcode-pa.googleapis.com` 等 Google 非公开内部端点 URL。
+2. **零触碰任何私有凭据与认证状态**
+   - `isForbiddenCredentialOrStatePath()` 在路径层硬拦截 `~/.gemini`、`antigravity`、`antigravity-cli` 及隔离目录中的 OAuth Token、`refresh_token`、`access_token`、Cookie、`installation_id`、`*.pbtxt`、`state.vscdb*`、`application_default_credentials.json` 等一切敏感文件——**既不读、也不写、更不导出**。
+3. **不修改官方二进制，不注入越权/伪装参数**
+   - 原样拉起官方 `agy` / `agy.exe`，绝不做二进制补丁或 `NODE_OPTIONS` / `ELECTRON_RUN_AS_NODE` 劫持。
+   - 所有启动参数必须通过 `validateAgyArgs()` 严格白名单放行且固定 `shell: false`，明确禁止 `--dangerously-skip-permissions`、`--override_user_agent_name`、`--cloud_code_endpoint`、`--use_stubby_auth`、`--is_google3_workspace`、`--is_google_internal` 等参数。
+4. **本地官方历史 100% 只读、0 字节写入**
+   - 导入本地 Antigravity 历史仅在只读白名单内读取副本，对官方目录保持 **0 写入、0 新增文件**；点击「在 Gravity 中继续」会通过标准 `agy acp` 新建一个全新会话并附带摘要，绝不篡改原历史。
+5. **多账号严禁自动轮换（Zero Account Rotation）**
+   - 多账号隔离仅使用官方公开参数 `--app-data-dir <isolatedDir>`，登录必须由用户点击按钮在可见官方终端中手动完成 `--login`。
+   - **绝对禁止**在遇到 `429`、`403`、`RESOURCE_EXHAUSTED` 或网络错误时自动切换其他账号绕过配额。
+6. **低噪、克制的附加功能调用**
+   - 思考汉化完全使用随包分发的离线模型在本地线程推理，**不产生任何额外服务端请求**。
+   - 内置 AI 标题整理（`Hydrogen medium`）**不会自动在后台偷跑**，只在你主动点击按钮时才发起一次只读短会话，用毕立即关闭，且受 1 分钟 4 次冷却保护。
+   - Plugins / MCP 管理不在启动时冷刷 CLI，仅在设置页点击刷新或操作时短时运行官方 `agy plugin` / `agy mcp` 子命令，绝不直接覆写 `agy` 内部配置文件。
+7. **Electron 强沙箱隔离**
+   - 渲染窗口严格启用 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`、`webSecurity: true`，主进程校验每个 IPC 请求必须来自主窗口 `mainFrame`，自定义主题色值经正则校验防 CSS `url(...)` 外链注入。
+
+> ⚠️ **客观免责提示**：Gravity 从软件架构上严格遵守官方公开协议与 ToS 边界，不引入任何反代/篡改/轮换类风控因素；但账号的最终安全仍取决于用户自身的使用方式（例如遵守 Google 服务条款、使用合规网络环境、不在短时间内滥用自动化脚本压测配额等）。
+
+---
+
+<a id="concurrency"></a>
+
+## 🚦 四、为什么要限制多并发任务（最多 4 路并发与冷却机制）？
+
+Gravity 在**共享契约层、主进程调度器（`SessionMultiplexer`）与前端界面三端**共同强制约束：
+
+> **单客户端最多同时打开 `4` 个活动会话（`MAX_PARALLEL_ACTIVE_SESSIONS = 4`）**，同时配合限流熔断与标题整理共享冷却。
+
+这样设计并非技术偷懒，而是出于三点非常现实的保护考量：
+
+1. **防止触发官方风控与高频限流（`429 / 403`）**
+   - 单账号如果同时挂起十几个并行 Agent 不断高频收发请求，极易被服务端风控模型判定为非人类自动化压测或异常滥用，轻则触发 `429 RESOURCE_EXHAUSTED` 长时间限流，重则触发账号安全验证甚至封禁。
+   - `4` 路并行刚好覆盖真实开发者的黄金上限（例如：左栏主编码任务 + 右栏代码审查/测试 + 2 个后台查阅或临时问答标签），同时让请求节律始终停留在安全、自然的区间内。
+2. **保护本机资源与工作区文件一致性**
+   - Gravity 默认在单个常驻 `agy acp` 进程内复用多会话，过多活跃上下文会导致内存与文件句柄急剧膨胀；同时并发打开过多 Agent 写入同一个项目目录，极易互相覆盖代码修改或触发 Git 锁冲突。
+3. **配合服务端退避熔断，杜绝死循环重试**
+   - **全局 `429 / 403` 熔断**：一旦官方返回 `429 / RESOURCE_EXHAUSTED`，本地通道立即熔断冷却至少 **60 秒**；返回 `403 / PERMISSION_DENIED` 则冷却至少 **300 秒**，冷却期内在写管道前直接本地拦截，绝不死循环重试激怒风控。
+   - **AI 标题整理共享冷却**：顶部「全部整理」、单个 Project 整理、单个会话整理三个入口共享 **1 分钟内最多 4 次**的滑动窗口冷却，避免误连点造成短时突发请求。
+
+> 💡 **小贴士**：达到 4 个活动标签上限时，关闭不需要的标签页**只会释放活动连接槽位，绝不会删除对话记录**——你随时可以从左侧会话抽屉一键点开恢复继续聊。
+
+---
+
+<a id="builtin-plugins"></a>
+
+## 🧩 五、当前内置插件与核心内置能力说明
+
+在「设置 → **Plugins**」中，Gravity 内置了两项标注为 **`Built-in`** 的原生核心能力，并与官方 Plugins / MCP / Skills 管理器及工作台引擎无缝协同：
+
+### 1. `Approve for me`（Built-in · 零冷启动内联权限安全审查引擎）
+当智能体请求执行 Shell 命令、修改敏感路径或调用高风险工具时，对话流内直接弹出 Claude Code 风格审批卡，无需拉起外部子进程即可毫秒级完成审查：
+- **三档安全模式一键切换**（输入框左下角即可热切）：
+  - **`AI 代审（hybrid）`**：先走本地多段 Shell AST 词法安全快筛，低风险只读检索自动放行，复杂或高危命令可按需交由你配置的独立模型复审，无法确信一律转交人工。
+  - **`仅快筛（rules-only）`**：纯本地规则与词法分析，零额外模型调用，匹配安全白名单放行、命中询问/拒绝规则拦截。
+  - **`纯人工（manual）`**：所有敏感操作均弹出内联卡片，由你按键盘数字 **`1` ~ `4`** 亲自决定。
+- **多段 Shell 词法快筛 + 会话前缀记住**：自动拆解 `&&`、`||`、`;`、`|` 复合命令，精准识别纯只读检查（如 `git status`、`rg`、`ls`），拦截 `rm -rf`、提权、覆写敏感目录、危险管道执行等高危操作；支持按 `2` 记住安全命令前缀，按 `4` 拒绝并附带调整指令。
+- **可选独立模型复审（密钥零落盘）**：支持在设置页配置你自己的公开 API（Gemini API / OpenAI 兼容接口 / 本机 `127.0.0.1` Ollama）辅助复审高风险命令，**API Key 仅驻留内存，绝不写入磁盘**。
+- **自定义正则规则与完整审计日志**：支持自由增删 `Allow / Ask / Deny` 正则规则，每条自动放行、人工确认或拦截记录均写入审计日志可随时溯源。
+
+### 2. `Context & Cost Inspector`（Built-in · 上下文与费用实时分析看板）
+常驻右侧检视器 `Context` 页签，与输入框底栏状态条实时联动：
+- **实时 Context 压缩窗口监控**：精确按模型区分实际压缩触发阈值（如 Carbon / Hydrogen / Orchestrator 的 `512k` 窗口与其他模型的 `256k` 窗口），直观展示 System / User / Assistant / Thinking / Tools / Attachments 六类 Token 占比，并自动记录每次手动 `/compact` 与服务端自动压缩前后的 Token 节省量。
+- **实时速率 vs 会话平均指标**：
+  - **输入框底栏**：展示当前滑动时间窗的 **实时输出速率（`tok/s`）**；
+  - **Context 检视器**：展示当前会话累计加权的 **会话平均速率（Avg `tok/s`）** 与 **平均缓存命中率（`Cached / (Input + Cached)`）**，并跨重启持久化。
+- **三档 Token 热力图与四维参考费用**：提供 `24h`（按小时柱图）、`7d`（7×24 天×小时矩阵）、`30d`（按天日历热力格）三档统计；按 `本会话 / 今日 / 7d / 30d` 四维度拆分 `Input / Cached / Output / Thinking` 四项参考费用与分模型环形占比图，支持在设置页自由编辑各模型参考单价卡（固定标注“参考 API 价格估算，非实际账单”）。
+
+### 3. 官方 `Plugins / MCP Servers / Skills` 统一管理器
+- **官方 Plugins 管理**：在设置页点击刷新后，通过官方 `agy plugin list --json / install / uninstall / enable / disable` 子命令（`shell: false` + 参数安全校验）管理官方插件，不直接修改 `agy` 内部文件。
+- **官方 MCP Servers 管理**：可视化查看 `stdio` / `http` 类型 MCP 服务状态，支持通过官方 `agy mcp add / remove / enable / disable` 增删与启停，并自动脱敏命令回显中的敏感凭证字段。
+- **Skills 只读发现与本地开关**：自动只读扫描当前工作区 `.agents/skills`、全局与插件目录中的 `SKILL.md`（防符号链接穿越与敏感路径拦截），在客户端本地记录启用偏好。
+
+### 4. 其他工作台内置引擎
+- **零额度本地离线思考汉化（Bergamot Engine）**：随包分发 Mozilla 英译简中模型，流式按句界分段在本地线程实时翻译英文思考过程，保护代码块、命令与文件路径不被误翻，支持「中文 / 原文」一键切换、平滑中文显影动效与折叠记忆。
+- **按需内置 AI 标题整理（`Hydrogen medium`）**：仅在用户主动点击时通过官方 `agy acp` 临时只读会话调用内置 `Hydrogen (medium)` 整理为 `分类｜核心主题`；顶部「全部整理」自动跳过先前已整理的会话，每个 Project 分组与每条会话也均配有独立整理按钮，三者共享 1 分钟最多 4 次冷却，整理过程实时提示当前所用模型。
+- **Swarm 多智能体态势看板**：被动监听主会话中的 `swarm` / `invoke_subagent` / `send_message` 工具流，实时展示成员状态、任务分工、消息板与动作时间线。
 
 ---
 
 <a id="layout"></a>
 
-## 🖥️ 界面布局一览
+## 🖥️ 六、界面布局与核心亮点（v0.2.0 Claude Code Studio）
 
-Gravity 采用 **Claude Code Studio 桌面工作台**架构：**48px 常驻极窄活动栏 + 可展开/调宽的会话抽屉 + 居中对话主舞台（单/双栏）+ 可停靠/悬浮切换的右侧检视器**。**抽屉宽度、检视器宽度、双栏比例与输入框高度均支持拖拽调整**（双击分隔条复位），高分辨率屏幕可用 `Ctrl + =` / `Ctrl + -` 整体缩放：
+Gravity 采用 **Claude Code Studio** 桌面工作台架构：**48px 常驻极窄活动栏 + 可展开/调宽会话抽屉 + 居中对话主舞台（单/双栏）+ 可停靠/悬浮切换的右侧检视器**。抽屉宽度、检视器宽度、双栏比例与输入框高度全部支持拖拽调整（双击分隔条复位），高分辨率屏幕支持 `Ctrl/Cmd + =` / `-` / `0` 整体缩放：
 
-| 🧭 活动栏 + 📁 会话抽屉 (`Ctrl+B`) | 💬 中栏 · 对话主舞台 (`Ctrl+\`) | 🔍 右栏 · 停靠/悬浮检视器 (`Ctrl+J`) |
+| 🧭 活动栏 + 📁 会话抽屉 (`Ctrl/Cmd+B`) | 💬 中栏 · 对话主舞台 (`Ctrl/Cmd+\`) | 🔍 右栏 · 停靠/悬浮检视器 (`Ctrl/Cmd+J`) |
 | :--- | :--- | :--- |
-| • 48px 极窄常驻活动栏：一键新建、抽屉开关、项目/插件、账号与设置入口<br>• 会话抽屉按项目文件夹分组、搜索快速清空、置顶<br>• **按需 AI 整理标题**（内置 `Hydrogen medium`，支持全部/项目/单会话，全部整理跳过已整理，共享 1 分钟 4 次冷却）<br>• **纯只读**导入官方历史对话并一键续聊 | • 支持 **单栏 / 左右双栏**（最多 4 路并发），聚焦窗格以标题左侧竖胶囊与表面明暗景深柔和区分，从抽屉或标签拖入窗格即可换入会话<br>• 思考区支持 **「中文 / 原文」** 实时离线对照与平滑中文显影动效<br>• 读写与命令自动归入每轮 **「操作记录」**（折叠态带语义色微点）<br>• 已发消息悬停点 `✏️` **编辑并新建分支重发**<br>• 正文末尾图片支持悬停/大图/`Ctrl+C`/右键**一键复制图片到剪贴板**<br>• 底部显示**实时 `tok/s`**，右下角以**独立色系进度条 + 百分比**显示 **Gemini 周额度**与重设计的 Bento 额度卡片 | • 支持 **停靠 / 悬浮（Docked / Floating）** 一键切换与自由拖宽<br>• **Changes**：红绿行级 Diff 与变更文件清单二级视图<br>• **Plan**：任务拆解与 Todo 进度<br>• **Terminal**：命令输出（查看后自动清除未读标记）<br>• **Context**：上下文构成、**会话平均 TPS**、**平均缓存命中率**、Token 热力图与参考费用<br>• **Swarm**：多智能体协作拓扑看板 |
+| • 48px 极窄常驻活动栏：品牌入口、一键新建、抽屉开关、项目/插件、账号与设置<br>• 会话抽屉按项目分组、支持药丸搜索清空、置顶、归档与永久删除<br>• **按需 `Hydrogen (medium)` 整理标题**（全部 / 单项目 / 单会话，共享冷却）<br>• **纯只读**导入官方历史对话并一键续聊 | • 支持 **单栏 / 左右双栏**（最多 4 路并发），聚焦窗格以标题左侧 3px 柔砂竖胶囊与表面景深柔和区分，支持从抽屉或标签拖拽换入<br>• 思考区支持 **「中文 / 原文」** 实时离线对照与平滑中文显影动效<br>• 文件读写与终端命令自动聚合为每轮 **「操作记录」**（折叠态带语义色微点）<br>• 已发消息悬停点 `✏️` 或空输入框按 `↑` **编辑并新建分支重发**<br>• 划词支持多条 **Quote 引用** 与 **Notation 逐处批注** 打包发送<br>• 正文末尾图片支持点击原图预览，以及悬停/大图/`Ctrl/Cmd+C`/右键**一键复制图片**<br>• 底部显示**实时 `tok/s`**，右下角以**独立钴蓝进度条 + 百分比**显示 **Gemini 周额度**与 Bento 额度卡片 | • 支持 **停靠 / 悬浮（Docked / Floating）** 一键切换与自由拖宽<br>• **Changes**：红绿行级 Diff 与变更文件清单二级视图<br>• **Plan**：任务拆解与 Todo 实时进度<br>• **Terminal**：命令完整输出（查看后自动清除未读红点）<br>• **Context**：上下文构成、**会话平均 TPS**、**平均缓存命中率**、Token 热力图与参考费用<br>• **Swarm**：多智能体协作拓扑看板 |
 
-**⌨️ 底部多功能输入框（Composer）**：上方常驻显示当前上下文窗口占用率、`tok/s` 生成速率与一键 `/compact` 压缩入口；输入框内支持 `/` 快捷指令、`@` 搜索引用项目文件或会话、直接粘贴截图 / 拖拽附件，以及快速切换模型、推理强度与执行模式。
-
----
-
-<a id="quick-start"></a>
-
-## 🚀 3 步快速上手
-
-### 方式一：直接下载使用（推荐普通用户）
-
-无需安装 Node.js 或编译源码，开箱即用：
-
-1. **确认官方 CLI 可用**：确保电脑已安装官方 `agy` 工具并完成登录（在终端运行 `agy --version` 能正常输出版本号即可）。
-2. **下载便携版程序**：前往 [**GitHub Releases 发布页**](https://github.com/Mikotou/G-Gravity/releases) 下载单文件便携版 **`Gravity.exe`**，双击即可直接启动。
-3. **新建对话开始编码**：按下 `Ctrl + N`，选择你的代码文件夹，即可开始对话！
-
-<details>
-<summary>💡 <b>提示找不到 <code>agy</code> 命令？点击查看指定路径启动方法</b></summary>
-
-如果你的 `agy.exe` 没有加入系统环境变量 `PATH`（例如安装在 `D:\agy cli\agy.exe`），可以在 PowerShell 中指定路径后启动客户端：
-
-```powershell
-$env:AGY_BINARY_PATH = "D:\agy cli\agy.exe"
-.\Gravity.exe
-```
-
-</details>
-
-### 方式二：从源码运行与打包（适合开发者）
-
-详见文末 [**🛠️ 开发者指南**](#dev-guide)。
-
----
-
-<a id="features"></a>
-
-## ✨ 核心亮点
-
-### 1. 🧠 零额度本地离线思考汉化
-- **本机离线实时翻译**：内置随包分发的 Mozilla (Bergamot) 英译简中模型，模型的英文推理（`Thinking`）在本地流式分段翻译为中文，**无需联网、0 账号额度消耗**，并自动保护代码块、命令与文件路径不被误翻。
-- **双轨对照与记忆折叠**：支持随时一键切换 **「中文 / 原文」**；思考块默认展开，手动收起一次后，当前与后续新增片段都会自动保持收起（后台仍继续完成翻译）。
-
-### 2. 💬 清爽不刷屏的对话与改码体验
-- **每轮「操作记录」自动聚合**：助手执行的文件读取、搜索、编辑与终端命令统一收纳在当轮操作记录中，长命令与长输出按需展开，告别满屏日志刷屏。
-- **消息编辑与分支重发**：鼠标移到自己发过的消息上点击 **✏️ 铅笔图标**，即可修改内容并从该处拉出新分支重新发送，原对话记录依然完整保留可随时切回查看。
-- **划词引用、逐处批注与多模态输入**：选中回复中的任意片段即可添加多条 **Quote 引用** 或定位到具体消息的 **Notation 逐处标记批注** 汇总提问；聊天中的本地图片支持点击放大查看原图（按 `Esc` 关闭）。
-
-### 3. 🛡️ 内联权限审批（`Approve for me`）
-- 当助手请求执行命令或修改敏感内容时，对话流内直接弹出审批卡片，按键盘数字 **`1` ~ `4`** 即可快速放行、记住安全命令前缀、交由自动代审或拒绝并补充要求。
-- 内置本地 Shell 词法安全快筛（自动识别纯只读检索命令并拦截高危操作），也支持按需配置你自己的公开 API（Gemini / OpenAI 兼容接口 / 本地 Ollama）辅助复审（API Key 仅驻留内存，绝不落盘）。
-
-### 4. 📊 账户额度查询、Token 热力图与多账号隔离
-- **官方账户额度面板（`Quota`）**：输入框右下方常显 Gemini 每周剩余额度。将鼠标移到该数值或左下角的额度图标，可查看各模型的 5 小时、每周剩余量和重置时间。窗口在前台时自动更新，也支持手动刷新。
-- **Token 热力图与参考费用**：提供 `24h`（按小时）、`7d`（天×小时矩阵）、`30d`（日历热力格）三档统计，并按 `输入 / 缓存命中 / 输出 / 思考` 四维单价表估算分模型参考费用（*注：按公开 API 价格估算，非实际账单，支持自定义单价*）。
-- **多账号物理隔离 + 插件管理**：通过官方 `agy acp --app-data-dir` 参数为不同账号分配独立目录，支持在设置页手动切换 Profile、拉起官方可见终端登录，以及可视化管理官方 `Plugins / MCP / Skills`。
-
-### 5. 🎨 6 套经典主题 + 6 款原创应用图标
-内置 `Claude Code Dark`、`Claude Code Light`、`macOS Dark`、`macOS Light`、`Ubuntu`、`Solarized Dark` 6 套预设主题（支持跟随系统），开放全部 **23 个颜色变量实时取色** 与 JSON 主题导入/导出，并配有 6 款可实时切换的原创 **Gravity** 窗口与任务栏图标：
+内置 **6 套预设主题**（`Claude Code Dark / Light`、`macOS Dark / Light`、`Ubuntu`、`Solarized Dark`，支持跟随系统与 23 色 Token 自定义导入/导出）及 **6 款原创 Gravity 应用图标**（可实时切换窗口与任务栏 / Dock 图标）：
 
 <div align="center">
 
 | Claude Dark | Claude Light | macOS Dark | macOS Light | Ubuntu | Solarized |
 | :---: | :---: | :---: | :---: | :---: | :---: |
-| <img src="./assets/icons/gravity-claude-dark.svg" width="48" alt="Claude Dark" /> | <img src="./assets/icons/gravity-claude-light.svg" width="48" alt="Claude Light" /> | <img src="./assets/icons/gravity-macos-dark.svg" width="48" alt="macOS Dark" /> | <img src="./assets/icons/gravity-macos-light.svg" width="48" alt="macOS Light" /> | <img src="./assets/icons/gravity-ubuntu.svg" width="48" alt="Ubuntu" /> | <img src="./assets/icons/gravity-solarized.svg" width="48" alt="Solarized" /> |
+| <img src="./assets/icons/gravity-claude-dark.svg" width="46" alt="Claude Dark" /> | <img src="./assets/icons/gravity-claude-light.svg" width="46" alt="Claude Light" /> | <img src="./assets/icons/gravity-macos-dark.svg" width="46" alt="macOS Dark" /> | <img src="./assets/icons/gravity-macos-light.svg" width="46" alt="macOS Light" /> | <img src="./assets/icons/gravity-ubuntu.svg" width="46" alt="Ubuntu" /> | <img src="./assets/icons/gravity-solarized.svg" width="46" alt="Solarized" /> |
 
 </div>
 
 ---
 
+<a id="quick-start"></a>
+
+## 🚀 七、3 步快速上手（Windows & macOS）
+
+### 1. 确认官方 `agy` CLI 已安装并登录
+在系统终端中运行：
+```bash
+agy --version
+```
+能够正常输出版本号并已完成官方账号登录即可。
+
+### 2. 下载对应平台的发行版
+前往 [**GitHub Releases 发布页**](https://github.com/Mikotou/G-Gravity/releases) 下载最新安装包：
+
+- **Windows 10 / 11 (x64)**：下载 **`Gravity.exe`**（单文件便携版，无需安装，双击直接运行）。
+- **macOS Apple Silicon（M1 / M2 / M3 / M4）**：下载 **`Gravity-x.y.z-mac-arm64.dmg`**（或 `.zip`），打开后将 **Gravity.app** 拖入「应用程序」文件夹。
+- **macOS Intel（x64）**：下载 **`Gravity-x.y.z-mac-x64.dmg`**（或 `.zip`），拖入「应用程序」文件夹。
+
+### 3. 新建会话开始编码
+启动 Gravity 后按下 `Ctrl + N`（macOS 为 `Cmd + N`），选择你的代码项目目录，即可开始编码对话！
+
+<details>
+<summary>💡 <b>首次启动安全提示与自定义 <code>agy</code> 路径启动方法（Windows / macOS）</b></summary>
+
+#### 首次启动拦截提示（开源未签名应用）
+- **Windows SmartScreen**：点击弹窗中的 **「更多信息」→「仍要运行」**。
+- **macOS Gatekeeper**：因开源项目未使用付费 Apple Developer 证书公证，首次打开若提示“无法验证开发者”或“已损坏”，请在终端运行一次以下命令移除隔离标记，再双击打开：
+  ```bash
+  xattr -cr /Applications/Gravity.app
+  ```
+
+#### 提示找不到 `agy` 命令时手动指定路径
+- **Windows (PowerShell)**：
+  ```powershell
+  $env:AGY_BINARY_PATH = "D:\agy cli\agy.exe"
+  .\Gravity.exe
+  ```
+- **macOS (zsh / bash)**：
+  Gravity 在 macOS 上会自动检索 `PATH` 以及 `/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin` 等常见目录；若安装在自定义位置，可通过终端指定路径启动：
+  ```bash
+  AGY_BINARY_PATH="/path/to/agy" open -a /Applications/Gravity.app
+  ```
+
+</details>
+
+---
+
+<a id="precautions"></a>
+
+## ⚠️ 八、使用上需要注意什么？
+
+为了获得最稳妥、顺手的体验，使用前请留意以下 8 点：
+
+1. **必须先安装并登录官方原版 `agy` CLI**：Gravity 不自带后端账号服务，也绝不代管你的登录凭据。请保持官方 `agy` 处于可用、已登录状态；登录过期时可在「设置 → 账号」中点击拉起官方可见终端重新 `--login`。
+2. **Windows 与 macOS 功能差异提示**：
+   - **官方账户额度自动读取**：目前通过 Windows 官方客户端状态行读取；**macOS 版暂不支持自动轮询额度数值**，macOS 用户请直接在终端运行 `agy` 查看实时额度。
+   - **快捷键修饰键**：下文快捷键中的 `Ctrl` 在 macOS 上对应 `Cmd`（`⌘`）。
+3. **双栏并发避免写冲突**：虽然支持最多 4 路并行会话与左右双栏，但请**尽量避免两个会话在 `accept-edits` / `auto` 模式下同时修改同一个项目目录里的同一批文件**，以免出现写覆盖或 Git 索引锁冲突。
+4. **4 会话上限与标签关闭**：打开第 5 个会话前，先关闭一个闲置标签页即可。关闭标签只会断开该会话的活跃 ACP 槽位，**对话记录、Diff 与终端输出仍完整保存在本地**，随时可从左侧抽屉重新点开恢复。
+5. **合理选择权限模式与审批档位**：探索陌生代码库建议使用 `plan`（只读分析）或 `default` + `AI 代审 / 人工确认`；仅在你信任的隔离工作区中开启 `accept-edits` 或 `auto`。若启用了「外部模型辅助复审」，由于遵循密钥零落盘原则，**重启客户端后需重新填入 API Key**。
+6. **AI 标题整理为按需手动触发**：内置 `Hydrogen (medium)` 标题整理**绝不会自动在后台执行**，只有你点击整理按钮时才会消耗少量官方额度；「全部整理」会跳过曾经整理过的会话，想重新整理特定项目或对话请点击对应 Project / Session 行上的单独整理按钮（三者共享 **1 分钟最多 4 次**冷却）。
+7. **触发 `429 / 403` 时请耐心等待冷却**：遇到官方配额或权限限制时，Gravity 会自动进入 60s / 300s 熔断冷却，这是为了保护账号安全，请勿通过反复重启或切换多号强行绕过限流。
+8. **费用看板仅供参考**：右侧 `Context & Cost` 中的美元金额是根据公开参考单价（或你自定义的费率表）估算的结果，**并非 Google 官方实际账单**。
+
+---
+
 <a id="shortcuts"></a>
 
-## ⌨️ 快捷键与交互速查
+## ⌨️ 九、快捷键与交互速查
+
+> macOS 用户请将下表中的 `Ctrl` 替换为 `Cmd`（`⌘`）。
 
 | 快捷键 / 操作 | 功能说明 |
 | :--- | :--- |
 | `Ctrl + N` | 新建对话（选择项目目录与初始模式） |
-| `Ctrl + B` | 展开 / 收起左侧「项目与会话列表」 |
-| `Ctrl + \` | 循环切换工作区分屏模式（单栏 ↔ 左右双栏） |
-| `Ctrl + J` | 展开 / 收起右侧「检视器面板」（Diff / Terminal / Cost / Swarm 等） |
+| `Ctrl + B` | 展开 / 收起左侧「会话抽屉」 |
+| `Ctrl + \` | 切换工作区分屏模式（单栏 ↔ 左右双栏） |
+| `Ctrl + J` | 展开 / 收起右侧「检视器面板」（支持停靠 / 悬浮切换） |
 | `Ctrl + ,` | 打开 / 关闭全屏设置中心（打开时也可按 `Esc` 关闭） |
 | `Shift + Tab` | 循环切换当前会话执行模式（`default` / `accept-edits` / `plan` / `auto`） |
-| `Ctrl + =` / `Ctrl + -` / `Ctrl + 0` | 放大 / 缩小 / 复原界面缩放（高分辨率屏幕适配，也可在「设置 → 通用」调整） |
-| 生成中按 `Esc` | 中断当前回合（输入框内的草稿保持不变） |
-| 拖动 / 双击分隔条 | 调整侧栏、检视器宽度与双栏比例 / 恢复默认（聚焦后也可用方向键微调） |
-| 数字键 `1` ~ `4` | 权限审批卡片快捷操作（`1` 允许 · `2` 记住安全前缀 · `3` 自动代审 · `4` 拒绝并说明） |
-| 输入框内输入 `/` | 呼出快捷斜杠命令菜单（如 `/compact` 压缩上下文等） |
-| 输入框内输入 `@` | 搜索并引用当前工作区文件或其他会话 |
-
----
-
-<a id="security"></a>
-
-## 🛡️ 账号安全与合规设计
-
-Gravity 在架构层面严格遵守 **Google 服务条款（ToS）**，通过自动化回归测试守卫以下安全边界：
-
-1. **100% 官方标准协议**：仅通过未修改的原版 `agy.exe acp`（JSON-RPC 2.0 over `stdio`）通信，不调用任何非公开内部接口，不篡改官方二进制程序。
-2. **零触碰私有凭据**：严禁读取、复制或解析任何 OAuth Token、Cookie、密钥文件或内部状态库。
-3. **本地历史纯只读**：导入本地 Antigravity 历史对话保持 **0 字节写入**；在客户端内点击「继续对话」会建立全新的标准 ACP 会话，绝不反向改写原文件。
-4. **严禁自动切号轮换**：多账号 Profile 仅支持用户手动切换与官方可见终端 `--login` 登录；遇到 `429 / 403` 限流时自动进入退避冷却，绝不后台轮询多账号绕过配额。
-
-更详细的技术合规边界请参阅：[`CLAUDE.md`](./CLAUDE.md) 与 [`docs/compliance/audit-report.md`](./docs/compliance/audit-report.md)。
+| `Ctrl + =` / `Ctrl + -` / `Ctrl + 0` | 放大 / 缩小 / 复原界面整体缩放（2K / 4K 高分屏适配） |
+| 生成中按 `Esc` | 中断当前回合（保留输入框内未发送草稿） |
+| 空输入框按 `↑` | 快速编辑上一条已发送消息并从该处拉出新分支重发 |
+| 拖动 / 双击分隔条 | 调整抽屉、检视器宽度、双栏比例与输入框高度 / 恢复默认 |
+| 数字键 `1` ~ `4` | 权限审批卡片快捷决策（`1` 允许 · `2` 记住安全前缀 · `3` 自动代审 · `4` 拒绝并说明） |
+| 大图预览中按 `Ctrl + C` | 将当前查看的正文图片直接复制到系统剪贴板 |
+| 输入 `/` 或 `@` | 呼出斜杠命令菜单（如 `/compact`）或引用工作区文件 / 会话 |
 
 ---
 
 <a id="dev-guide"></a>
 
-## 🛠️ 开发者指南
+## 🛠️ 十、开发者指南
 
 ### 环境要求
-- **操作系统**：Windows 10 / 11 (x64)
+- **操作系统**：Windows 10 / 11 (x64) 或 macOS 13+ (Apple Silicon `arm64` / Intel `x64`)
 - **Node.js**：`>= 22`（使用内置 `node:sqlite` 只读解析历史摘要副本）
-- **官方 `agy` CLI**：已安装并加入系统 `PATH`（或通过环境变量 `AGY_BINARY_PATH` 指定 `agy.exe` 绝对路径）
+- **官方 `agy` CLI**：已安装并可在终端运行
 
-### 源码安装、构建与打包
+### 源码安装、验证与打包
 
 ```bash
 # 1. 安装依赖
@@ -159,88 +267,51 @@ npm ci
 # 2. 全量 TypeScript 类型检查（shared + main + renderer + tests）
 npm run typecheck
 
-# 3. 运行自动化测试套件（Vitest，含安全合规边界与 UI 集成测试）
+# 3. 运行全量自动化测试套件（Vitest，含十大合规红线守卫与前后端集成测试）
 npm test
 
 # 4. 构建生产产物（dist/main + dist/renderer）
 npm run build
 
-# 5. 构建并启动桌面客户端
+# 5. 构建并本地启动桌面客户端
 npm start
 
-# 6. 打包 Windows 可执行文件（输出 release/Gravity.exe 便携版与 release/win-unpacked/ 免解压目录版）
+# 6. 打包 Windows 便携版与免解压目录版（在 Windows 上运行）
 npm run dist:exe
 
-# 7. 运行界面布局与 Windows 发行版桌面冒烟测试
+# 7. 打包 macOS Apple Silicon & Intel 安装包（在 macOS 上运行）
+npm run dist:mac
+
+# 8. 运行 Chromium 布局与动效冒烟 / Windows 发行版双包桌面冒烟
 npm run test:layout
 npm run test:desktop
 ```
 
-- **版本验收与文件校验记录**：详见 [`tests/QA-G-Gravity.md`](./tests/QA-G-Gravity.md)（包含桌面实测记录与发行包 SHA-256 校验值）。
-- **架构与前后端契约说明**：详见 [`docs/architecture.md`](./docs/architecture.md)。
-
-### 项目目录结构
-
-- `assets/` & `public/` —— 6 套原创应用图标（SVG / PNG / ICO）、随包内置的本地离线翻译引擎资源与官方额度读取辅助脚本
-- `src/shared/` —— 主进程与前端共享的 TypeScript 协议类型契约与纯安全校验函数
-- `src/main/` —— Electron 35 主进程后端（ACP 通信、多会话复用、账号隔离与额度读取、安全审批、本地离线翻译、用量统计）
-- `src/renderer/` —— React 19 + Vite 6 前端三栏工作台界面、自研安全 Markdown 渲染器与主题系统
-- `docs/` & `tests/` —— 架构文档、Google ToS 合规审计报告与 Vitest 自动化测试套件
+- **版本验收与文件校验记录**：详见 [`tests/QA-G-Gravity.md`](./tests/QA-G-Gravity.md)。
+- **合规红线与工程规范**：详见 [`CLAUDE.md`](./CLAUDE.md) 与 [`docs/compliance/audit-report.md`](./docs/compliance/audit-report.md)。
+- **架构总纲**：详见 [`docs/architecture.md`](./docs/architecture.md)。
 
 <details>
-<summary>📂 <b>点击展开完整源码文件索引</b></summary>
+<summary>📂 <b>点击展开核心源码目录结构</b></summary>
 
 ```text
 G-Gravity/
+├── .github/workflows/release.yml    # GitHub Actions 自动构建并发布 Windows & macOS Release
 ├── CLAUDE.md                        # 工程架构规范与十大合规红线必读指南
-├── README.md                        # 项目介绍、快速上手与开发指南（本文件）
+├── README.md                        # 项目介绍、合规说明、内置插件、使用须知与开发指南
 ├── docs/
 │   ├── architecture.md              # 客户端架构总纲与模块职责说明
-│   └── compliance/
-│       └── audit-report.md          # Google ToS 与账号安全十大合规红线逐项审计报告
+│   └── compliance/audit-report.md   # Google ToS 与账号安全十大合规红线逐项审计报告
 ├── assets/
-│   ├── icons/                       # Electron 主进程窗口图标资产（6 套原创配色 × svg/png/ico）
+│   ├── icons/                       # 6 套原创配色图标（SVG / PNG / ICO + 1024px macOS 图标）
 │   ├── local-translation/           # 随包分发的 Mozilla (Bergamot) 英译简中离线翻译模型与许可证
-│   └── quota/                       # 官方账户额度只读查询辅助资产
-├── public/icons/                    # Renderer 静态图标资产（6 套原创配色 × svg/png/ico）
+│   └── quota/                       # Windows 官方账户额度只读查询辅助脚本
+├── public/icons/                    # Renderer 静态图标资产
 ├── src/
-│   ├── shared/                      # 主进程与渲染进程共享类型契约与安全校验函数
-│   │   ├── acp-protocol.ts          # ACP JSON-RPC 协议类型与命令行参数黑白名单
-│   │   ├── accounts-history-contract.ts # Profile、账户额度契约、凭据硬黑名单与只读历史白名单
-│   │   ├── approval-contract.ts     # Approve for me 审批模式与风险等级契约
-│   │   ├── ipc-channels.ts          # 全量 IPC 通道定义与请求/响应载荷类型
-│   │   ├── message-revision.ts      # 消息编辑与分支重发契约
-│   │   ├── plugins-contract.ts      # Plugins / MCP / Skills 类型与参数安全校验
-│   │   ├── session-contract.ts      # 会话状态、并发上限（≤4）与分屏布局状态契约
-│   │   ├── swarm-contract.ts        # Swarm 子智能体拓扑与消息流契约
-│   │   ├── telemetry-contract.ts    # 24h/7d/30d 热力图与四维模型单价契约
-│   │   ├── theme-i18n-contract.ts   # 6 套预设主题、23 色 Token 与防注入颜色校验器
-│   │   └── index.ts                 # 统一导出入口
-│   ├── main/                        # Electron 主进程后端
-│   │   ├── index.ts                 # BrowserWindow 安全沙箱启动、单实例锁与可见终端登录拉起
-│   │   ├── preload.ts               # 最小冻结桥接 window.gravityDesktop
-│   │   ├── ipc-router.ts            # 主窗口 + mainFrame 来源校验、参数限流与 IPC 路由绑定
-│   │   ├── core-service.ts          # 后端业务编排核心
-│   │   ├── acp/acp-client.ts        # 官方 agy acp 子进程 stdio JSON-RPC 2.0 客户端与 429/403 熔断
-│   │   ├── session/                 # SessionMultiplexer、InspectorStore 与消息图片加载
-│   │   ├── accounts/                # AccountManager（手动隔离 Profile）与官方额度读取
-│   │   ├── history/                 # HistoryImporter（本地历史纯只读零写入导入）
-│   │   ├── approval/                # ApprovalEngine、Shell 词法快筛与可选外部公开 API 复审
-│   │   ├── plugins/                 # PluginsManager（官方 agy plugin / mcp CLI 封装与 SKILL.md 只读扫描）
-│   │   ├── telemetry/               # TelemetryStore（Token 速率、三档热力图与分模型费用计算）
-│   │   ├── translation/             # 思考流智能分段与本地 Mozilla 离线翻译引擎封装
-│   │   ├── organizer/               # TitleOrganizer（本地会话分类标题整理）
-│   │   ├── swarm/                   # SwarmTracker（被动解析工具流构建多智能体看板）
-│   │   ├── workspace/               # WorkspaceFiles（工作区文件树只读检索，供 @ 补全使用）
-│   │   └── storage/                 # ClientStore（客户端独立 userData JSON 持久化）
-│   └── renderer/                    # React 19 前端渲染层
-│       ├── App.tsx                  # 全局状态编排、快捷键绑定与三栏工作台骨架
-│       ├── styles/                  # global.css + design-system.css 与主题引擎
-│       ├── i18n/                    # 中英双语词典
-│       ├── lib/                     # 回合洞察统计与划词批注草稿纯函数
-│       ├── services/                # desktop-bridge.ts（前端 IPC 调用与浏览器预览 Mock 回退）
-│       └── components/              # 工作台核心 UI 组件、账户额度视图与全屏设置中心（SettingsView）
-└── tests/                           # Vitest 自动化回归测试、桌面布局测试及 Windows 发行版验收报告
+│   ├── shared/                      # 主进程与渲染进程共享类型契约与纯安全校验函数
+│   ├── main/                        # Electron 35 主进程后端（ACP、多会话复用、账号隔离、审批、离线翻译、AI 标题整理、遥测、插件管理）
+│   └── renderer/                    # React 19 + Vite 6 Claude Code Studio 前端工作台与主题系统
+└── tests/                           # Vitest 自动化回归测试、Chromium 布局冒烟、Windows 双包桌面冒烟与 QA 验收记录
 ```
 
 </details>

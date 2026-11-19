@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, win32 as winPath } from 'node:path';
 import type { AcpRequestPermissionParams, AcpRequestPermissionResult, AgentExecutionMode } from '../../shared/acp-protocol';
 import type {
   ApprovalAuditEntry,
@@ -73,12 +73,14 @@ const BURST_THRESHOLD = 2;
 function isPathWithinWorkspace(targetPath: string, workspaceCwd: string): boolean {
   if (!targetPath || !workspaceCwd) return false;
   try {
-    const base = resolve(workspaceCwd);
-    const resolved = resolve(base, targetPath);
-    const baseCmp = process.platform === 'win32' ? base.toLowerCase() : base;
-    const targetCmp = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-    const rel = relative(baseCmp, targetCmp);
-    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+    const useWin = process.platform === 'win32' || /^[A-Za-z]:[\\/]/.test(workspaceCwd) || /^[A-Za-z]:[\\/]/.test(targetPath);
+    const p = useWin ? winPath : { resolve, relative, isAbsolute };
+    const base = p.resolve(workspaceCwd);
+    const resolved = p.resolve(base, targetPath);
+    const baseCmp = useWin ? base.toLowerCase() : base;
+    const targetCmp = useWin ? resolved.toLowerCase() : resolved;
+    const rel = p.relative(baseCmp, targetCmp);
+    return rel === '' || (!rel.startsWith('..') && !p.isAbsolute(rel));
   } catch {
     return false;
   }

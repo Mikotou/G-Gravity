@@ -36,7 +36,7 @@ export function parseQuota(data: { quota?: unknown; plan?: unknown }, profileId:
 }
 
 export async function readAccountQuota(profile: AccountProfile, configured?: string): Promise<AccountQuota> {
-  if (process.platform !== 'win32') throw new Error('此版本通过 Windows 官方客户端读取额度。');
+  if (process.platform !== 'win32') throw new Error('当前官方额度自动读取仅支持 Windows 客户端，macOS 请在终端运行 agy 查看额度。');
   if (!profile.isDefault) throw new Error('当前官方 CLI 的额度入口只支持默认登录资料，暂无法查询此独立资料。');
   const binary = discoverAgyBinary(configured);
   const dir = await mkdtemp(join(tmpdir(), 'gravity-quota-'));

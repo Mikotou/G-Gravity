@@ -3,6 +3,7 @@ import { spawn, type SpawnOptions } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { delimiter, join, isAbsolute } from 'node:path';
 import { APP_BRAND } from '../../shared/theme-i18n-contract';
 import { ALLOWED_AGY_ACP_FLAGS, FORBIDDEN_AGY_FLAGS } from '../../shared/acp-protocol';
@@ -43,7 +44,15 @@ export function discoverAgyBinary(configured?: string): string {
     return configured;
   }
   const names = process.platform === 'win32' ? ['agy.exe'] : ['agy'];
-  for (const dir of (process.env.PATH || '').split(delimiter)) {
+  const dirs = (process.env.PATH || '').split(delimiter).filter(Boolean);
+  if (process.platform !== 'win32') {
+    // macOS / Linux 从图形桌面启动时常不继承交互式 Shell 的 PATH，补充常见官方/用户安装目录只读检索。
+    const home = homedir();
+    for (const extra of ['/opt/homebrew/bin', '/usr/local/bin', join(home, '.local', 'bin'), join(home, '.npm-global', 'bin'), join(home, 'bin')]) {
+      if (!dirs.includes(extra)) dirs.push(extra);
+    }
+  }
+  for (const dir of dirs) {
     for (const name of names) { const path = join(dir.replace(/^"|"$/g, ''), name); if (existsSync(path)) return path; }
   }
   throw new Error('未找到官方 agy，请将其加入 PATH 或设置 AGY_BINARY_PATH');
