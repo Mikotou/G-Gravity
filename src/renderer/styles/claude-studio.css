@@ -21,13 +21,12 @@
     0 24px 64px -16px color-mix(in srgb, #000 54%, transparent),
     0 4px 16px -4px color-mix(in srgb, #000 28%, transparent);
   --stream-max: 840px;
-  /* 额度条与分屏焦点色：与左侧上下文窗口绿色、主强调暖陶土明确区分 */
+  /* 额度条独立色系：与左侧上下文窗口绿色、主强调暖陶土明确区分 */
   --quota-fill: #6aa9ff;
   --quota-fill-end: #9bc4ff;
   --quota-fill-mid: #74a4f2;
   --quota-fill-low: #e6a348;
   --quota-fill-empty: var(--status-danger);
-  --focus-pane-accent: #82acf8;
 }
 
 [data-polarity='light'] {
@@ -46,7 +45,6 @@
   --quota-fill-mid: #4a7de0;
   --quota-fill-low: #c97d1d;
   --quota-fill-empty: var(--status-danger);
-  --focus-pane-accent: #4778db;
 }
 
 /* ============================================================================
@@ -1059,48 +1057,69 @@
  *     内置 Hydrogen 标题整理状态条、中文思考显影动效、消息图片复制
  * ========================================================================== */
 
-/* --- 11.1 分屏当前选中窗格：去掉生硬整条橙线，改用居中羽化冷蓝星光微线 + 柔和柔光顶栏 --- */
+/* --- 11.1 分屏当前选中窗格：去掉两标题间生硬横线，与活动栏/侧栏统一为「左侧 3px 柔砂竖胶囊 + 表面明暗景深」 --- */
+.workspace.mode-split-2 .pane {
+  transition: background var(--dur-2) var(--ease-out);
+}
+
 .workspace.mode-split-2 .pane.is-focused {
   box-shadow: none;
+  background: var(--studio-canvas);
+}
+
+.workspace.mode-split-2 .pane:not(.is-focused) {
+  background: color-mix(in srgb, var(--studio-drawer) 54%, var(--studio-canvas));
 }
 
 .workspace.mode-split-2 .pane .pane-header {
   position: relative;
-  transition: background var(--dur-2) var(--ease-out), opacity var(--dur-2) var(--ease-out);
+  padding-left: 18px;
+  border-bottom: 1px solid transparent;
+  transition:
+    background var(--dur-2) var(--ease-out),
+    border-color var(--dur-2) var(--ease-out),
+    opacity var(--dur-2) var(--ease-out);
 }
 
 .workspace.mode-split-2 .pane.is-focused .pane-header {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--focus-pane-accent) 9%, transparent) 0%,
-    transparent 100%
-  );
+  background: color-mix(in srgb, var(--bg-surface) 50%, var(--studio-canvas));
+  border-bottom-color: color-mix(in srgb, var(--hairline) 80%, transparent);
 }
 
 .workspace.mode-split-2 .pane.is-focused .pane-header::before {
   content: '';
   position: absolute;
-  inset: 0 22% auto 22%;
-  height: 2px;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 14px;
   border-radius: 99px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--focus-pane-accent) 75%, transparent) 24%,
-    var(--focus-pane-accent) 50%,
-    color-mix(in srgb, var(--focus-pane-accent) 75%, transparent) 76%,
-    transparent 100%
-  );
-  box-shadow: 0 1px 10px color-mix(in srgb, var(--focus-pane-accent) 34%, transparent);
+  background: color-mix(in srgb, var(--accent-primary) 76%, var(--text-secondary));
   pointer-events: none;
 }
 
 .workspace.mode-split-2 .pane:not(.is-focused) .pane-header {
-  opacity: 0.58;
+  opacity: 0.56;
+}
+
+.workspace.mode-split-2 .pane:not(.is-focused) .pane-title {
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .workspace.mode-split-2 .pane:not(.is-focused):hover .pane-header {
-  opacity: 0.9;
+  opacity: 0.88;
+}
+
+.workspace.mode-split-2 .pane:not(.is-focused) .composer {
+  opacity: 0.82;
+  box-shadow: none;
+  transition: opacity var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
+}
+
+.workspace.mode-split-2 .pane:not(.is-focused) .composer:hover {
+  opacity: 0.96;
 }
 
 /* --- 11.2 对话框右下角额度：百分比 + 独立色系进度条 + Claude Studio 悬浮弹层 --- */
