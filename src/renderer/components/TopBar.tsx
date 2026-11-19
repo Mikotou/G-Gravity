@@ -1,5 +1,5 @@
 import React from 'react';
-import { Columns2, PanelLeftOpen, PanelRight, Plus, Square, X } from 'lucide-react';
+import { Columns2, PanelRight, Plus, Square, X } from 'lucide-react';
 import {
   type ManagedSessionSummary,
   type PendingApprovalRequest,
@@ -15,7 +15,7 @@ export interface TopBarProps {
   layout: WorkspaceLayoutState;
   focusedSessionId: string | null;
   pendingApprovals: PendingApprovalRequest[];
-  onToggleLeftSidebar: () => void;
+  onToggleLeftSidebar?: () => void;
   onToggleRightInspector: () => void;
   onSelectTab: (sessionId: string) => void;
   onCloseTab: (sessionId: string) => void;
@@ -34,7 +34,6 @@ export function TopBar({
   layout,
   focusedSessionId,
   pendingApprovals,
-  onToggleLeftSidebar,
   onToggleRightInspector,
   onSelectTab,
   onCloseTab,
@@ -53,19 +52,6 @@ export function TopBar({
 
   return (
     <header className="main-header" data-testid="app-topbar">
-      {layout.leftSidebarCollapsed && (
-        <button
-          type="button"
-          className="icon-btn"
-          onClick={onToggleLeftSidebar}
-          title={dict.sidebarToggleShow}
-          aria-label={dict.sidebarToggleShow}
-          data-testid="toggle-left-sidebar-btn"
-        >
-          <PanelLeftOpen size={16} />
-        </button>
-      )}
-
       <nav className="tab-strip" data-testid="parallel-tab-strip" role="tablist">
         {openTabs.map((tab) => {
           const active =

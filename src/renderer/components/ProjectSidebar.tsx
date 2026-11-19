@@ -1,24 +1,23 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Archive, ArchiveRestore, MoreHorizontal, Trash2,
+  Archive,
+  ArchiveRestore,
   BookOpen,
-  Blocks,
   ChevronDown,
-  ChevronsUpDown,
   Eye,
   EyeOff,
   Folder,
   FolderKanban,
-  Languages,
+  MoreHorizontal,
   PanelLeftClose,
   Pencil,
   Pin,
   Plus,
   RefreshCw,
   Search,
-  Settings,
   Sparkles,
-  UserRound,
+  Trash2,
+  X,
 } from 'lucide-react';
 import {
   isLegacyPollutionSessionTitle,
@@ -37,14 +36,13 @@ import { startSessionDrag } from '../lib/session-drag';
 import { ResizeHandle } from './ResizeHandle';
 import { useI18n } from '../i18n/I18nContext';
 import { formatRelativeTime } from '../i18n/locales';
-import { resolveGravityIconVariant } from '../styles/theme';
 
 export interface ProjectSidebarProps {
   collapsed: boolean;
   width: number;
-  appIcon: GravityIconId;
-  connection: AcpConnectionStatus;
-  accounts: AccountsStateSnapshot;
+  appIcon?: GravityIconId;
+  connection?: AcpConnectionStatus;
+  accounts?: AccountsStateSnapshot;
   sessions: ManagedSessionSummary[];
   importedHistory: ImportedHistorySessionRecord[];
   openTabSessionIds: string[];
@@ -52,7 +50,7 @@ export interface ProjectSidebarProps {
   selectedHistoryId: string | null;
   hideLegacyPollutionSessions: boolean;
   organizingTitles: boolean;
-  pluginCount: number;
+  pluginCount?: number;
   projects?: WorkspaceProjectConfig[];
   onToggleCollapse: () => void;
   onSelectSession: (session: ManagedSessionSummary) => void;
@@ -66,15 +64,16 @@ export interface ProjectSidebarProps {
   onRenameSession: (sessionId: string, newTitle: string) => Promise<void>;
   onTogglePinSession: (sessionId: string) => Promise<void>;
   onManageSession?: (id: string, action: SessionAction) => Promise<void>;
-  onOpenAccounts: () => void;
-  onOpenPlugins: () => void;
-  onOpenSettings: () => void;
-  onChangeLocale: (locale: ClientLocale) => void;
+  onOpenAccounts?: () => void;
+  onOpenPlugins?: () => void;
+  onOpenSettings?: () => void;
+  onChangeLocale?: (locale: ClientLocale) => void;
   onCommitWidth?: (width: number) => void;
 }
 
 const SIDEBAR_MIN = 200;
 const SIDEBAR_DEFAULT = 264;
+
 /** 常规屏幕最宽 440px；宽屏放宽到窗口的 30%，但不超过主进程允许的 600px。 */
 function sidebarMax(): number {
   const viewport = typeof window !== 'undefined' ? window.innerWidth : 1280;
@@ -86,12 +85,13 @@ function folderName(path: string): string {
   return parts[parts.length - 1] || path || '/';
 }
 
+/**
+ * 可展开会话抽屉：紧贴左侧极窄图标轨，专注呈现按项目分组的会话树、搜索、归档与只读历史。
+ * 支持拖拽右缘调宽、双击恢复默认，以及 Ctrl+B 折叠为 0px。
+ */
 export function ProjectSidebar({
   collapsed,
   width,
-  appIcon,
-  connection,
-  accounts,
   sessions,
   importedHistory,
   openTabSessionIds,
@@ -99,7 +99,6 @@ export function ProjectSidebar({
   selectedHistoryId,
   hideLegacyPollutionSessions,
   organizingTitles,
-  pluginCount,
   projects = [],
   onToggleCollapse,
   onSelectSession,
@@ -107,19 +106,15 @@ export function ProjectSidebar({
   onRefreshHistory,
   onOpenNewSession,
   onCreateSessionInProject,
-  onOpenProjects,
   onOrganizeTitles,
   onTogglePollutionVisibility,
   onRenameSession,
   onTogglePinSession,
   onManageSession,
-  onOpenAccounts,
-  onOpenPlugins,
-  onOpenSettings,
-  onChangeLocale,
   onCommitWidth,
 }: ProjectSidebarProps): React.ReactElement {
   const { locale, dict } = useI18n();
+  const zh = locale === 'zh-CN';
   const [search, setSearch] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -127,40 +122,44 @@ export function ProjectSidebar({
   const [syncingHistory, setSyncingHistory] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
-  const zh = locale === 'zh-CN';
   const [manage, setManage] = useState<ManagedSessionSummary | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [saving, setSaving] = useState(false);
   const [manageError, setManageError] = useState('');
   const dialog = React.useRef<HTMLDialogElement>(null);
-  React.useEffect(() => { if (manage) dialog.current?.showModal?.(); }, [manage]);
-  function openActions(s: ManagedSessionSummary) {
-    setConfirmDelete(false); setManageError(''); setManage(s);
+
+  React.useEffect(() => {
+    if (manage) dialog.current?.showModal?.();
+  }, [manage]);
+
+  const [liveWidth, setLiveWidth] = useState(width || SIDEBAR_DEFAULT);
+  React.useEffect(() => {
+    if (width) setLiveWidth(width);
+  }, [width]);
+
+  function openActions(s: ManagedSessionSummary): void {
+    setConfirmDelete(false);
+    setManageError('');
+    setManage(s);
   }
-  async function applyAction(action: SessionAction) {
+
+  async function applyAction(action: SessionAction): Promise<void> {
     if (!manage || !onManageSession || saving) return;
-    setSaving(true); setManageError('');
-    try { await onManageSession(manage.sessionId, action); setManage(null); }
-    catch (error) { setManageError(error instanceof Error ? error.message : String(error)); }
-    finally { setSaving(false); }
+    setSaving(true);
+    setManageError('');
+    try {
+      await onManageSession(manage.sessionId, action);
+      setManage(null);
+    } catch (error) {
+      setManageError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
   }
-  const icon = resolveGravityIconVariant(appIcon);
+
   const q = search.trim().toLowerCase();
   const openSet = new Set(openTabSessionIds);
-  const [liveWidth, setLiveWidth] = useState(width || SIDEBAR_DEFAULT);
-  React.useEffect(() => { if (width) setLiveWidth(width); }, [width]);
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const accountMenuRef = React.useRef<HTMLDivElement>(null);
-  React.useEffect(() => {
-    if (!accountMenuOpen) return;
-    const outside = (e: MouseEvent) => { if (!accountMenuRef.current?.contains(e.target as Node)) setAccountMenuOpen(false); };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setAccountMenuOpen(false); };
-    window.addEventListener('mousedown', outside);
-    window.addEventListener('keydown', esc);
-    return () => { window.removeEventListener('mousedown', outside); window.removeEventListener('keydown', esc); };
-  }, [accountMenuOpen]);
 
-  // 按规范化、小写路径建立项目索引。会话中的大小写或分隔符不同，仍可关联到用户保存的项目名称。
   const projectByPath = useMemo(() => {
     const map = new Map<string, WorkspaceProjectConfig>();
     for (const proj of projects) {
@@ -174,7 +173,6 @@ export function ProjectSidebar({
     const map = new Map<string, ManagedSessionSummary[]>();
     const canonicalKeyByLower = new Map<string, string>();
 
-    // 先把用户已配置的自定义 Project 注册到分组树中（即使尚无对话也在侧栏常驻显示）
     for (const proj of projects) {
       const norm = normalizeWorkspacePath(proj.path || '');
       if (!norm) continue;
@@ -203,7 +201,7 @@ export function ProjectSidebar({
       list.push(s);
       map.set(key, list);
     }
-    // 这里有两级独立排序。项目内的会话按置顶和更新时间排序，项目之间按项目置顶和最新会话时间排序。
+
     const entries = Array.from(map.entries()).map(([key, list]) => {
       list.sort((a, b) => (a.pinned !== b.pinned ? (a.pinned ? -1 : 1) : b.updatedAt.localeCompare(a.updatedAt)));
       const proj = projectByPath.get(key.toLowerCase());
@@ -223,9 +221,7 @@ export function ProjectSidebar({
   }, [sessions, hideLegacyPollutionSessions, q, projects, projectByPath]);
 
   const history = useMemo(() => {
-    // 先移除已在实时会话列表中的原始 ID，再合并不同来源的历史摘要，避免侧栏为同一会话展示两个入口。
     const liveIds = new Set(sessions.map((s) => s.sessionId));
-    // 按 rawConversationId 去重：同一会话优先保留带完整对话内容的 .jsonl 记录，其次保留 .db 摘要记录
     const byConvId = new Map<string, ImportedHistorySessionRecord>();
     for (const rec of importedHistory) {
       if (liveIds.has(rec.rawConversationId)) continue;
@@ -270,12 +266,8 @@ export function ProjectSidebar({
       : deduped;
   }, [hideLegacyPollutionSessions, importedHistory, q, sessions]);
 
-  // 搜索时可显示前 100 个匹配项。无搜索词时受逐批展开的显示上限控制，完整索引仍可用于下次搜索。
   const visibleHistory = q ? history.slice(0, 100) : history.slice(0, historyLimit);
-
-  const activeProfile =
-    accounts.profiles.find((p) => p.profileId === accounts.activeProfileId) ?? accounts.profiles[0];
-  const profileName = activeProfile?.name ?? 'Default';
+  const totalThreads = groups.reduce((acc, g) => acc + g.list.length, 0);
 
   async function commitRename(sessionId: string): Promise<void> {
     const trimmed = editingValue.trim();
@@ -291,41 +283,110 @@ export function ProjectSidebar({
       aria-hidden={collapsed}
     >
       <div className="sidebar-inner">
-        {manage && <dialog ref={dialog} className="session-actions-dialog" aria-label={zh ? '管理会话' : 'Manage conversation'}
-          onCancel={e => { e.preventDefault(); if (!saving) setManage(null); }}>
-          <h3>{manage.title}</h3>
-          {confirmDelete ? <p>{zh ? '永久删除 Gravity 中保存的这条会话及消息？此操作无法撤销。' : 'Permanently delete this conversation and its messages from Gravity? This cannot be undone.'}</p>
-            : <button type="button" className="btn" disabled={saving} onClick={() => void applyAction(manage.archivedAt ? 'restore' : 'archive')}>
-               {manage.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />}
-               {manage.archivedAt ? (zh ? '恢复会话' : 'Restore conversation') : (zh ? '归档会话' : 'Archive conversation')}</button>}
-          <button type="button" className="btn danger" disabled={saving} onClick={() => confirmDelete ? void applyAction('delete') : setConfirmDelete(true)}>
-            <Trash2 size={15} />{confirmDelete ? (zh ? '确认永久删除' : 'Permanently delete') : (zh ? '删除会话' : 'Delete conversation')}</button>
-          <button type="button" className="btn" autoFocus disabled={saving} onClick={() => setManage(null)}>{zh ? '取消' : 'Cancel'}</button>
-          {manageError && <p role="alert">{manageError}</p>}
-        </dialog>}
-        <div className="sidebar-head">
-          <img src={icon.publicSvgUrl} alt="Gravity" className="brand-logo" data-testid="topbar-app-icon" />
+        {manage && (
+          <dialog
+            ref={dialog}
+            className="session-actions-dialog"
+            aria-label={zh ? '管理会话' : 'Manage conversation'}
+            onCancel={(e) => {
+              e.preventDefault();
+              if (!saving) setManage(null);
+            }}
+          >
+            <h3>{manage.title}</h3>
+            {confirmDelete ? (
+              <p>
+                {zh
+                  ? '永久删除 Gravity 中保存的这条会话及消息？此操作无法撤销。'
+                  : 'Permanently delete this conversation and its messages from Gravity? This cannot be undone.'}
+              </p>
+            ) : (
+              <button
+                type="button"
+                className="btn"
+                disabled={saving}
+                onClick={() => void applyAction(manage.archivedAt ? 'restore' : 'archive')}
+              >
+                {manage.archivedAt ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+                {manage.archivedAt
+                  ? zh
+                    ? '恢复会话'
+                    : 'Restore conversation'
+                  : zh
+                    ? '归档会话'
+                    : 'Archive conversation'}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn danger"
+              disabled={saving}
+              onClick={() => (confirmDelete ? void applyAction('delete') : setConfirmDelete(true))}
+            >
+              <Trash2 size={15} />
+              {confirmDelete
+                ? zh
+                  ? '确认永久删除'
+                  : 'Permanently delete'
+                : zh
+                  ? '删除会话'
+                  : 'Delete conversation'}
+            </button>
+            <button type="button" className="btn" autoFocus disabled={saving} onClick={() => setManage(null)}>
+              {zh ? '取消' : 'Cancel'}
+            </button>
+            {manageError && <p role="alert">{manageError}</p>}
+          </dialog>
+        )}
+
+        <header className="sidebar-head">
           <span className="brand-name">Gravity</span>
+          {totalThreads > 0 && <span className="drawer-count">{totalThreads}</span>}
           <span className="spacer" />
           <button
             type="button"
-            className="icon-btn"
+            className="icon-btn icon-btn-sm"
+            disabled={organizingTitles}
+            onClick={() => void onOrganizeTitles()}
+            title={organizingTitles ? dict.organizingTitles : dict.organizeTitlesBtn}
+            aria-label={dict.organizeTitlesBtn}
+            data-testid="btn-organize-titles"
+          >
+            <Sparkles size={13} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn icon-btn-sm"
+            onClick={() => void onTogglePollutionVisibility()}
+            title={hideLegacyPollutionSessions ? dict.hidePollutionSessions : dict.showPollutionSessions}
+            aria-label={hideLegacyPollutionSessions ? dict.hidePollutionSessions : dict.showPollutionSessions}
+            data-testid="btn-toggle-pollution"
+          >
+            {hideLegacyPollutionSessions ? <EyeOff size={13} /> : <Eye size={13} />}
+          </button>
+          <button
+            type="button"
+            className="icon-btn icon-btn-sm"
+            onClick={onOpenNewSession}
+            title={`${dict.newSession} (Ctrl+N)`}
+            aria-label={dict.newSession}
+          >
+            <Plus size={14} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn icon-btn-sm"
             onClick={onToggleCollapse}
             title={dict.sidebarToggleHide}
             aria-label={dict.sidebarToggleHide}
           >
-            <PanelLeftClose size={16} />
+            <PanelLeftClose size={14} />
           </button>
-        </div>
+        </header>
 
         <div className="sidebar-actions">
-          <button type="button" className="new-thread-btn" onClick={onOpenNewSession} data-testid="sidebar-new-session-btn">
-            <Plus size={15} />
-            <span>{dict.newSession}</span>
-            <span className="kbd">Ctrl N</span>
-          </button>
           <div className="search-box">
-            <Search size={13} />
+            <Search size={13} className="search-icon" />
             <input
               className="input"
               placeholder={dict.searchPlaceholder}
@@ -333,53 +394,22 @@ export function ProjectSidebar({
               onChange={(e) => setSearch(e.target.value)}
               data-testid="sidebar-search-input"
             />
+            {search && (
+              <button
+                type="button"
+                className="icon-btn icon-btn-sm search-clear"
+                onClick={() => setSearch('')}
+                aria-label={dict.ui.clearSearch}
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
         </div>
 
-        <nav className="sidebar-quick-nav" aria-label={dict.ui.accountMenu}>
-          {onOpenProjects && (
-            <button type="button" className="quick-nav-btn" onClick={onOpenProjects} title={dict.ui.projects} data-testid="open-projects-modal-btn">
-              <FolderKanban size={14} />
-              <span>{dict.ui.projects}</span>
-              {projects.length > 0 && <span className="quick-nav-count">{projects.length}</span>}
-            </button>
-          )}
-          <button type="button" className="quick-nav-btn" onClick={onOpenPlugins} title={dict.navPlugins} data-testid="open-plugins-modal-btn">
-            <Blocks size={14} />
-            <span>{dict.navPlugins}</span>
-            {pluginCount > 0 && <span className="quick-nav-count">{pluginCount}</span>}
-          </button>
-        </nav>
-
         <div className="sidebar-scroll">
-          <div className="section-head">
-            <span>{dict.navThreads}</span>
-            <span className="spacer" />
-            <button
-              type="button"
-              className="icon-btn icon-btn-sm"
-              disabled={organizingTitles}
-              onClick={() => void onOrganizeTitles()}
-              title={organizingTitles ? dict.organizingTitles : dict.organizeTitlesBtn}
-              aria-label={dict.organizeTitlesBtn}
-              data-testid="btn-organize-titles"
-            >
-              <Sparkles size={13} />
-            </button>
-            <button
-              type="button"
-              className="icon-btn icon-btn-sm"
-              onClick={() => void onTogglePollutionVisibility()}
-              title={hideLegacyPollutionSessions ? dict.hidePollutionSessions : dict.showPollutionSessions}
-              aria-label={hideLegacyPollutionSessions ? dict.hidePollutionSessions : dict.showPollutionSessions}
-              data-testid="btn-toggle-pollution"
-            >
-              {hideLegacyPollutionSessions ? <EyeOff size={13} /> : <Eye size={13} />}
-            </button>
-          </div>
-
           {groups.length === 0 && (
-            <div className="empty-state" style={{ padding: '16px 10px' }}>
+            <div className="empty-state" style={{ padding: '24px 12px' }}>
               {q ? dict.emptySearch : dict.emptySessions}
             </div>
           )}
@@ -389,7 +419,7 @@ export function ProjectSidebar({
             const groupLabel = project?.name || folderName(key);
             const groupTooltip = project?.description ? `${project.name}\n${key}\n${project.description}` : key;
             return (
-              <div key={key} data-testid={`cwd-group-${key}`}>
+              <div key={key} className="sidebar-group" data-testid={`cwd-group-${key}`}>
                 <div className="group-head-row">
                   <button
                     type="button"
@@ -399,7 +429,7 @@ export function ProjectSidebar({
                   >
                     <ChevronDown size={12} className="chev" />
                     {project ? (
-                      <FolderKanban size={13} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+                      <FolderKanban size={13} className="group-icon-project" />
                     ) : (
                       <Folder size={13} className="muted" />
                     )}
@@ -410,7 +440,7 @@ export function ProjectSidebar({
                     <button
                       type="button"
                       className="icon-btn icon-btn-sm group-quick-add"
-                      title={locale === 'zh-CN' ? `在「${groupLabel}」中新建会话` : `New thread in ${groupLabel}`}
+                      title={zh ? `在「${groupLabel}」中新建会话` : `New thread in ${groupLabel}`}
                       onClick={() => onCreateSessionInProject(key, project?.defaultMode)}
                       data-testid={`quick-new-in-group-${key}`}
                     >
@@ -431,16 +461,22 @@ export function ProjectSidebar({
                           selected ? 'is-selected' : '',
                           openSet.has(s.sessionId) && s.status !== 'closed' ? 'is-open' : '',
                           s.isLegacyApprovalPollution ? 'is-dim' : '',
-                        ].join(' ')}
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                         onClick={() => {
                           if (!editing) onSelectSession(s);
                         }}
                         role="group"
-                        draggable={!editing} onDragStart={e => startSessionDrag(e.dataTransfer, s.sessionId)}
+                        draggable={!editing}
+                        onDragStart={(e) => startSessionDrag(e.dataTransfer, s.sessionId)}
                         tabIndex={0}
                         aria-label={s.title}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' && e.target === e.currentTarget && !editing) { e.preventDefault(); onSelectSession(s); }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && e.target === e.currentTarget && !editing) {
+                            e.preventDefault();
+                            onSelectSession(s);
+                          }
                         }}
                         title={s.title}
                         data-testid={`sidebar-session-${s.sessionId}`}
@@ -512,9 +548,18 @@ export function ProjectSidebar({
                             >
                               <Pin size={11} />
                             </button>
-                            {onManageSession && <button type="button" className="icon-btn icon-btn-sm" title={zh ? '管理会话' : 'Manage conversation'}
-                              aria-label={zh ? '管理会话' : 'Manage conversation'} data-testid={'manage-session-' + s.sessionId}
-                              onClick={() => openActions(s)}><MoreHorizontal size={14} /></button>}
+                            {onManageSession && (
+                              <button
+                                type="button"
+                                className="icon-btn icon-btn-sm"
+                                title={zh ? '管理会话' : 'Manage conversation'}
+                                aria-label={zh ? '管理会话' : 'Manage conversation'}
+                                data-testid={'manage-session-' + s.sessionId}
+                                onClick={() => openActions(s)}
+                              >
+                                <MoreHorizontal size={14} />
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -524,15 +569,30 @@ export function ProjectSidebar({
             );
           })}
 
-          {sessions.some(s => s.archivedAt) && <details className="archived-sessions" data-testid="archived-sessions">
-            <summary><Archive size={13} /> {zh ? '已归档' : 'Archived'} · {sessions.filter(s => s.archivedAt).length}</summary>
-            {sessions.filter(s => s.archivedAt && (!q || (s.title + ' ' + s.cwd).toLowerCase().includes(q))).map(s =>
-              <button type="button" key={s.sessionId} onClick={() => openActions(s)} data-testid={'archived-session-' + s.sessionId}>
-                <span className="truncate">{s.title}</span><MoreHorizontal size={13} /></button>)}
-          </details>}
+          {sessions.some((s) => s.archivedAt) && (
+            <details className="archived-sessions" data-testid="archived-sessions">
+              <summary>
+                <Archive size={12} /> {zh ? '已归档' : 'Archived'} · {sessions.filter((s) => s.archivedAt).length}
+              </summary>
+              {sessions
+                .filter((s) => s.archivedAt && (!q || (s.title + ' ' + s.cwd).toLowerCase().includes(q)))
+                .map((s) => (
+                  <button
+                    type="button"
+                    key={s.sessionId}
+                    onClick={() => openActions(s)}
+                    data-testid={'archived-session-' + s.sessionId}
+                  >
+                    <span className="truncate">{s.title}</span>
+                    <MoreHorizontal size={13} />
+                  </button>
+                ))}
+            </details>
+          )}
+
           {history.length > 0 && (
-            <div data-testid="imported-history-section">
-              <div className="section-head" style={{ marginTop: 14 }}>
+            <div className="sidebar-history" data-testid="imported-history-section">
+              <div className="section-head">
                 <span>{dict.historySectionTitle}</span>
                 <span className="spacer" />
                 {onRefreshHistory && (
@@ -544,11 +604,11 @@ export function ProjectSidebar({
                       setSyncingHistory(true);
                       void onRefreshHistory().finally(() => setSyncingHistory(false));
                     }}
-                    title={locale === 'zh-CN' ? '同步本地 Antigravity 历史记录' : 'Sync local Antigravity history'}
-                    aria-label={locale === 'zh-CN' ? '同步本地 Antigravity 历史记录' : 'Sync local Antigravity history'}
+                    title={zh ? '同步本地 Antigravity 历史记录' : 'Sync local Antigravity history'}
+                    aria-label={zh ? '同步本地 Antigravity 历史记录' : 'Sync local Antigravity history'}
                     data-testid="btn-sync-history"
                   >
-                    <RefreshCw size={12} />
+                    <RefreshCw size={12} className={syncingHistory ? 'spin' : undefined} />
                   </button>
                 )}
               </div>
@@ -566,7 +626,8 @@ export function ProjectSidebar({
                 visibleHistory.map((rec) => (
                   <div
                     key={rec.sessionId}
-                    draggable onDragStart={e => startSessionDrag(e.dataTransfer, rec.sessionId)}
+                    draggable
+                    onDragStart={(e) => startSessionDrag(e.dataTransfer, rec.sessionId)}
                     className={`thread-item ${selectedHistoryId === rec.sessionId ? 'is-selected' : ''}`}
                     onClick={() => onSelectHistory(rec)}
                     title={rec.cwd ? `${rec.title}\n${rec.cwd}` : rec.title}
@@ -586,7 +647,7 @@ export function ProjectSidebar({
                   onClick={() => setHistoryLimit((prev) => prev + 60)}
                   data-testid="btn-load-more-history"
                 >
-                  {locale === 'zh-CN'
+                  {zh
                     ? `加载更多（剩余 ${history.length - historyLimit} 条）`
                     : `Load more (${history.length - historyLimit} left)`}
                 </button>
@@ -594,73 +655,8 @@ export function ProjectSidebar({
             </div>
           )}
         </div>
-
-        <div className="sidebar-foot" ref={accountMenuRef}>
-          {accountMenuOpen && (
-            <div className="popover account-menu" role="menu" data-testid="account-menu">
-              <div className="account-menu-head">
-                <span className="avatar avatar-lg">{profileName.trim().charAt(0).toUpperCase() || 'G'}</span>
-                <div className="account-menu-id">
-                  <strong className="truncate">{profileName}</strong>
-                  <span className={`account-menu-conn ${connection.connected ? 'is-on' : 'is-off'}`}>
-                    <span className={`status-dot ${connection.connected ? 'is-idle' : 'is-error'}`} />
-                    {connection.connected ? dict.acpConnected : dict.acpDisconnected}
-                    {connection.agyVersion ? ` · ${connection.agyVersion}` : ''}
-                  </span>
-                </div>
-              </div>
-              <div className="menu-sep" />
-              <button type="button" role="menuitem" className="menu-item" data-testid="open-accounts-modal-btn"
-                onClick={() => { setAccountMenuOpen(false); onOpenAccounts(); }}>
-                <UserRound size={14} className="muted" />
-                <span>{dict.navAccounts}</span>
-                <span className="menu-item-hint">{accounts.profiles.length || 1}</span>
-              </button>
-              <button type="button" role="menuitem" className="menu-item"
-                onClick={() => { setAccountMenuOpen(false); onOpenSettings(); }}>
-                <Settings size={14} className="muted" />
-                <span>{dict.navSettings}</span>
-                <span className="kbd">Ctrl ,</span>
-              </button>
-              <div className="menu-sep" />
-              <div className="menu-row">
-                <Languages size={14} className="muted" />
-                <span>{dict.languageLabel}</span>
-                <div className="segmented segmented-sm locale-toggle" data-testid="locale-switcher">
-                  <button type="button" className={`segmented-btn ${locale === 'zh-CN' ? 'is-active' : ''}`}
-                    onClick={() => onChangeLocale('zh-CN')} data-testid="locale-switch-zh">中</button>
-                  <button type="button" className={`segmented-btn ${locale === 'en-US' ? 'is-active' : ''}`}
-                    onClick={() => onChangeLocale('en-US')} data-testid="locale-switch-en">EN</button>
-                </div>
-              </div>
-            </div>
-          )}
-          <button
-            type="button"
-            className={`account-chip ${accountMenuOpen ? 'is-open' : ''}`}
-            onClick={() => setAccountMenuOpen((v) => !v)}
-            aria-haspopup="menu"
-            aria-expanded={accountMenuOpen}
-            title={`${profileName} · ${connection.connected ? dict.acpConnected : dict.acpDisconnected}`}
-            data-testid="account-menu-btn"
-          >
-            <span className="avatar">{profileName.trim().charAt(0).toUpperCase() || 'G'}</span>
-            <span className={`status-dot ${connection.connected ? 'is-idle' : 'is-error'}`} />
-            <span className="account-name truncate">{profileName}</span>
-            <ChevronsUpDown size={13} className="account-chev" />
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={onOpenSettings}
-            title={`${dict.navSettings} (Ctrl+,)`}
-            aria-label={dict.navSettings}
-            data-testid="open-theme-modal-btn"
-          >
-            <Settings size={16} />
-          </button>
-        </div>
       </div>
+
       {!collapsed && onCommitWidth && (
         <ResizeHandle
           value={liveWidth}

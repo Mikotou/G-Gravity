@@ -127,3 +127,16 @@ npm run build
 - **信息分级**：检视器一级页签为 Changes / Plan / Terminal / Context / Swarm，`diff` 与 `files` 是 Changes 下的二级视图（`inspector-subtab-diff` / `inspector-tab-files`）；模型与推理强度合并为输入框右下的二级菜单（`model-select-*` → `model-menu-*`）；账号、设置与语言收进侧栏底部账户菜单（`account-menu-btn` → `account-menu`）；审批卡一级只展示用意，作用范围 / 转交原因 / AI 说明收进「详情」。
 - **反馈**：生成中在输入框按 `Esc` 中断当前回合；等待首个分片时显示计时与中断提示（`WorkingIndicator`）；轻提示分 `info / success / error` 三种语气，带剩余时间条与关闭按钮。
 - 新增样式统一写在 `design-system.css` 末尾的「v0.1.5 工作台精修层」，复用 `--dur-*` / `--ease-*` / `--hairline*` 变量。
+
+---
+
+## 七、v0.1.6 Claude Code Studio 前端架构（前端约定）
+
+- **布局范式重构**：在 100% 保留原有前后端功能契约、合规守卫与可调整/高分屏适配能力的前提下，前端升级为 **48px 常驻极窄活动栏（`ActivityRail`）+ 可展开/拖拽调宽的会话抽屉（`ProjectSidebar`）+ 超宽居中画布（单栏 / 左右双栏 + 悬浮岛 Composer）+ 可停靠/悬浮切换的右侧检视器（`RightInspector`）**。
+- **关键组件与样式**：
+  - `src/renderer/components/ActivityRail.tsx`：左侧常驻 48px 活动栏，统一承载 Gravity 品牌图标（`topbar-app-icon`）、暖陶土色主操作 `+` 新建会话按钮（`sidebar-new-session-btn`）、会话抽屉开关（`toggle-left-sidebar-btn`）、项目/插件入口、底部账号头像与浮层菜单（账号管理、语言切换）、以及设置入口（`open-theme-modal-btn`）。
+  - `src/renderer/components/ProjectSidebar.tsx`：紧邻 `ActivityRail` 的聚焦式会话抽屉，顶部保留线程计数、整理/筛选/新建/折叠控制与药丸搜索栏（带一键清除按钮），右侧保留 `sidebar-resize-handle` 拖拽调宽；修复了实时会话选中高亮（仅在历史会话才传入 `selectedHistoryId`）。
+  - `src/renderer/components/RightInspector.tsx`：新增「停靠 ↔ 悬浮（Docked / Floating）」切换按钮（`inspector-float-toggle`，通过 `data-inspector-mode` 区分，偏好持久化至 `localStorage['gravity.inspector.floating']`）与收起按钮（`inspector-close-btn`），两者置于 `.inspector-head-actions`，保持 `.inspector-head` 为纯净的 5 项 `role="tablist"`（0 个 `role="button"`，满足布局冒烟契约）。
+  - `src/renderer/components/SessionPane.tsx` / `TurnActivity.tsx` / `InlineRequestView.tsx`：重构 `WelcomePane`（柔和陶土光晕 + 衬线编辑风问候 + 快捷键栏）、在收起态 `Activity · N` 摘要条中加入工具语义色微点（`.tool-cat-dot`），并将审批卡片的 `1.`–`4.` 前缀升级为触感键帽（`.option-num`）且保持 `.textContent` 与旧版完全一致。
+  - `src/renderer/styles/claude-studio.css`：在 `design-system.css` 之后加载的 Claude Code Studio 视觉层（暖炭黑/羊皮纸阶梯表面、暖陶土强调色、悬浮岛输入卡片、双栏窄窗格 Composer 防溢出容器查询、悬浮检视器玻璃拟态层），同步在 `src/renderer/main.tsx` 与 `tests/desktop-layout.fixture.tsx` 引入。
+- **自动化守卫**：`tests/v016-claude-studio.test.tsx` 覆盖活动栏、抽屉选中高亮与清除搜索、检视器停靠/悬浮切换及纯净 tablist、工具语义微点与审批键帽。

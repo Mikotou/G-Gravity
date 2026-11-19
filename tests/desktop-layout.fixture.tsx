@@ -7,6 +7,7 @@ import { getFallbackDesktopBridge } from '../src/renderer/services/desktop-bridg
 import type { ChatMessageItem, ManagedSessionSummary, SendPromptInput, WorkspaceSplitMode } from '../src/shared';
 import '../src/renderer/styles/global.css';
 import '../src/renderer/styles/design-system.css';
+import '../src/renderer/styles/claude-studio.css';
 
 function picture(width: number, height: number) {
   const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;

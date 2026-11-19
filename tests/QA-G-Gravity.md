@@ -1,5 +1,16 @@
 # G-Gravity 整体验收记录
 
+## 本机 Windows 版 v0.1.6
+
+2026-11-19，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.6/Gravity.exe`，大小为 121,389,447 字节，SHA-256 为 `BC3EF22FAB827BDF184F54C924083AFE0AE0F3DAAA13FD24BF80DA19C6929437`。源码压缩包位于 `release/v0.1.6/G-Gravity-v0.1.6-source.zip`（对应本地 `v0.1.6` 分支，未推送 GitHub）。
+
+| 项目 | 验证结果 |
+| --- | --- |
+| Claude Code Studio 前端架构 | 在 100% 保留全部前后端功能与十大合规红线的前提下重构前端视觉与布局范式：引入 48px 常驻极窄活动栏（`ActivityRail.tsx`）、可展开/拖拽调宽的聚焦式会话抽屉（`ProjectSidebar.tsx`，修复实时会话选中高亮并新增搜索一键清除按钮）、居中超宽画布（单栏/双栏 + 悬浮岛 Composer）、以及支持「停靠 ↔ 悬浮（Docked / Floating）」切换并持久化偏好的右侧检视器（`RightInspector.tsx`）。 |
+| 视觉美学与交互细节 | 新增 `src/renderer/styles/claude-studio.css` 视觉层：暖炭黑与暖羊皮纸阶梯表面、暖陶土强调色、衬线编辑风欢迎页（`WelcomePane`）、操作记录折叠条语义色微点（`.tool-cat-dot`）、审批卡片 `1`–`4` 触感键帽（保持文本与快捷键契约不变），以及双栏窄窗格 Composer 容器查询防溢出适配。 |
+| 多分辨率与视觉实测 | 通过 Playwright 实拍检查 `1440×900`（主工作台、活动栏账号菜单、聚焦+悬浮检视器、左右双栏、浅色羊皮纸主题、欢迎页）与 `2560×1440 @ 1.5× HiDPI` 共 7 组截图，均无页面错误与布局溢出；`test:layout` Chromium 三视口布局、跳转按钮居中、无缝流光动画接缝、检视器 5 页签纯净 `tablist` 及思考排版全部通过。 |
+| 回归与打包 | 四组 TypeScript 类型检查（shared / main / renderer / tests）0 错误；33 个测试文件共 360 项自动化测试全部通过（1 项联机 smoke 跳过，含新增 `v016-claude-studio.test.tsx`）；生产构建与 `test:desktop` 目录版 + 便携版双启动冒烟均通过。打包目录 96 个运行产物文件与 `dist/` 逐一校验一致。 |
+
 ## 本机 Windows 版 v0.1.5
 
 2026-11-19，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.5/Gravity.exe`，大小为 121,385,457 字节，SHA-256 为 `D04C216A1C99A639D4E0D10D1593C5654D3888786AAD6CB7B1D44E7385B70EB4`。源码压缩包位于 `release/v0.1.5/G-Gravity-v0.1.5-source.zip`（对应 `main` 分支 `v0.1.5` 标签）。

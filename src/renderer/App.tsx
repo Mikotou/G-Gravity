@@ -37,6 +37,7 @@ import {
   type WorkspaceLayoutState,
   type WorkspaceSplitMode,
 } from '@shared';
+import { ActivityRail } from './components/ActivityRail';
 import { NewSessionModal } from './components/NewSessionModal';
 import { ComposerDrafts } from './lib/composer-draft';
 import { clearAnnotationDraft } from './lib/annotation-drafts';
@@ -886,24 +887,40 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   // 侧栏选中态和检查器使用同一个会话标识。焦点尚未建立时，依次退到主窗格和首个打开的标签。
   const stageSessionId =
     focusedSessionId ?? layout.activePrimarySessionId ?? layout.openTabSessionIds[0] ?? null;
+  const stageHistoryId = stageSessionId && historyIds.includes(stageSessionId) ? stageSessionId : null;
+  const activeCount = sessions.filter((s) => !s.archivedAt && s.status !== 'closed').length;
 
   return (
     <I18nProvider locale={preferences.locale} onChangeLocale={handleChangeLocale}>
       <div className="app-shell" data-testid="agy-app-root" data-brand="Gravity">
+        <ActivityRail
+          appIcon={preferences.appIcon}
+          sidebarCollapsed={layout.leftSidebarCollapsed}
+          connection={connection}
+          accounts={accounts}
+          projectCount={(preferences.projects ?? []).length}
+          pluginCount={pluginsSnap.plugins.length + pluginsSnap.mcpServers.length}
+          activeSessionCount={activeCount}
+          onToggleSidebar={() => void patchLayout({ leftSidebarCollapsed: !layout.leftSidebarCollapsed })}
+          onOpenNewSession={() => setNewSessionOpen(true)}
+          onOpenProjects={() => setSettingsSection('projects')}
+          onOpenPlugins={() => setSettingsSection('plugins')}
+          onOpenAccounts={() => setSettingsSection('accounts')}
+          onOpenSettings={() => setSettingsSection('themes')}
+          onOpenAbout={() => setSettingsSection('about')}
+          onChangeLocale={handleChangeLocale}
+        />
+
         <ProjectSidebar
           collapsed={layout.leftSidebarCollapsed}
           width={layout.leftSidebarWidth}
-          appIcon={preferences.appIcon}
-          connection={connection}
-          accounts={accounts}
           sessions={sessions}
           importedHistory={importedHistory}
           openTabSessionIds={layout.openTabSessionIds}
-          selectedSessionId={stageSessionId}
-          selectedHistoryId={stageSessionId}
+          selectedSessionId={stageHistoryId ? null : stageSessionId}
+          selectedHistoryId={stageHistoryId}
           hideLegacyPollutionSessions={layout.hideLegacyPollutionSessions}
           organizingTitles={organizing}
-          pluginCount={pluginsSnap.plugins.length + pluginsSnap.mcpServers.length}
           projects={preferences.projects}
           onToggleCollapse={() => void patchLayout({ leftSidebarCollapsed: true })}
           onSelectSession={(s) => void handleActivateSession(s)}
@@ -911,16 +928,11 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           onRefreshHistory={handleRefreshHistory}
           onOpenNewSession={() => setNewSessionOpen(true)}
           onCreateSessionInProject={(cwd, mode) => void handleCreateSession(cwd, undefined, mode).catch(reportError)}
-          onOpenProjects={() => setSettingsSection('projects')}
           onOrganizeTitles={() => handleOrganizeTitles(false)}
           onTogglePollutionVisibility={handleTogglePollution}
           onRenameSession={handleRenameSession}
           onTogglePinSession={handleTogglePin}
           onManageSession={handleManageSession}
-          onOpenAccounts={() => setSettingsSection('accounts')}
-          onOpenPlugins={() => setSettingsSection('plugins')}
-          onOpenSettings={() => setSettingsSection('themes')}
-          onChangeLocale={handleChangeLocale}
           onCommitWidth={(w) => void patchLayout({ leftSidebarWidth: w })}
         />
 
@@ -996,6 +1008,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           onSelectTab={(tab) => void patchLayout({ activeInspectorTab: tab })}
           onFocusDiffFile={(fp) => setFocusedDiffFile(fp)}
           onCommitWidth={(w) => void patchLayout({ rightInspectorWidth: w })}
+          onCollapse={() => void patchLayout({ rightInspectorCollapsed: true })}
           onLaunchSwarmTask={handleLaunchSwarmTask}
           onOpenRateCardsSettings={() => setSettingsSection('rates')}
         />

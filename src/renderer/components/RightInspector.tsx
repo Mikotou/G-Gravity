@@ -6,9 +6,12 @@ import {
   CircleDot,
   FileCode2,
   FileDiff,
+  Layers,
   ListTodo,
   Network,
+  PanelRightClose,
   SquareTerminal,
+  X,
 } from 'lucide-react';
 import type {
   ChatMessageItem,
@@ -42,8 +45,25 @@ export interface RightInspectorProps {
   onSelectTab: (tab: RightInspectorTab) => void;
   onFocusDiffFile: (filePath: string) => void;
   onCommitWidth: (width: number) => void;
+  onCollapse?: () => void;
   onLaunchSwarmTask?: (sessionId: string, taskBrief: string) => Promise<void>;
   onOpenRateCardsSettings: () => void;
+}
+
+const INSPECTOR_FLOAT_KEY = 'gravity.inspector.floating';
+function readInspectorFloating(): boolean {
+  try {
+    return window.localStorage.getItem(INSPECTOR_FLOAT_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+function saveInspectorFloating(floating: boolean): void {
+  try {
+    window.localStorage.setItem(INSPECTOR_FLOAT_KEY, floating ? 'true' : 'false');
+  } catch {
+    /* 本次会话内保持即可 */
+  }
 }
 
 const TABS: ReadonlyArray<{ id: RightInspectorTab; Icon: typeof FileDiff }> = [
@@ -76,16 +96,26 @@ export function RightInspector({
   onSelectTab,
   onFocusDiffFile,
   onCommitWidth,
+  onCollapse,
   onLaunchSwarmTask,
   onOpenRateCardsSettings,
 }: RightInspectorProps): React.ReactElement {
   const { dict } = useI18n();
   const ui = dict.ui;
   const [liveWidth, setLiveWidth] = useState<number>(width || DEFAULT_WIDTH);
+  const [floating, setFloating] = useState<boolean>(readInspectorFloating);
 
   useEffect(() => {
     if (width) setLiveWidth(width);
   }, [width]);
+
+  function toggleFloating(): void {
+    setFloating((prev) => {
+      const next = !prev;
+      saveInspectorFloating(next);
+      return next;
+    });
+  }
 
   // 只统计已完成的文件改动，挂起 / 失败的工具调用不算变更
   const diffs = useMemo<FileDiffEntry[]>(() => {
@@ -233,8 +263,9 @@ export function RightInspector({
 
   return (
     <aside
-      className={`inspector ${collapsed ? 'is-collapsed' : ''}`}
+      className={`inspector ${collapsed ? 'is-collapsed' : ''} ${floating ? 'is-floating' : ''}`}
       style={{ width: collapsed ? 0 : liveWidth }}
+      data-inspector-mode={floating ? 'floating' : 'docked'}
       data-testid="right-inspector"
       aria-hidden={collapsed}
     >
@@ -253,30 +284,57 @@ export function RightInspector({
         />
       )}
       <div className="inspector-inner">
-        <div className="inspector-head" role="tablist">
-          {TABS.map(({ id, Icon }) => {
-            const selected = id === 'diff' ? isChanges : activeTab === id;
-            const label = id === 'diff' ? ui.changesTab : dict.inspectorTabs[id];
-            return (
+        <div className="inspector-bar">
+          <div className="inspector-head" role="tablist">
+            {TABS.map(({ id, Icon }) => {
+              const selected = id === 'diff' ? isChanges : activeTab === id;
+              const label = id === 'diff' ? ui.changesTab : dict.inspectorTabs[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  className={`inspector-tab ${selected ? 'is-active' : ''}`}
+                  onClick={() => onSelectTab(id === 'diff' && isChanges ? activeTab : id)}
+                  aria-label={label}
+                  title={label}
+                  data-testid={`inspector-tab-${id}`}
+                >
+                  <Icon size={13} />
+                  <span className="inspector-tab-label">{label}</span>
+                  {counts[id] ? (
+                    <span className={`tab-count tone-${countTone[id] ?? 'muted'}`}>{counts[id]}</span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+          <div className="inspector-head-actions">
+            <button
+              type="button"
+              className={`icon-btn icon-btn-sm ${floating ? 'is-active' : ''}`}
+              onClick={toggleFloating}
+              aria-pressed={floating}
+              title={floating ? ui.dockInspector : ui.floatInspector}
+              aria-label={floating ? ui.dockInspector : ui.floatInspector}
+              data-testid="inspector-float-toggle"
+            >
+              {floating ? <PanelRightClose size={13} /> : <Layers size={13} />}
+            </button>
+            {onCollapse && (
               <button
-                key={id}
                 type="button"
-                role="tab"
-                aria-selected={selected}
-                className={`inspector-tab ${selected ? 'is-active' : ''}`}
-                onClick={() => onSelectTab(id === 'diff' && isChanges ? activeTab : id)}
-                aria-label={label}
-                title={label}
-                data-testid={`inspector-tab-${id}`}
+                className="icon-btn icon-btn-sm"
+                onClick={onCollapse}
+                title={dict.inspectorToggleHide}
+                aria-label={dict.inspectorToggleHide}
+                data-testid="inspector-close-btn"
               >
-                <Icon size={13} />
-                <span className="inspector-tab-label">{label}</span>
-                {counts[id] ? (
-                  <span className={`tab-count tone-${countTone[id] ?? 'muted'}`}>{counts[id]}</span>
-                ) : null}
+                <X size={13} />
               </button>
-            );
-          })}
+            )}
+          </div>
         </div>
 
         <div className="inspector-body" key={isChanges ? 'changes' : activeTab}>

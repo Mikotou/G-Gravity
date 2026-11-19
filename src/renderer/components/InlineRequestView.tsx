@@ -188,20 +188,32 @@ export function InlineRequestView({
       )}
 
       <div className="option-list">
-        {options.map((opt) => (
-          <button
-            key={opt.index}
-            type="button"
-            className="option-btn"
-            disabled={submitting || Boolean(opt.disabled)}
-            title={opt.disabledReason ?? opt.descriptionText}
-            data-testid={`${TEST_ID_BY_INDEX[opt.index]}-${request.requestId}`}
-            onClick={() => triggerOption(opt)}
-          >
-            <span className="option-primary">{opt.primaryText}</span>
-            <span className="option-desc">{opt.descriptionText}</span>
-          </button>
-        ))}
+        {options.map((opt) => {
+          const split = /^(\d+\.\s*)(.*)$/.exec(opt.primaryText);
+          return (
+            <button
+              key={opt.index}
+              type="button"
+              className={`option-btn option-index-${opt.index}`}
+              disabled={submitting || Boolean(opt.disabled)}
+              title={opt.disabledReason ?? opt.descriptionText}
+              data-testid={`${TEST_ID_BY_INDEX[opt.index]}-${request.requestId}`}
+              onClick={() => triggerOption(opt)}
+            >
+              <span className="option-primary">
+                {split ? (
+                  <>
+                    <span className="option-num">{split[1]}</span>
+                    <span className="option-label-text">{split[2]}</span>
+                  </>
+                ) : (
+                  opt.primaryText
+                )}
+              </span>
+              <span className="option-desc">{opt.descriptionText}</span>
+            </button>
+          );
+        })}
       </div>
 
       {feedbackOpen && (

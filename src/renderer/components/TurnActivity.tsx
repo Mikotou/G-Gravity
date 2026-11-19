@@ -14,6 +14,7 @@ import type { ChatMessageItem, ManagedSessionStatus, SemanticToolCallCard } from
 import { useI18n } from '../i18n/I18nContext';
 import {
   basenameOf,
+  classifyTool,
   formatDuration,
   summarizeTurn,
 } from '../lib/turn-insights';
@@ -34,14 +35,19 @@ export function ToolActivityStream({
   const zh = locale === 'zh-CN';
   const failed = tools.filter(t => t.status === 'failed' || t.status === 'rejected').length;
   const running = tools.some(t => t.status === 'pending' || t.status === 'running');
+  // 折叠态用最多 3 颗语义小圆点呈现本轮涉及的操作类别（改动/命令/探索等），无需展开即可感知重点。
+  const categories = Array.from(new Set(tools.map(t => classifyTool(t.canonicalToolName || t.rawToolName)))).slice(0, 4);
   return (
-    <details className="tool-group activity-group" data-testid={'tool-group-' + tools[0]?.toolCallId}>
+    <details className={`tool-group activity-group ${failed > 0 ? 'has-failure' : ''} ${running ? 'is-running' : ''}`} data-testid={'tool-group-' + tools[0]?.toolCallId}>
       <summary className="tool-group-head">
         <ChevronRight size={13} className="cc-tool-chev" />
-        <span>{zh ? '操作记录' : 'Activity'}</span>
-        <span className="muted">{tools.length}</span>
+        <span className="tool-group-title">{zh ? '操作记录' : 'Activity'}</span>
+        <span className="tool-group-badge">{tools.length}</span>
+        <span className="tool-cat-dots" aria-hidden="true">
+          {categories.map(cat => <span key={cat} className={`tool-cat-dot is-${cat}`} />)}
+        </span>
         {failed > 0 && <span className="cc-del">{failed} {zh ? '项失败' : 'failed'}</span>}
-        {running && <Loader2 size={12} className="spin" aria-label={zh ? '执行中' : 'Running'} />}
+        {running && <Loader2 size={12} className="spin tool-group-spin" aria-label={zh ? '执行中' : 'Running'} />}
       </summary>
       <div className="tool-group-body">
         {tools.map(tool => <ToolCallCard key={tool.toolCallId} tool={tool} onInspectDiff={onInspectDiff} nested />)}

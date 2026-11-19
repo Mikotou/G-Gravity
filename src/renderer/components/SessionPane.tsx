@@ -111,12 +111,17 @@ function WelcomePane({
   return (
     <div className="pane" data-testid={`empty-pane-${slotIndex}`}>
       <div className={`welcome ${compact ? 'welcome-compact' : ''}`}>
-        <img className="welcome-logo" src={icon.publicSvgUrl} alt="" />
-        <h1 className="welcome-title">{compact ? dict.emptyPaneTitle : dict.welcomeTitle}</h1>
-        <button type="button" className="btn btn-primary" onClick={onOpenNewSession}>
-          <Plus size={14} />
-          <span>{dict.newSession}</span>
-        </button>
+        <div className="welcome-hero">
+          <div className="welcome-logo-wrap">
+            <img className="welcome-logo" src={icon.publicSvgUrl} alt="" />
+          </div>
+          <h1 className="welcome-title">{compact ? dict.emptyPaneTitle : dict.welcomeTitle}</h1>
+          <button type="button" className="btn btn-primary welcome-cta" onClick={onOpenNewSession}>
+            <Plus size={15} />
+            <span>{dict.newSession}</span>
+            {!compact && <span className="kbd welcome-cta-kbd">Ctrl N</span>}
+          </button>
+        </div>
         {recent.length > 0 && (
           <div className="recent-list">
             <div className="recent-label">{dict.recentThreadsTitle}</div>
@@ -133,12 +138,20 @@ function WelcomePane({
                 <span className="thread-title truncate" style={{ flex: 1 }}>
                   {s.title}
                 </span>
-                <span className="muted mono truncate" style={{ fontSize: 11, maxWidth: 120 }}>
+                <span className="recent-folder mono truncate">
                   {folderName(s.cwd)}
                 </span>
                 <span className="thread-time">{formatRelativeTime(s.updatedAt, dict)}</span>
               </button>
             ))}
+          </div>
+        )}
+        {!compact && (
+          <div className="welcome-shortcuts" aria-hidden="true">
+            <span><kbd className="kbd">Ctrl B</kbd> {dict.shortcutLabels.sidebar}</span>
+            <span><kbd className="kbd">Ctrl \</kbd> {dict.shortcutLabels.split}</span>
+            <span><kbd className="kbd">Ctrl J</kbd> {dict.shortcutLabels.inspector}</span>
+            <span><kbd className="kbd">Ctrl ,</kbd> {dict.shortcutLabels.settings}</span>
           </div>
         )}
       </div>

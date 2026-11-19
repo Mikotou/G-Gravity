@@ -1,0 +1,1042 @@
+/* ============================================================================
+ * Gravity v0.1.6 — Claude Code Studio 前端视觉与布局体系
+ *
+ * 架构：极窄 48px 图标轨 + 可展开调宽会话抽屉 + 超宽居中编辑画布 + 可停靠/悬浮检视器
+ * 配色：全部从 23 项 ThemePaletteTokens 动态派生，深浅 6 套主题与自定义主题均自适应。
+ * ========================================================================== */
+
+:root {
+  --studio-serif: 'Georgia', 'Cambria', 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', serif;
+  --studio-rail-w: 48px;
+  --studio-rail: color-mix(in srgb, var(--bg-sidebar) 82%, var(--bg-code));
+  --studio-drawer: color-mix(in srgb, var(--bg-sidebar) 96%, var(--bg-app));
+  --studio-canvas: var(--bg-app);
+  --studio-card: color-mix(in srgb, var(--bg-surface) 92%, var(--bg-app));
+  --studio-composer: color-mix(in srgb, var(--bg-surface) 97%, var(--text-primary));
+  --studio-composer-shadow:
+    0 12px 32px -12px color-mix(in srgb, #000 44%, transparent),
+    0 2px 6px color-mix(in srgb, #000 20%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--text-primary) 5%, transparent);
+  --studio-float-shadow:
+    0 24px 64px -16px color-mix(in srgb, #000 54%, transparent),
+    0 4px 16px -4px color-mix(in srgb, #000 28%, transparent);
+  --stream-max: 840px;
+}
+
+[data-polarity='light'] {
+  --studio-rail: color-mix(in srgb, var(--bg-sidebar) 92%, var(--border-subtle));
+  --studio-drawer: color-mix(in srgb, var(--bg-sidebar) 96%, var(--bg-surface));
+  --studio-card: var(--bg-surface);
+  --studio-composer: var(--bg-surface);
+  --studio-composer-shadow:
+    0 10px 28px -10px color-mix(in srgb, #1a1613 14%, transparent),
+    0 1px 4px color-mix(in srgb, #1a1613 7%, transparent);
+  --studio-float-shadow:
+    0 22px 54px -14px color-mix(in srgb, #1a1613 20%, transparent),
+    0 4px 14px -4px color-mix(in srgb, #1a1613 10%, transparent);
+}
+
+/* ============================================================================
+ * 1. 应用外壳与 48px 极窄图标轨
+ * ========================================================================== */
+
+.app-shell {
+  position: relative;
+  background: var(--studio-canvas);
+}
+
+.activity-rail {
+  position: relative;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: var(--studio-rail-w);
+  flex-shrink: 0;
+  height: 100%;
+  padding: 8px 0 10px;
+  background: var(--studio-rail);
+  border-right: 1px solid var(--hairline);
+  user-select: none;
+}
+
+.rail-top,
+.rail-nav,
+.rail-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+}
+
+.rail-bottom {
+  position: relative;
+}
+
+.rail-brand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  margin-bottom: 2px;
+  transition: transform var(--dur-1) var(--ease-spring), background var(--dur-1);
+}
+
+.rail-brand-btn:hover {
+  background: var(--hover);
+  transform: scale(1.04);
+}
+
+.rail-brand-btn:active {
+  transform: scale(0.95);
+}
+
+.rail-brand-btn .brand-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+
+.rail-sep {
+  width: 22px;
+  height: 1px;
+  margin: 8px 0;
+  background: var(--hairline-strong);
+  opacity: 0.65;
+}
+
+.rail-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--text-muted);
+  transition:
+    background var(--dur-1),
+    color var(--dur-1),
+    border-color var(--dur-1),
+    transform var(--dur-1) var(--ease-out);
+}
+
+.rail-btn:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
+.rail-btn:active {
+  transform: scale(0.93);
+}
+
+.rail-btn.is-active {
+  background: color-mix(in srgb, var(--accent-primary) 13%, var(--hover));
+  color: var(--text-primary);
+}
+
+.rail-btn.is-active::before {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent-primary);
+}
+
+.rail-btn.is-active svg {
+  color: var(--accent-primary);
+}
+
+.rail-new-btn {
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 34%, var(--hairline));
+  background: color-mix(in srgb, var(--accent-primary) 12%, var(--bg-surface));
+  color: var(--accent-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.rail-new-btn:hover {
+  background: var(--accent-primary);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 12px -3px var(--accent-glow);
+}
+
+.rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 99px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+}
+
+.rail-avatar-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+}
+
+.rail-avatar-btn .avatar {
+  width: 26px;
+  height: 26px;
+  font-size: 11.5px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent);
+}
+
+.rail-conn-dot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-success);
+  box-shadow: 0 0 0 2px var(--studio-rail);
+}
+
+.rail-conn-dot.is-error {
+  background: var(--status-danger);
+}
+
+.rail-account-menu {
+  left: calc(100% + 10px);
+  bottom: 6px;
+  width: 252px;
+  max-width: none;
+  border-radius: 13px;
+  padding: 6px;
+  transform-origin: bottom left;
+}
+
+/* ============================================================================
+ * 2. 可展开会话抽屉（Sidebar）
+ * ========================================================================== */
+
+.sidebar {
+  background: var(--studio-drawer);
+  border-right-color: var(--hairline);
+}
+
+.sidebar-inner {
+  min-width: 200px;
+}
+
+.sidebar-head {
+  height: var(--header-h);
+  padding: 0 8px 0 14px;
+  gap: 5px;
+  border-bottom: 1px solid color-mix(in srgb, var(--hairline) 65%, transparent);
+}
+
+.sidebar-head .brand-name {
+  font-family: var(--studio-serif);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.drawer-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--hover);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-actions {
+  padding: 10px 10px 6px;
+}
+
+.search-box .search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.search-box .input {
+  height: 31px;
+  padding: 0 28px 0 30px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-app) 68%, transparent);
+  border: 1px solid var(--hairline);
+  font-size: 12px;
+}
+
+.search-box .input:hover {
+  border-color: var(--hairline-strong);
+  background: color-mix(in srgb, var(--bg-app) 84%, transparent);
+}
+
+.search-box .input:focus {
+  background: var(--bg-app);
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.sidebar-scroll {
+  padding: 4px 8px 14px;
+}
+
+.sidebar-group + .sidebar-group {
+  margin-top: 6px;
+}
+
+.group-icon-project {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.group-head {
+  height: 27px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.thread-item {
+  min-height: 32px;
+  padding: 5px 9px 5px 20px;
+  border-radius: 9px;
+  margin-top: 1px;
+}
+
+.thread-item.is-selected {
+  background: color-mix(in srgb, var(--accent-primary) 11%, var(--active));
+  box-shadow: inset 2.5px 0 0 var(--accent-primary);
+}
+
+.thread-item.is-open::before {
+  left: 9px;
+  height: 12px;
+}
+
+.thread-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-history {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* ============================================================================
+ * 3. 主区顶栏与胶囊标签
+ * ========================================================================== */
+
+.main {
+  background: var(--studio-canvas);
+}
+
+.main-header {
+  height: var(--header-h);
+  padding: 0 12px;
+  gap: 8px;
+  background: var(--studio-canvas);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.tab-strip {
+  gap: 4px;
+}
+
+.tab {
+  height: 30px;
+  padding: 0 7px 0 11px;
+  border-radius: 9px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.tab:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
+.tab.is-active {
+  background: var(--studio-card);
+  border-color: var(--hairline-strong);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ============================================================================
+ * 4. 欢迎页（Claude Desktop 居中编辑风）
+ * ========================================================================== */
+
+.welcome {
+  gap: 24px;
+  padding: 40px 28px;
+}
+
+.welcome-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.welcome-logo-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.welcome-logo-wrap::before {
+  content: '';
+  position: absolute;
+  inset: -18px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent-primary) 24%, transparent) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.welcome-logo {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  border-radius: 15px;
+  box-shadow: 0 8px 24px -6px color-mix(in srgb, #000 38%, transparent);
+}
+
+.welcome-title {
+  font-family: var(--studio-serif);
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  color: var(--text-primary);
+}
+
+.welcome-compact .welcome-title {
+  font-size: 18px;
+}
+
+.welcome-cta {
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 99px;
+  font-size: 13px;
+  font-weight: 560;
+  box-shadow: 0 6px 20px -6px var(--accent-glow);
+}
+
+.welcome-cta:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px -6px var(--accent-glow);
+}
+
+.welcome-cta-kbd {
+  margin-left: 4px;
+  background: color-mix(in srgb, #fff 18%, transparent);
+  border-color: color-mix(in srgb, #fff 28%, transparent);
+  color: #fff;
+}
+
+.recent-list {
+  width: min(520px, 100%);
+  gap: 6px;
+}
+
+.recent-label {
+  padding: 0 6px 3px;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+
+.recent-item {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--studio-card);
+  border: 1px solid var(--hairline);
+}
+
+.recent-item:hover {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-primary) 5%, var(--studio-card));
+  box-shadow: var(--shadow-sm);
+}
+
+.recent-folder {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--hover);
+  color: var(--text-muted);
+  font-size: 11px;
+  max-width: 130px;
+}
+
+.welcome-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px 18px;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.welcome-shortcuts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ============================================================================
+ * 5. 对话主舞台（Claude Code 柔和编辑流）
+ * ========================================================================== */
+
+.pane {
+  background: var(--studio-canvas);
+}
+
+.pane-header {
+  height: 36px;
+  padding: 0 18px;
+}
+
+.stream-inner {
+  gap: 22px;
+  padding: 22px 28px 34px;
+}
+
+.cc-user-prompt {
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--bg-surface) 88%, var(--accent-primary) 4%);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 10%, transparent);
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+
+.cc-user-chevron {
+  color: var(--accent-primary);
+  opacity: 0.85;
+}
+
+.cc-assistant {
+  gap: 9px;
+}
+
+/* 回归 Claude Desktop 干净克制的排版：去掉厚重色块条，仅用字重与细线区分层级 */
+.md {
+  line-height: 1.72;
+}
+
+.md h2 {
+  display: block;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.md h2::before,
+.md h3::before {
+  content: none;
+  display: none;
+}
+
+.code-block {
+  border-radius: 11px;
+  border-color: var(--hairline-strong);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+
+.code-block-head {
+  height: 30px;
+  background: color-mix(in srgb, var(--bg-surface) 45%, var(--bg-code));
+  border-bottom-color: var(--hairline);
+}
+
+/* 思考折叠块：柔和圆角胶囊 + 展开态细腻左轨（保持流式/稳态字体与段距一致） */
+.cc-thinking-head {
+  padding: 4px 8px 4px 6px;
+  border-radius: 9px;
+  transition: background var(--dur-1), color var(--dur-1);
+}
+
+.cc-thinking-head:hover {
+  background: var(--hover);
+}
+
+.cc-thinking-body {
+  margin-left: 11px;
+  padding: 4px 0 4px 16px;
+  border-left: 2px solid color-mix(in srgb, var(--accent-primary) 34%, var(--hairline));
+}
+
+/* 操作记录折叠组：胶囊头 + 语义类别微点 */
+.activity-group {
+  border-radius: 10px;
+}
+
+.activity-group > .tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--studio-card) 72%, transparent);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  transition: background var(--dur-1), border-color var(--dur-1);
+}
+
+.activity-group > .tool-group-head:hover {
+  background: var(--studio-card);
+  border-color: var(--hairline-strong);
+}
+
+.activity-group.has-failure > .tool-group-head {
+  border-color: var(--danger-border);
+  background: color-mix(in srgb, var(--status-danger) 7%, var(--studio-card));
+}
+
+.tool-group-title {
+  font-weight: 560;
+  color: var(--text-secondary);
+}
+
+.tool-group-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--active);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-cat-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 2px;
+}
+
+.tool-cat-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tool-other);
+}
+
+.tool-cat-dot.is-explore { background: var(--tool-explore); }
+.tool-cat-dot.is-edit { background: var(--tool-edit); }
+.tool-cat-dot.is-exec { background: var(--tool-exec); }
+.tool-cat-dot.is-web { background: var(--tool-web); }
+.tool-cat-dot.is-agent { background: var(--tool-agent); }
+
+.tool-group-spin {
+  color: var(--accent-primary);
+  margin-left: auto;
+}
+
+.activity-group[open] > .tool-group-head {
+  background: var(--studio-card);
+  border-color: var(--hairline-strong);
+}
+
+.tool-group-body {
+  margin: 4px 0 4px 12px;
+  padding-left: 12px;
+  border-left: 1px solid var(--hairline-strong);
+}
+
+/* ============================================================================
+ * 6. Claude Code 内联权限审批卡（键帽风格 1–4 快捷选项）
+ * ========================================================================== */
+
+.request-view {
+  gap: 11px;
+  padding: 14px 16px;
+  border-radius: 15px;
+  border: 1px solid var(--hairline-strong);
+  border-left: 3.5px solid var(--status-warning);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--status-warning) 5%, var(--studio-card)) 0%,
+    var(--studio-card) 55%
+  );
+  box-shadow: var(--studio-composer-shadow);
+}
+
+.request-view.risk-safe,
+.request-view.risk-low {
+  border-left-color: var(--status-success);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--status-success) 5%, var(--studio-card)) 0%,
+    var(--studio-card) 55%
+  );
+}
+
+.request-view.risk-high,
+.request-view.risk-critical {
+  border-left-color: var(--status-danger);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--status-danger) 7%, var(--studio-card)) 0%,
+    var(--studio-card) 55%
+  );
+}
+
+.request-cmd {
+  padding: 10px 13px;
+  border-radius: 10px;
+  border-color: var(--hairline);
+  background: var(--bg-code);
+}
+
+.request-intent-box {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-app) 55%, transparent);
+}
+
+.option-list {
+  gap: 5px;
+}
+
+.option-btn {
+  min-height: 36px;
+  padding: 7px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--bg-app) 40%, var(--studio-card));
+}
+
+.option-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-primary) 11%, var(--studio-card));
+  border-color: var(--accent-border);
+  transform: translateX(3px);
+}
+
+.option-btn .option-primary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.option-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: var(--hover);
+  border: 1px solid var(--hairline-strong);
+  color: var(--accent-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  transition: background var(--dur-1), color var(--dur-1), border-color var(--dur-1);
+}
+
+.option-btn:hover:not(:disabled) .option-num {
+  background: var(--accent-primary);
+  border-color: transparent;
+  color: #fff;
+}
+
+.option-label-text {
+  color: var(--text-primary);
+}
+
+/* ============================================================================
+ * 7. 浮岛式输入框（Claude Desktop Floating Island Composer）
+ * ========================================================================== */
+
+.composer-dock {
+  padding: 6px 26px 12px;
+}
+
+.composer {
+  border-radius: 18px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--studio-composer);
+  box-shadow: var(--studio-composer-shadow);
+}
+
+.composer:focus-within {
+  border-color: var(--accent-border);
+  box-shadow:
+    var(--studio-composer-shadow),
+    0 0 0 4px color-mix(in srgb, var(--accent-primary) 13%, transparent);
+}
+
+.composer-input {
+  min-height: 48px;
+  padding: 14px 16px 6px;
+  font-size: 13.5px;
+  line-height: 1.58;
+}
+
+.composer-bar {
+  padding: 4px 10px 9px 10px;
+  gap: 4px;
+}
+
+/* 模型菜单锚点允许在窄分屏下收缩，确保右侧发送按钮永不溢出输入栏 */
+.composer-bar > .menu-anchor:has(.model-chip) {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.mode-pill {
+  height: 27px;
+  padding: 0 10px;
+  border-radius: 99px;
+}
+
+.model-chip {
+  height: 27px;
+  padding: 0 9px 0 10px;
+  border-radius: 99px;
+  max-width: 100%;
+  flex: 0 1 auto;
+}
+
+.model-chip-name {
+  max-width: 150px;
+}
+
+@container pane (max-width: 560px) {
+  .pane .model-chip-effort,
+  .pane .model-chip-icon {
+    display: none;
+  }
+  .pane .model-chip-name {
+    max-width: 112px;
+  }
+}
+
+.send-btn {
+  width: 32px;
+  height: 32px;
+}
+
+.quota-footer {
+  padding-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-view {
+  border-radius: 14px;
+  box-shadow: var(--studio-float-shadow);
+}
+
+/* ============================================================================
+ * 8. 可停靠 / 可悬浮检视器（Docked / Floating Right Inspector）
+ * ========================================================================== */
+
+.inspector {
+  background: var(--studio-drawer);
+  border-left: 1px solid var(--hairline);
+}
+
+.inspector.is-floating {
+  position: fixed;
+  top: 52px;
+  right: 12px;
+  bottom: 12px;
+  height: auto;
+  z-index: 45;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--studio-drawer) 94%, transparent);
+  backdrop-filter: blur(16px) saturate(1.15);
+  box-shadow:
+    var(--studio-float-shadow),
+    inset 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent);
+  transition: width var(--dur-panel) var(--ease-out), opacity var(--dur-2) var(--ease-out);
+}
+
+.inspector.is-floating.is-collapsed {
+  border-width: 0;
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.inspector-bar {
+  display: flex;
+  align-items: center;
+  height: var(--header-h);
+  border-bottom: 1px solid var(--hairline);
+  flex-shrink: 0;
+}
+
+.inspector-bar .inspector-head {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border-bottom: 0;
+  padding: 0 4px 0 8px;
+}
+
+.inspector-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 7px 0 4px;
+  flex-shrink: 0;
+  border-left: 1px solid color-mix(in srgb, var(--hairline) 75%, transparent);
+}
+
+.inspector-tab {
+  height: 28px;
+  border-radius: 8px;
+}
+
+.inspector-body {
+  padding: 12px 13px;
+}
+
+.card {
+  border-radius: 12px;
+  border-color: var(--hairline);
+  background: var(--studio-card);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 10%, transparent);
+}
+
+.stat-big,
+.legend-val,
+.cost-cell-val,
+.diff-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-block,
+.term,
+.worker,
+.board-msg {
+  border-radius: 11px;
+  border-color: var(--hairline);
+}
+
+.diff-head,
+.term-head {
+  border-bottom-color: var(--hairline);
+}
+
+/* ============================================================================
+ * 9. 设置中心与弹窗（Glass Elevated Studio）
+ * ========================================================================== */
+
+.overlay {
+  backdrop-filter: blur(8px) saturate(1.15);
+}
+
+.settings {
+  border-radius: 18px;
+  border-color: var(--hairline-strong);
+  box-shadow: var(--studio-float-shadow);
+}
+
+.settings-nav {
+  background: var(--studio-drawer);
+}
+
+.settings-group {
+  border-radius: 12px;
+  background: var(--studio-card);
+}
+
+.modal {
+  border-radius: 16px;
+  box-shadow: var(--studio-float-shadow);
+}
+
+/* ============================================================================
+ * 10. 高分辨率自适应（2K / 4K 与超宽画布）
+ * ========================================================================== */
+
+@container pane (min-width: 1100px) {
+  .stream-inner,
+  .composer-wrap {
+    max-width: 920px;
+  }
+}
+
+@container pane (min-width: 1480px) {
+  .stream-inner,
+  .composer-wrap {
+    max-width: 1040px;
+  }
+}
+
+@container pane (min-width: 1880px) {
+  .stream-inner,
+  .composer-wrap {
+    max-width: 1160px;
+  }
+  .md,
+  .cc-user-prompt,
+  .composer-input {
+    font-size: 14px;
+  }
+}
+
+/* 悬浮模式下检视器不挤占主舞台，限制最宽为视口 55% 以保留左侧背景感知 */
+.inspector.is-floating:not(.is-collapsed) {
+  max-width: min(1000px, 55vw);
+}

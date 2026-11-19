@@ -450,6 +450,10 @@ export interface WorkbenchStrings {
   newActivity: string;
   backToLatest: string;
   workingElapsed: (seconds: string) => string;
+  threadsDrawer: string;
+  dockInspector: string;
+  floatInspector: string;
+  clearSearch: string;
 }
 
 const WORKBENCH_ZH: WorkbenchStrings = {
@@ -472,6 +476,10 @@ const WORKBENCH_ZH: WorkbenchStrings = {
   newActivity: '有新内容',
   backToLatest: '回到最新',
   workingElapsed: (s) => s,
+  threadsDrawer: '会话抽屉',
+  dockInspector: '停靠到右侧',
+  floatInspector: '切换为悬浮面板',
+  clearSearch: '清空搜索',
 };
 
 const WORKBENCH_EN: WorkbenchStrings = {
@@ -494,6 +502,10 @@ const WORKBENCH_EN: WorkbenchStrings = {
   newActivity: 'New activity',
   backToLatest: 'Latest',
   workingElapsed: (s) => s,
+  threadsDrawer: 'Threads',
+  dockInspector: 'Dock inspector',
+  floatInspector: 'Float inspector',
+  clearSearch: 'Clear search',
 };
 
 // 语言切换使用同一组字段。每种语言自行处理复数、语序和数值插入，组件只提供数据。
