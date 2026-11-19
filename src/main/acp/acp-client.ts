@@ -22,6 +22,9 @@ export interface AcpClientOptions {
 export class AcpRpcError extends Error {
   constructor(readonly code: number, message: string, readonly data?: unknown) { super(message); }
 }
+const isAnyAbsolutePath = (value: string): boolean =>
+  isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\');
+
 /** 校验传给子进程的参数序列并返回副本。目录参数要求绝对路径，带值选项同时接受等号和独立参数两种写法。 */
 export function validateAgyArgs(args: readonly string[]): string[] {
   if (args[0] !== 'acp') throw new Error('只允许启动官方 acp 子命令');
@@ -33,14 +36,14 @@ export function validateAgyArgs(args: readonly string[]): string[] {
     if (flag === '--add-dir' || flag === '--agent' || flag === '--app-data-dir') {
       const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[++i];
       if (!value || value.startsWith('-') || /[\r\n\0]/.test(value)) throw new Error('ACP 参数缺少合法值');
-      if ((flag === '--add-dir' || flag === '--app-data-dir') && !isAbsolute(value)) throw new Error('工作区与 Profile 目录必须为绝对路径');
+      if ((flag === '--add-dir' || flag === '--app-data-dir') && !isAnyAbsolutePath(value)) throw new Error('工作区与 Profile 目录必须为绝对路径');
     } else if (arg.includes('=')) throw new Error('布尔 ACP 参数不接受附带值');
   }
   return [...args];
 }
 export function discoverAgyBinary(configured?: string): string {
   if (configured) {
-    if (!isAbsolute(configured) || !/^agy(?:\.exe)?$/i.test(configured.split(/[\\/]/).pop() || '')) throw new Error('请指定官方 agy 可执行文件的绝对路径');
+    if (!isAnyAbsolutePath(configured) || !/^agy(?:\.exe)?$/i.test(configured.split(/[\\/]/).pop() || '')) throw new Error('请指定官方 agy 可执行文件的绝对路径');
     return configured;
   }
   const names = process.platform === 'win32' ? ['agy.exe'] : ['agy'];

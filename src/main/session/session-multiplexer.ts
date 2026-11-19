@@ -308,7 +308,8 @@ export class SessionMultiplexer extends EventEmitter {
   private workspace(raw: string): string {
     if (typeof raw !== 'string' || raw.includes('\0')) throw new Error('工作区路径无效');
     const cwd = normalizeWorkspacePath(raw);
-    if (!cwd || !isAbsolute(cwd)) throw new Error('请选择工作区绝对路径');
+    const isAbs = isAbsolute(cwd) || /^[A-Za-z]:[\\/]/.test(cwd) || cwd.startsWith('\\\\');
+    if (!cwd || !isAbs) throw new Error('请选择工作区绝对路径');
     return cwd;
   }
 

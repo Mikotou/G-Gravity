@@ -491,7 +491,8 @@ export class CoreService extends EventEmitter {
         if (!rawProj || typeof rawProj !== 'object') throw new Error('项目配置格式无效');
         const cleanPath = normalizeWorkspacePath(String(rawProj.path || '').trim());
         const cleanName = String(rawProj.name || '').trim().slice(0, 80);
-        if (!cleanPath || !isAbsolute(cleanPath) || !cleanName) {
+        const isAbs = isAbsolute(cleanPath) || /^[A-Za-z]:[\\/]/.test(cleanPath) || cleanPath.startsWith('\\\\');
+        if (!cleanPath || !isAbs || !cleanName) {
           throw new Error('项目名称不能为空且路径必须为绝对路径');
         }
         const pathKey = cleanPath.toLowerCase();

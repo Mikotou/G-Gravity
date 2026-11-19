@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 /** 全部为测试自建内容，绝不枚举真实用户 ~/.gemini。 */
 export function createHistoryFixture() {
-  const directory = realpathSync(mkdtempSync(path.join(tmpdir(), 'gravity-qa-history-')));
+  const directory = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'gravity-qa-history-')));
   const root = path.join(directory, '.gemini', 'antigravity');
   const logDirectory = path.join(root, 'brain', 'history-001', '.system_generated', 'logs');
   mkdirSync(logDirectory, { recursive: true });
