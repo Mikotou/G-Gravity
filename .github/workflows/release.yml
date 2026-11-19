@@ -29,11 +29,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck, test, and build
-        run: |
-          npm run typecheck
-          npm test
-          npm run build
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
 
       - name: Package Windows portable executable
         run: npx electron-builder --win portable --publish never
@@ -52,7 +55,7 @@ jobs:
 
   build-macos:
     name: Build macOS (Apple Silicon & Intel)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -64,11 +67,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck, test, and build
-        run: |
-          npm run typecheck
-          npm test
-          npm run build
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
 
       - name: Package macOS arm64 & x64 (DMG + ZIP)
         env:
@@ -113,6 +119,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag || github.ref_name }}
         run: |
+          if [[ ! "${TAG_NAME}" =~ ^v ]]; then
+            TAG_NAME="v$(node -p "require('./package.json').version")"
+          fi
           VERSION="${TAG_NAME#v}"
           cat <<EOF > release-notes.md
           ## Gravity ${TAG_NAME}（Windows x64 & macOS Apple Silicon / Intel）

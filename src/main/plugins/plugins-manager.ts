@@ -92,14 +92,16 @@ export class PluginsManager {
     for (const scope of scopes) {
       if (isForbiddenCredentialOrStatePath(scope.path)) continue;
       try {
-        if (await fs.realpath(scope.path) !== resolve(scope.path)) continue;
-        for (const entry of await fs.readdir(scope.path, { withFileTypes: true })) {
+        if ((await fs.lstat(scope.path)).isSymbolicLink()) continue;
+        const realScope = await fs.realpath(scope.path);
+        if (isForbiddenCredentialOrStatePath(realScope)) continue;
+        for (const entry of await fs.readdir(realScope, { withFileTypes: true })) {
           if (result.length >= 300) break;
           if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
-          const path = join(scope.path, entry.name, 'SKILL.md');
+          const path = join(realScope, entry.name, 'SKILL.md');
           if (isForbiddenCredentialOrStatePath(path)) continue;
           try {
-            const actual = await fs.realpath(path); if (actual !== path || !within(scope.path, actual) || isForbiddenCredentialOrStatePath(actual)) continue;
+            const actual = await fs.realpath(path); if (actual !== path || !within(realScope, actual) || isForbiddenCredentialOrStatePath(actual)) continue;
             const stat = await fs.lstat(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 256 * 1024) continue;
             const text = await fs.readFile(path, 'utf8'); const frontmatter = /^---\s*\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] || '';
             const field = (name: string) => new RegExp(`^${name}:\\s*(.+)$`, 'm').exec(frontmatter)?.[1].replace(/^['"]|['"]$/g, '').trim();

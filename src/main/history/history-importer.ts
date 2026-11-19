@@ -185,14 +185,17 @@ export class HistoryImporter extends EventEmitter {
 
     for (const root of this.roots) {
       if (isForbiddenCredentialOrStatePath(root)) continue;
+      let realRoot = '';
       try {
-        if ((await fs.lstat(root)).isSymbolicLink() || (await fs.realpath(root)) !== root) continue;
+        if ((await fs.lstat(root)).isSymbolicLink()) continue;
+        realRoot = await fs.realpath(root);
       } catch {
         continue;
       }
-      this.validatedRoots.add(root);
+      if (isForbiddenCredentialOrStatePath(realRoot)) continue;
+      this.validatedRoots.add(realRoot);
       const queue: Array<{ path: string; depth: number; grandParentName: string }> = [
-        { path: root, depth: 0, grandParentName: '' },
+        { path: realRoot, depth: 0, grandParentName: '' },
       ];
       let entriesSeen = 0;
 
@@ -223,7 +226,7 @@ export class HistoryImporter extends EventEmitter {
 
           try {
             const actual = await fs.realpath(path);
-            if (!within(root, actual) || actual !== path || isForbiddenCredentialOrStatePath(actual) || !isAllowedReadOnlyHistoryFile(actual)) {
+            if (!within(realRoot, actual) || actual !== path || isForbiddenCredentialOrStatePath(actual) || !isAllowedReadOnlyHistoryFile(actual)) {
               continue;
             }
             const before = await fs.stat(actual);
@@ -570,11 +573,14 @@ export class HistoryImporter extends EventEmitter {
 
     const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
     await fs.mkdir(this.options.cacheDir, { recursive: true, mode: 0o700 });
+    if ((await fs.lstat(this.options.cacheDir)).isSymbolicLink()) {
+      throw new Error('历史临时快照目录不安全');
+    }
     const realCache = await fs.realpath(this.options.cacheDir);
+    const resolvedRoots = await Promise.all(this.roots.map((root) => fs.realpath(root).catch(() => root)));
     if (
-      realCache !== resolve(this.options.cacheDir) ||
       isForbiddenCredentialOrStatePath(realCache) ||
-      this.roots.some((root) => within(root, realCache))
+      resolvedRoots.some((root) => within(root, realCache))
     ) {
       throw new Error('历史临时快照目录不安全');
     }
@@ -680,8 +686,8 @@ export class HistoryImporter extends EventEmitter {
   /** 只监听已在扫描中验证过的根目录。连续变更共用防抖定时器，最终统一通过 refresh 更新索引。 */
   startWatching(): void {
     if (this.watchers.length || this.disposed) return;
-    for (const root of this.roots) {
-      if (!this.validatedRoots.has(root) || isForbiddenCredentialOrStatePath(root)) continue;
+    for (const root of this.validatedRoots) {
+      if (isForbiddenCredentialOrStatePath(root)) continue;
       try {
         const watcher = watch(root, { recursive: true, persistent: false }, (_event, file) => {
           if (file && isForbiddenCredentialOrStatePath(join(root, file.toString()))) return;
