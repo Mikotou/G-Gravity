@@ -26,7 +26,7 @@ import { InlineRequestView } from './InlineRequestView';
 import type { ReviseMessageInput } from '@shared';
 import { useAnnotationDraft, showAnnotationRanges } from '../lib/annotation-drafts';
 import { EditUserMessage } from './EditUserMessage';
-import { ImageWorkspace } from './MessageImage';
+import { ImageSessionContext, ImageWorkspace } from './MessageImage';
 import { Markdown } from './Markdown';
 import {
   detectContextTargetFromElement,
@@ -624,7 +624,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
               if (linked) renderedApprovalIds.add(linked.requestId);
               const turnNotations = sessionNotations.filter((n) => n.messageId === msg.id);
               const turn = (
-                <ImageWorkspace.Provider value={session.cwd}><MessageTurn
+                <ImageSessionContext.Provider value={session.sessionId}><ImageWorkspace.Provider value={session.cwd}><MessageTurn
                   message={msg}
                   latest={msg.id === lastUserId}
                   editRequest={editRequest.id === msg.id ? editRequest.seq : 0}
@@ -633,7 +633,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
                   defaultThoughtTrack={defaultThoughtTrack}
                   turnStartedAt={turnStartById.get(msg.id)}
                   onInspectDiff={(fp) => onInspectDiffFile(session.sessionId, fp)}
-                /></ImageWorkspace.Provider>
+                /></ImageWorkspace.Provider></ImageSessionContext.Provider>
               );
               return (
                 <div key={msg.id} className={`turn turn-${msg.role}`}>

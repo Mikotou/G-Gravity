@@ -185,14 +185,14 @@ export interface SendPromptInput {
 
 export interface OpenLinkOrFileInput {
   target: string;
-  action: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy';
+  action: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image';
   cwd?: string;
   sessionId?: string;
 }
 
 export interface OpenLinkOrFileResult {
   opened: boolean;
-  modeUsed: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy';
+  modeUsed: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image';
   resolvedTarget: string;
 }
 

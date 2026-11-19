@@ -1,4 +1,10 @@
-import { isRightInspectorTab, LAYOUT_LIMITS, withoutSession } from '../../shared/session-contract';
+import {
+  isRightInspectorTab,
+  LAYOUT_LIMITS,
+  TITLE_ORGANIZE_MODEL_LABEL,
+  TITLE_ORGANIZE_RATE_LIMIT,
+  withoutSession,
+} from '../../shared/session-contract';
 import { clampUiScale, UI_SCALE_LIMITS } from '../../shared/theme-i18n-contract';
 import { prepareRevision } from '../../shared/message-revision';
 import {
@@ -802,7 +808,12 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
             : [],
         compactions: (demoCompactions[sid] ?? []).map((c) => ({ ...c })),
         currentTokensPerSecond: sid === 'sess-primary' ? 78.4 : 64.2,
+        averageTokensPerSecond: sid === 'sess-primary' ? 66.8 : 58.5,
         peakTokensPerSecond: sid === 'sess-primary' ? 116.8 : 95.0,
+        averageCacheHitRate:
+          costSummary.inputTokens + costSummary.cachedInputTokens > 0
+            ? costSummary.cachedInputTokens / (costSummary.inputTokens + costSummary.cachedInputTokens)
+            : 0,
         costSummary,
         usageSource: 'mixed',
         pricingSource,
@@ -1041,6 +1052,8 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       .filter((s) => s.profileId === accounts.activeProfileId && (includeHiddenPollution || !s.isLegacyApprovalPollution))
       .map((s) => ({ ...s }));
   }
+
+  const organizeTimestamps: number[] = [];
 
   /** 构造一次可交互的样例审批。待审项、工具卡和会话状态共用对应的标识，便于页面联动。 */
   function triggerDemoApproval(sessionId: string): PendingApprovalRequest {
@@ -1556,9 +1569,25 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     },
 
     async organizeTitles(request?: TitleOrganizeRequest): Promise<TitleOrganizeResult> {
-      const targetIds = request?.sessionIds ? new Set(request.sessionIds) : null;
+      const now = Date.now();
+      const cutoff = now - TITLE_ORGANIZE_RATE_LIMIT.windowMs;
+      while (organizeTimestamps.length > 0 && organizeTimestamps[0] <= cutoff) {
+        organizeTimestamps.shift();
+      }
+      if (organizeTimestamps.length >= TITLE_ORGANIZE_RATE_LIMIT.maxCalls) {
+        const waitSec = Math.max(1, Math.ceil((organizeTimestamps[0] + TITLE_ORGANIZE_RATE_LIMIT.windowMs - now) / 1000));
+        throw new Error(`标题整理触发冷却限制：1 分钟内最多整理 ${TITLE_ORGANIZE_RATE_LIMIT.maxCalls} 次，请 ${waitSec} 秒后再试`);
+      }
+
+      const scope =
+        request?.scope ??
+        (request?.projectCwd ? 'project' : request?.sessionIds?.length === 1 ? 'session' : request?.sessionIds?.length ? 'project' : 'all');
+      const targetIds = request?.sessionIds?.length ? new Set(request.sessionIds) : null;
+      const projectKey = request?.projectCwd ? normalizeWorkspacePath(request.projectCwd).toLowerCase() : null;
       const suggestions: TitleOrganizeSuggestion[] = [];
       let hiddenPollutionCount = 0;
+      let skippedOrganizedCount = 0;
+      const candidates: ManagedSessionSummary[] = [];
 
       for (const s of sessions) {
         if (s.isLegacyApprovalPollution || isLegacyPollutionSessionTitle(s.rawTitle || s.title)) {
@@ -1566,8 +1595,36 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
           hiddenPollutionCount += 1;
           continue;
         }
+        if (s.archivedAt) continue;
         if (targetIds && !targetIds.has(s.sessionId)) continue;
+        if (projectKey && normalizeWorkspacePath(s.cwd || s.rawCwd || '').toLowerCase() !== projectKey) continue;
+        if (scope === 'all' && s.titleOrganizedAt) {
+          skippedOrganizedCount += 1;
+          continue;
+        }
+        candidates.push(s);
+      }
+
+      if (candidates.length === 0) {
+        return {
+          updatedCount: 0,
+          hiddenPollutionCount,
+          skippedOrganizedCount,
+          modelUsed: TITLE_ORGANIZE_MODEL_LABEL,
+          remainingQuotaInWindow: Math.max(0, TITLE_ORGANIZE_RATE_LIMIT.maxCalls - organizeTimestamps.length),
+          cooldownResetAt: organizeTimestamps[0]
+            ? new Date(organizeTimestamps[0] + TITLE_ORGANIZE_RATE_LIMIT.windowMs).toISOString()
+            : undefined,
+          suggestions: [],
+        };
+      }
+
+      organizeTimestamps.push(now);
+      const nowIso = new Date(now).toISOString();
+      for (const s of candidates) {
         const { organizedTitle, categoryTag } = generateStructuredChineseTitle(s.title, s.cwd);
+        s.titleOrganizedAt = nowIso;
+        s.titleOrganizedModel = TITLE_ORGANIZE_MODEL_LABEL;
         if (organizedTitle !== s.title || s.categoryTag !== categoryTag) {
           suggestions.push({
             sessionId: s.sessionId,
@@ -1577,14 +1634,20 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
           });
           s.title = organizedTitle;
           s.categoryTag = categoryTag;
-          s.updatedAt = new Date().toISOString();
-          sessionEvents.emit({ ...s });
+          s.updatedAt = nowIso;
         }
+        sessionEvents.emit({ ...s });
       }
 
       return {
         updatedCount: suggestions.length,
         hiddenPollutionCount,
+        skippedOrganizedCount,
+        modelUsed: TITLE_ORGANIZE_MODEL_LABEL,
+        remainingQuotaInWindow: Math.max(0, TITLE_ORGANIZE_RATE_LIMIT.maxCalls - organizeTimestamps.length),
+        cooldownResetAt: organizeTimestamps[0]
+          ? new Date(organizeTimestamps[0] + TITLE_ORGANIZE_RATE_LIMIT.windowMs).toISOString()
+          : undefined,
         suggestions,
       };
     },

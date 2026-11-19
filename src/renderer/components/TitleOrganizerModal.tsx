@@ -1,36 +1,44 @@
 import React, { useState } from 'react';
-import { ArrowRight, X } from 'lucide-react';
-import type { TitleOrganizeResult } from '@shared';
+import { ArrowRight, Sparkles, X } from 'lucide-react';
+import {
+  TITLE_ORGANIZE_MODEL_LABEL,
+  TITLE_ORGANIZE_RATE_LIMIT,
+  type TitleOrganizeRequest,
+  type TitleOrganizeResult,
+} from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { formatActionError } from '../i18n/locales';
 
 export interface TitleOrganizerModalProps {
   open: boolean;
   result: TitleOrganizeResult | null;
+  cooldownSec?: number;
   onClose: () => void;
-  onRunOrganize: (useExternalPolish: boolean) => Promise<void>;
+  onRunOrganize: (request?: TitleOrganizeRequest) => Promise<void>;
 }
 
 export function TitleOrganizerModal({
   open,
   result,
+  cooldownSec = 0,
   onClose,
   onRunOrganize,
 }: TitleOrganizerModalProps): React.ReactElement | null {
   const { dict } = useI18n();
-  const [external, setExternal] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 由上层先执行整理，再把本次结果传入。列表展示已处理条目的前后标题，空建议列表也可显示汇总。
   if (!open || !result) return null;
 
-  /** 再次整理时将复核偏好随回调提交，运行期间锁住按钮。结果由父组件更新，错误留在弹窗内。 */
+  const modelLabel = result.modelUsed || TITLE_ORGANIZE_MODEL_LABEL;
+  const remaining = result.remainingQuotaInWindow ?? TITLE_ORGANIZE_RATE_LIMIT.maxCalls;
+
   async function rerun(): Promise<void> {
-    if (running) return;
+    if (running || cooldownSec > 0) return;
     setRunning(true);
     setError(null);
     try {
-      await onRunOrganize(external);
+      await onRunOrganize({ scope: 'all' });
     } catch (err) {
       setError(formatActionError(err, dict));
     } finally {
@@ -42,14 +50,23 @@ export function TitleOrganizerModal({
     <div className="overlay" onMouseDown={onClose} data-testid="organize-modal-backdrop">
       <div className="modal modal-wide" onMouseDown={(e) => e.stopPropagation()} data-testid="title-organizer-modal">
         <div className="modal-head">
-          <h2>{dict.organizeModalTitle}</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h2>{dict.organizeModalTitle}</h2>
+            <span className="badge badge-accent badge-mono" data-testid="organize-model-badge">
+              <Sparkles size={11} />
+              <span>{dict.ui.organizeModelBadge(modelLabel)}</span>
+            </span>
+          </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label={dict.closeAction}>
             <X size={16} />
           </button>
         </div>
         <div className="modal-body">
           <div className="notice" data-testid="organize-summary-banner">
-            {dict.organizeSummaryText(result.updatedCount, result.hiddenPollutionCount)}
+            <span>{dict.organizeSummaryText(result.updatedCount, result.hiddenPollutionCount)}</span>
+            {Boolean(result.skippedOrganizedCount) && (
+              <span className="muted"> · {dict.ui.organizeSkippedNote(result.skippedOrganizedCount!)}</span>
+            )}
           </div>
           {result.suggestions.length === 0 ? (
             <div className="muted">{dict.organizeNoChanges}</div>
@@ -75,15 +92,13 @@ export function TitleOrganizerModal({
           )}
         </div>
         <div className="modal-foot">
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, marginRight: 'auto' }}>
-            <span className="switch">
-              <input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} />
-              <span className="switch-track" />
-            </span>
-            <span className="muted">{dict.organizeExternalToggle}</span>
-          </label>
-          <button type="button" className="btn" disabled={running} onClick={() => void rerun()}>
-            {dict.reOrganizeBtn}
+          <span className="muted mono" style={{ fontSize: 11.5, marginRight: 'auto' }} data-testid="organize-quota-status">
+            {cooldownSec > 0
+              ? dict.ui.organizeCooldownBanner(cooldownSec)
+              : dict.ui.organizeWindowQuota(remaining, TITLE_ORGANIZE_RATE_LIMIT.maxCalls)}
+          </span>
+          <button type="button" className="btn" disabled={running || cooldownSec > 0} onClick={() => void rerun()}>
+            {running ? dict.organizingTitles : dict.reOrganizeBtn}
           </button>
           <button type="button" className="btn btn-primary" onClick={onClose}>
             {dict.closeAction}

@@ -7,12 +7,14 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { chromium } = require('playwright-core');
 const expectedVersion = 'v' + require('../package.json').version;
 const standardRoot = path.resolve('release');
-function builtInStandardDirectory() {
-  try { return 'v' + require(path.join(standardRoot, 'win-unpacked/resources/app/package.json')).version === expectedVersion; }
+const versionedRoot = path.join(standardRoot, expectedVersion);
+function matchesExpectedVersion(dir) {
+  try { return 'v' + require(path.join(dir, 'win-unpacked/resources/app/package.json')).version === expectedVersion; }
   catch { return false; }
 }
 const releaseRoot = process.env.GRAVITY_RELEASE_DIR ? path.resolve(process.env.GRAVITY_RELEASE_DIR)
-  : builtInStandardDirectory() ? standardRoot : path.join(standardRoot, expectedVersion);
+  : matchesExpectedVersion(versionedRoot) ? versionedRoot
+  : matchesExpectedVersion(standardRoot) ? standardRoot : versionedRoot;
 
 const recordedId = 'gravity-packaged-ui-fixture';
 const longCommand = 'echo ' + 'example-argument '.repeat(30) + 'END_OF_COMMAND';

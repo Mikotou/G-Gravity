@@ -184,7 +184,9 @@ export function ContextCostInspectorView({
         attachments: [],
         compactions: [],
         currentTokensPerSecond: 0,
+        averageTokensPerSecond: 0,
         peakTokensPerSecond: 0,
+        averageCacheHitRate: 0,
         costSummary: ZERO,
         usageSource: 'estimated',
         pricingSource: dashboard.pricingSource,
@@ -285,6 +287,19 @@ export function ContextCostInspectorView({
     cost.totalCostUsd > 0 ? cost.totalCostUsd * 1.15 : Math.max(0.05, ...models.map((m) => m.totalCostUsd * 1.25))
   );
 
+  const avgTps = tele ? (tele.averageTokensPerSecond ?? tele.currentTokensPerSecond) : 0;
+  const sessionPromptInputTotal = tele
+    ? tele.costSummary.inputTokens + tele.costSummary.cachedInputTokens
+    : 0;
+  const cacheHitRate = tele
+    ? (tele.averageCacheHitRate !== undefined
+        ? tele.averageCacheHitRate
+        : sessionPromptInputTotal > 0
+          ? tele.costSummary.cachedInputTokens / sessionPromptInputTotal
+          : 0)
+    : 0;
+  const cacheHitPct = Math.min(100, Math.max(0, cacheHitRate * 100));
+
   return (
     <div className="inspector-stack" data-testid="context-cost-inspector">
       {/* Context 窗口 */}
@@ -300,9 +315,19 @@ export function ContextCostInspectorView({
                 / {formatTokenShort(tele.maxContextTokens)} · {pct.toFixed(1)}%
               </span>
               <ContextUsageMiniRing ratio={pct / 100} level={tele.pressureLevel} />
-              <span className="stat-sub" style={{ marginLeft: 'auto' }}>
-                {tele.currentTokensPerSecond.toFixed(1)} tok/s
-              </span>
+            </div>
+            <div className="ctx-session-metrics" data-testid="context-session-metrics">
+              <div className="ctx-metric-tile" data-testid="context-avg-tps">
+                <span className="ctx-metric-label">{dict.ui.sessionAvgTpsLabel}</span>
+                <strong className="ctx-metric-val mono">{avgTps.toFixed(1)} tok/s</strong>
+              </div>
+              <div className="ctx-metric-tile" data-testid="context-cache-hit-rate">
+                <span className="ctx-metric-label">
+                  <span className="ctx-metric-dot" style={{ background: DIM_COLORS.cached }} />
+                  {dict.ui.sessionCacheHitLabel}
+                </span>
+                <strong className="ctx-metric-val mono">{cacheHitPct.toFixed(1)}%</strong>
+              </div>
             </div>
             <div className="stack-bar stack-bar-unused-bg" data-testid="context-sorted-stack-bar">
               {breakdown

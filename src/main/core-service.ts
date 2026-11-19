@@ -4,12 +4,12 @@ import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { AcpRequestPermissionParams, AcpSessionUpdateNotification, AcpPromptContentBlock, AgentExecutionMode, AgentReasoningEffort } from '../shared/acp-protocol';
+import type { AcpConfigOption, AcpRequestPermissionParams, AcpSessionNewResult, AcpSessionUpdateNotification, AcpPromptContentBlock, AgentExecutionMode, AgentReasoningEffort } from '../shared/acp-protocol';
 import type { ApprovalDecisionSubmission, ApprovalMode, ApproveForMeConfig } from '../shared/approval-contract';
 import type { AppBootstrapPayload, AcpConnectionStatus, CreateSessionInput, OpenLinkOrFileInput, OpenLinkOrFileResult, SendPromptInput } from '../shared/ipc-channels';
 import { isForbiddenCredentialOrStatePath } from '../shared/accounts-history-contract';
-import type { ChatMessageItem, ManagedSessionSummary, TitleOrganizeRequest, WorkspaceLayoutState } from '../shared/session-contract';
-import { clampSplitRatio, generateStructuredChineseTitle, isLegacyPollutionSessionTitle, isRightInspectorTab, LAYOUT_LIMITS, normalizeWorkspacePath } from '../shared/session-contract';
+import type { ChatMessageItem, ManagedSessionSummary, TitleOrganizeRequest, TitleOrganizeResult, WorkspaceLayoutState } from '../shared/session-contract';
+import { clampSplitRatio, generateStructuredChineseTitle, isLegacyPollutionSessionTitle, isRightInspectorTab, LAYOUT_LIMITS, normalizeWorkspacePath, TITLE_ORGANIZE_MODEL_LABEL, TITLE_ORGANIZE_RATE_LIMIT } from '../shared/session-contract';
 import type { ClientPreferences, GravityIconId, WorkspaceProjectConfig } from '../shared/theme-i18n-contract';
 import { THEME_PRESETS, GRAVITY_ICON_VARIANTS, UI_SCALE_LIMITS, clampUiScale, validateCustomThemeConfig } from '../shared/theme-i18n-contract';
 import type { ModelRateCard } from '../shared/telemetry-contract';
@@ -43,7 +43,7 @@ import { LocalTranslator } from './translation/local-translator';
 
 export const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'gravity-claude-dark', defaultThoughtTrack: 'zh', translationEngine: 'local', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [] };
 export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context', splitRatio: 0.5 };
-export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; setIcon?: (iconId: GravityIconId) => void | Promise<void>; setZoom?: (factor: number) => void; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
+export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; now?: () => number; setIcon?: (iconId: GravityIconId) => void | Promise<void>; setZoom?: (factor: number) => void; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
 /** 主进程的业务入口。窗口请求进入此处，ACP 更新按会话分发给消息、审批、统计和检视器，再由事件通知渲染层。 */
 export class CoreService extends EventEmitter {
   readonly store: ClientStore; readonly client: AcpClient; readonly sessions: SessionMultiplexer; readonly approval: ApprovalEngine;
@@ -72,6 +72,9 @@ export class CoreService extends EventEmitter {
   private quotaRequests = new Map<string, ReturnType<typeof readAccountQuota>>();
   private managing = new Set<string>();
   private revising = new Set<string>();
+  private ephemeralSessionIds = new Set<string>();
+  private titleOrganizeTimestamps: number[] = [];
+  private organizingTitles = false;
   private localTranslator = new LocalTranslator();
   private guardActiveSessions = new Map<string, { count: number; modelLabel: string }>();
   private bootstrapping?: Promise<AppBootstrapPayload>;
@@ -225,10 +228,10 @@ export class CoreService extends EventEmitter {
       this.messages.set(id, normalizedItems);
       const firstUser = normalizedItems.find(m => m.role === 'user')?.content || '';
       if (normalizedItems.length > 0 && !isLegacyPollutionSessionTitle(firstUser)) {
-        const gen = generateStructuredChineseTitle(firstUser);
+        const plainTitle = firstUser.replace(/\s+/g, ' ').trim().slice(0, 36) || '新建对话';
         seedEntries.push({
           sessionId: id,
-          title: gen.organizedTitle,
+          title: plainTitle,
           cwd: this.options.homeDir || homedir(),
           updatedAt: normalizedItems.at(-1)?.createdAt || new Date().toISOString(),
         });
@@ -771,11 +774,13 @@ export class CoreService extends EventEmitter {
     if (profileId !== this.accounts.activeProfileId || this.managing.has(input.sessionId) || this.revising.has(input.sessionId) || this.sessions.isBusy(input.sessionId) || !this.sessions.isActive(input.sessionId)) throw new Error('文件准备期间会话状态已改变，请重试');
     const titleText = input.text.trim() || input.annotations?.find(item => item.comment)?.comment || input.annotations?.[0]?.excerpt;
     if (!isManualCompact && titleText && (!session.title || session.title === '新建对话' || session.title === 'New Session')) {
-      const generated = generateStructuredChineseTitle(titleText, session.cwd);
-      session.title = generated.organizedTitle;
-      session.categoryTag = generated.categoryTag;
-      this.sessions.updateSessionRecord(session);
-      this.emit('session-updated', this.titles.apply(session));
+      // 仅提取首句摘要作为初始显示名，不自动触发标题整理；分类整理仅在用户主动点击按钮时使用内置模型执行。
+      const plain = titleText.replace(/\s+/g, ' ').trim().slice(0, 36);
+      if (plain) {
+        session.title = plain;
+        this.sessions.updateSessionRecord(session);
+        this.emit('session-updated', this.titles.apply(session));
+      }
     }
     const submitted = this.userMessage(input);
     this.upsert(submitted);
@@ -833,7 +838,247 @@ export class CoreService extends EventEmitter {
   }
   async renameSession(sessionId: string, newTitle: string) { const session = this.titles.rename(this.sessions.get(sessionId), newTitle); this.sessions.updateSessionRecord(session); this.emit('session-updated', session); return session; }
   async togglePinSession(sessionId: string) { const session = this.titles.togglePin(this.sessions.get(sessionId)); this.sessions.updateSessionRecord(session); this.emit('session-updated', session); return session; }
-  async organizeTitles(request?: TitleOrganizeRequest) { const result = this.titles.organize([...this.sessions.sessions.values()], request); for (const session of this.sessions.sessions.values()) this.emit('session-updated', this.titles.apply(session)); return result; }
+  private nowMs(): number { return this.options.now ? this.options.now() : Date.now(); }
+  private pruneOrganizeTimestamps(now = this.nowMs()): number[] {
+    const cutoff = now - TITLE_ORGANIZE_RATE_LIMIT.windowMs;
+    this.titleOrganizeTimestamps = this.titleOrganizeTimestamps.filter(ts => ts > cutoff);
+    return this.titleOrganizeTimestamps;
+  }
+  private parseOrganizedTitleResponse(
+    rawText: string,
+    targets: ManagedSessionSummary[]
+  ): Map<string, { organizedTitle: string; categoryTag?: string }> {
+    const result = new Map<string, { organizedTitle: string; categoryTag?: string }>();
+    const targetIds = new Set(targets.map(item => item.sessionId));
+    const trimmed = rawText.trim();
+    const fenceMatch = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+    const candidate = (fenceMatch ? fenceMatch[1] : trimmed).trim();
+    const start = candidate.indexOf('[');
+    const end = candidate.lastIndexOf(']');
+    if (start < 0 || end <= start) return result;
+    let parsed: unknown;
+    try { parsed = JSON.parse(candidate.slice(start, end + 1)); } catch { return result; }
+    if (!Array.isArray(parsed)) return result;
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') continue;
+      const rec = item as Record<string, unknown>;
+      const sessionId = typeof rec.sessionId === 'string' ? rec.sessionId.trim() : '';
+      const rawTitle = typeof rec.organizedTitle === 'string' ? rec.organizedTitle : typeof rec.title === 'string' ? rec.title : '';
+      const cleanTitle = rawTitle.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+      if (!sessionId || !targetIds.has(sessionId) || !cleanTitle) continue;
+      const rawCat = typeof rec.categoryTag === 'string' ? rec.categoryTag : typeof rec.category === 'string' ? rec.category : '';
+      const cleanCat = rawCat.replace(/[\r\n]+/g, ' ').trim().slice(0, 20);
+      const formatted = /[｜|]/.test(cleanTitle)
+        ? cleanTitle.replace(/\s*\|\s*/, '｜')
+        : cleanCat ? `${cleanCat}｜${cleanTitle}` : cleanTitle;
+      result.set(sessionId, {
+        organizedTitle: formatted,
+        categoryTag: cleanCat || (formatted.includes('｜') ? formatted.split('｜')[0].trim() : undefined),
+      });
+    }
+    return result;
+  }
+  /** 通过官方 agy acp 临时只读会话调用内置模型 Hydrogen (medium) 整理标题，用毕立即关闭并释放并发槽位。 */
+  private async runHydrogenTitleOrganizer(
+    targets: ManagedSessionSummary[]
+  ): Promise<{ map: Map<string, { organizedTitle: string; categoryTag?: string }>; modelUsed: string } | { fallbackLocal: true }> {
+    await this.client.start();
+    this.sessions.reserveExternalSlot();
+    let tempSessionId: string | undefined;
+    let outputText = '';
+    const onUpdate = (payload: AcpSessionUpdateNotification) => {
+      if (payload?.sessionId !== tempSessionId) return;
+      if (payload.update?.sessionUpdate === 'agent_message_chunk' && payload.update.content?.text) {
+        outputText += payload.update.content.text;
+      }
+    };
+    try {
+      const validCwd = targets.find(item => item.cwd && existsSync(item.cwd))?.cwd || this.options.homeDir || homedir();
+      const append = this.client.initializeResult?.agentCapabilities._meta?.antigravity?.systemPrompt?.append;
+      const created = await this.client.request<AcpSessionNewResult>('session/new', {
+        cwd: validCwd,
+        mcpServers: [],
+        ...(append
+          ? {
+              _meta: {
+                antigravity: {
+                  systemPrompt: {
+                    append: '你是只读标题整理助手。严禁调用任何工具、命令或子智能体，只返回要求的纯 JSON 数组。',
+                  },
+                },
+              },
+            }
+          : {}),
+      });
+      if (!created?.sessionId) throw new Error('内置模型 Hydrogen (medium) 初始化临时整理会话失败');
+      tempSessionId = created.sessionId;
+      this.ephemeralSessionIds.add(tempSessionId);
+
+      let latestConfigOptions: AcpConfigOption[] | undefined = created.configOptions;
+      const cfgModel = latestConfigOptions?.find(opt => opt.id === 'model');
+      const hydrogenOpt =
+        cfgModel?.options?.find(opt => /^gemini-4-hydrogen$/i.test(opt.value))
+        || cfgModel?.options?.find(opt => /hydrogen/i.test(opt.value) || /hydrogen/i.test(opt.name));
+      const legacyHydrogen =
+        created.models?.availableModels?.find(m => /^gemini-4-hydrogen$/i.test(m.modelId))
+        || created.models?.availableModels?.find(m => /hydrogen/i.test(m.modelId) || /hydrogen/i.test(m.name));
+
+      if (!hydrogenOpt && !legacyHydrogen) {
+        if (this.hasAntigravityOptions()) {
+          throw new Error('当前官方 ACP 模型列表中未找到内置模型 Hydrogen，无法执行 AI 标题整理');
+        }
+        return { fallbackLocal: true };
+      }
+
+      if (hydrogenOpt) {
+        if (cfgModel?.currentValue !== hydrogenOpt.value) {
+          const res = await this.client.request<{ configOptions?: AcpConfigOption[] }>('session/set_config_option', {
+            sessionId: tempSessionId,
+            configId: 'model',
+            value: hydrogenOpt.value,
+          });
+          if (res?.configOptions) latestConfigOptions = res.configOptions;
+        }
+      } else if (legacyHydrogen && created.models?.currentModelId !== legacyHydrogen.modelId) {
+        await this.client.request('session/set_model', {
+          sessionId: tempSessionId,
+          modelId: legacyHydrogen.modelId,
+        });
+      }
+
+      const effortOpt = latestConfigOptions?.find(opt => opt.id === 'thought_level');
+      const mediumOpt = effortOpt?.options?.find(opt => opt.value.toLowerCase() === 'medium');
+      if (mediumOpt && effortOpt?.currentValue !== mediumOpt.value) {
+        const res = await this.client.request<{ configOptions?: AcpConfigOption[] }>('session/set_config_option', {
+          sessionId: tempSessionId,
+          configId: 'thought_level',
+          value: mediumOpt.value,
+        });
+        if (res?.configOptions) latestConfigOptions = res.configOptions;
+      }
+
+      const modeOpt = latestConfigOptions?.find(opt => opt.id === 'mode');
+      if (modeOpt?.options?.some(opt => opt.value === 'plan') && modeOpt.currentValue !== 'plan') {
+        await this.client.request('session/set_config_option', {
+          sessionId: tempSessionId,
+          configId: 'mode',
+          value: 'plan',
+        }).catch(() => {});
+      }
+
+      const items = targets.slice(0, 30).map(item => {
+        const msgs = this.messages.get(item.sessionId) || [];
+        const firstUser = msgs.find(m => m.role === 'user')?.content?.replace(/\s+/g, ' ').trim().slice(0, 200) || '';
+        const firstAssistant = msgs.find(m => m.role === 'assistant')?.content?.replace(/\s+/g, ' ').trim().slice(0, 140) || '';
+        const folder = item.cwd.split(/[\\/]/).filter(Boolean).pop() || '';
+        return {
+          sessionId: item.sessionId,
+          currentTitle: item.title,
+          folder,
+          firstUser,
+          firstAssistant,
+        };
+      });
+
+      const promptText = [
+        '[Gravity Title Organizer]',
+        '请根据以下会话信息为每条会话整理一个简洁、准确的中文标题，格式统一为「分类｜核心主题」。',
+        '要求：',
+        '1. 分类（categoryTag）为 2–10 字的高信息量标签（例如 Frontend、Backend、QA、Docs、Swarm、或项目简称），保留必要英文技术词。',
+        '2. 核心主题为 4–20 字，直击核心意图，去掉“请帮我/帮我/一下”等口语废词。',
+        '3. 严禁调用任何工具、命令或修改文件，只输出严格 JSON 数组，不要输出多余解释：',
+        '[{"sessionId":"...","categoryTag":"分类","organizedTitle":"分类｜核心主题"}]',
+        '',
+        JSON.stringify(items),
+      ].join('\n');
+
+      this.client.on('session/update', onUpdate);
+      await this.client.request('session/prompt', {
+        sessionId: tempSessionId,
+        prompt: [{ type: 'text', text: promptText }],
+      }, 90_000);
+
+      const map = this.parseOrganizedTitleResponse(outputText, targets);
+      if (map.size === 0) {
+        throw new Error('内置模型 Hydrogen (medium) 返回的标题格式无法解析，请稍后重试');
+      }
+      const modelLabel = `${hydrogenOpt?.name || legacyHydrogen?.name || 'Hydrogen'} (medium)`;
+      return { map, modelUsed: modelLabel };
+    } finally {
+      this.client.off('session/update', onUpdate);
+      if (tempSessionId) {
+        this.ephemeralSessionIds.delete(tempSessionId);
+        if (this.client.connected && this.client.initializeResult?.agentCapabilities.sessionCapabilities?.close) {
+          await this.client.request('session/close', { sessionId: tempSessionId }).catch(() => {});
+        }
+      }
+      this.sessions.releaseExternalSlot();
+    }
+  }
+  async organizeTitles(request?: TitleOrganizeRequest): Promise<TitleOrganizeResult> {
+    this.accounts.assertReady();
+    if (this.organizingTitles) {
+      throw new Error(`正在使用内置模型 ${TITLE_ORGANIZE_MODEL_LABEL} 整理标题，请等待当前整理完成`);
+    }
+    const now = this.nowMs();
+    const recent = this.pruneOrganizeTimestamps(now);
+    if (recent.length >= TITLE_ORGANIZE_RATE_LIMIT.maxCalls) {
+      const waitSec = Math.max(1, Math.ceil((recent[0] + TITLE_ORGANIZE_RATE_LIMIT.windowMs - now) / 1000));
+      throw new Error(`标题整理触发冷却限制：1 分钟内最多整理 ${TITLE_ORGANIZE_RATE_LIMIT.maxCalls} 次，请 ${waitSec} 秒后再试`);
+    }
+    const allSessions = [...this.sessions.sessions.values()];
+    const selected = this.titles.selectTargets(allSessions, request);
+    if (selected.targets.length === 0) {
+      return {
+        updatedCount: 0,
+        hiddenPollutionCount: selected.hiddenPollutionCount,
+        skippedOrganizedCount: selected.skippedOrganizedCount,
+        modelUsed: TITLE_ORGANIZE_MODEL_LABEL,
+        remainingQuotaInWindow: Math.max(0, TITLE_ORGANIZE_RATE_LIMIT.maxCalls - recent.length),
+        cooldownResetAt: recent[0] ? new Date(recent[0] + TITLE_ORGANIZE_RATE_LIMIT.windowMs).toISOString() : undefined,
+        suggestions: [],
+      };
+    }
+
+    this.titleOrganizeTimestamps.push(now);
+    this.organizingTitles = true;
+    try {
+      const aiOutcome = await this.runHydrogenTitleOrganizer(selected.targets);
+      let result: TitleOrganizeResult;
+      if ('fallbackLocal' in aiOutcome) {
+        const localMap = new Map<string, { organizedTitle: string; categoryTag: string }>();
+        for (const item of selected.targets) {
+          localMap.set(item.sessionId, generateStructuredChineseTitle(item.title, item.cwd));
+        }
+        result = this.titles.applyOrganizedTitles(selected.targets, localMap, {
+          modelUsed: TITLE_ORGANIZE_MODEL_LABEL,
+          hiddenPollutionCount: selected.hiddenPollutionCount,
+          skippedOrganizedCount: selected.skippedOrganizedCount,
+          nowIso: new Date(now).toISOString(),
+        });
+      } else {
+        result = this.titles.applyOrganizedTitles(selected.targets, aiOutcome.map, {
+          modelUsed: aiOutcome.modelUsed,
+          hiddenPollutionCount: selected.hiddenPollutionCount,
+          skippedOrganizedCount: selected.skippedOrganizedCount,
+          nowIso: new Date(now).toISOString(),
+        });
+      }
+      for (const session of this.sessions.sessions.values()) {
+        const applied = this.titles.apply(session);
+        this.sessions.updateSessionRecord(applied);
+        this.emit('session-updated', applied);
+      }
+      const latestWindow = this.pruneOrganizeTimestamps(this.nowMs());
+      result.remainingQuotaInWindow = Math.max(0, TITLE_ORGANIZE_RATE_LIMIT.maxCalls - latestWindow.length);
+      result.cooldownResetAt = latestWindow[0]
+        ? new Date(latestWindow[0] + TITLE_ORGANIZE_RATE_LIMIT.windowMs).toISOString()
+        : undefined;
+      return result;
+    } finally {
+      this.organizingTitles = false;
+    }
+  }
   async setApprovalMode(mode: ApprovalMode) { return this.updateApprovalConfig({ mode }); }
   async updateApprovalConfig(patch: Partial<ApproveForMeConfig>) {
     // 外部复审配置分为内存和磁盘两份。持久化副本在写入前剔除密钥，当前进程仍可使用已配置的复审服务。
@@ -857,14 +1102,26 @@ export class CoreService extends EventEmitter {
   }
   /** 将消息里的链接或路径解析为系统操作。相对文件依会话目录定位，解析后的本地路径再经过敏感路径检查。 */
   async openLinkOrFileTarget(input: OpenLinkOrFileInput): Promise<OpenLinkOrFileResult> {
-    if (!input || typeof input.target !== 'string' || !input.target.trim() || input.target.length > 4096) {
+    if (!input || typeof input.target !== 'string' || !input.target.trim()) {
       throw new Error('无效的目标链接或路径');
     }
-    if (!['browser', 'default-app', 'reveal-in-folder', 'copy'].includes(input.action)) {
+    if (!['browser', 'default-app', 'reveal-in-folder', 'copy', 'copy-image'].includes(input.action)) {
       throw new Error('无效的打开动作');
     }
     const rawTarget = input.target.trim();
+    const isDataImage = /^data:image\/(?:png|jpe?g|gif|webp|avif|bmp);base64,[A-Za-z0-9+/=\s]+$/i.test(rawTarget);
+    if (input.action === 'copy-image' && isDataImage) {
+      if (rawTarget.length > 28 * 1024 * 1024) throw new Error('图片数据超过剪贴板大小限制');
+      await this.options.openTargetHandler?.(rawTarget, 'copy-image');
+      return { opened: true, modeUsed: 'copy-image', resolvedTarget: 'data:image' };
+    }
+    if (rawTarget.length > 4096) {
+      throw new Error('无效的目标链接或路径');
+    }
     if (/^(?:https?|mailto):/i.test(rawTarget)) {
+      if (input.action === 'copy-image') {
+        throw new Error('远程图片请先转换为本机图片数据后再复制');
+      }
       const parsed = new URL(rawTarget);
       const mode: OpenLinkOrFileResult['modeUsed'] = input.action === 'copy' ? 'copy' : 'browser';
       await this.options.openTargetHandler?.(parsed.toString(), mode);
@@ -929,6 +1186,9 @@ export class CoreService extends EventEmitter {
     }
     const st = statSync(localPath);
     const isDir = st.isDirectory();
+    if (input.action === 'copy-image' && isDir) {
+      throw new Error('无法将目录作为图片复制');
+    }
     const ext = extname(localPath).toLowerCase();
     const isExecutableOrScript = /^\.(?:exe|bat|cmd|ps1|vbs|vbe|wsf|wsh|msi|msp|com|scr|pif|reg|dll|sys|cpl|hta|sh)$/i.test(ext);
 

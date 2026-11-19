@@ -91,11 +91,13 @@ async function checkActivitySeam(page) {
     await weekly.getByText('79.8%').waitFor();
     await page.getByTestId('app-topbar').hover();
     await details.waitFor({ state: 'detached' });
-    const leftQuota = pane.getByTestId('quota-trigger');
-    await leftQuota.focus(); await leftQuota.press('ArrowDown');
+    // v0.2.0: 左侧独立额度触发器已移除，统一收拢至右下角「百分比 + 进度条」入口
+    assert.equal(await pane.getByTestId('quota-trigger').count(), 0);
+    await pane.getByTestId('quota-weekly-bar').waitFor();
+    await weekly.focus(); await weekly.press('ArrowDown');
     await details.waitFor(); await page.keyboard.press('Escape');
     await details.waitFor({ state: 'detached' });
-    assert.ok(await leftQuota.evaluate(node => node === document.activeElement));
+    assert.ok(await weekly.evaluate(node => node === document.activeElement));
     const thought = page.getByTestId('thought-content-flow');
     const measure = () => thought.locator('p').evaluateAll(nodes => nodes.map((p, i) => {
       const s = getComputedStyle(p), rect = p.getBoundingClientRect();
@@ -176,9 +178,9 @@ async function checkActivitySeam(page) {
       assert.ok(offset <= 1, mode + ' horizontal offset ' + offset);
       assert.ok(bounds.y + bounds.height <= composerBox.y - 4, mode + ' arrow overlapped the composer');
       const footer = await pane.locator('.quota-footer').boundingBox();
-      const badge = await weekly.boundingBox(), trigger = await pane.getByTestId('quota-trigger').boundingBox();
-      assert.ok(badge.x + badge.width <= footer.x + footer.width && badge.x + badge.width >= footer.x + footer.width - 6);
-      assert.ok(trigger.x - footer.x <= 5);
+      const badge = await weekly.boundingBox();
+      assert.ok(badge.x + badge.width <= footer.x + footer.width && badge.x + badge.width >= footer.x + footer.width - 8);
+      assert.equal(await pane.getByTestId('quota-trigger').count(), 0);
       console.log(mode + ' ' + width + '×' + height + ' jump offset ' + offset + 'px, gap ' + Math.round(composerBox.y - bounds.y - bounds.height) + 'px');
     }
     assert.equal(await page.evaluate(() => window.fixture.quotaReads), reads);

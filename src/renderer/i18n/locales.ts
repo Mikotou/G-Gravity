@@ -454,6 +454,19 @@ export interface WorkbenchStrings {
   dockInspector: string;
   floatInspector: string;
   clearSearch: string;
+  realtimeTpsLabel: string;
+  sessionAvgTpsLabel: string;
+  sessionCacheHitLabel: string;
+  organizeAllTitle: string;
+  organizeProjectTitle: (projectName: string) => string;
+  organizeSessionTitle: string;
+  organizingWithModel: (model: string) => string;
+  organizeCooldownBanner: (seconds: number) => string;
+  organizeSkippedNote: (count: number) => string;
+  organizeWindowQuota: (remaining: number, max: number) => string;
+  organizeModelBadge: (model: string) => string;
+  copyImageAction: string;
+  copiedImageAction: string;
 }
 
 const WORKBENCH_ZH: WorkbenchStrings = {
@@ -480,6 +493,19 @@ const WORKBENCH_ZH: WorkbenchStrings = {
   dockInspector: '停靠到右侧',
   floatInspector: '切换为悬浮面板',
   clearSearch: '清空搜索',
+  realtimeTpsLabel: '实时输出速率',
+  sessionAvgTpsLabel: '会话平均速率',
+  sessionCacheHitLabel: '平均缓存命中率',
+  organizeAllTitle: '全部整理未整理会话（内置 Hydrogen medium · 1分钟限4次）',
+  organizeProjectTitle: (name) => `使用 Hydrogen (medium) 整理「${name}」项目标题`,
+  organizeSessionTitle: '使用 Hydrogen (medium) 整理此会话标题',
+  organizingWithModel: (model) => `正在使用内置模型 ${model} 整理标题…`,
+  organizeCooldownBanner: (sec) => `标题整理冷却中 ${sec}s（1分钟最多4次）`,
+  organizeSkippedNote: (n) => `已跳过 ${n} 个先前已整理的会话`,
+  organizeWindowQuota: (left, max) => `本分钟剩余 ${left}/${max} 次`,
+  organizeModelBadge: (model) => `内置模型 · ${model}`,
+  copyImageAction: '复制图片',
+  copiedImageAction: '已复制图片',
 };
 
 const WORKBENCH_EN: WorkbenchStrings = {
@@ -506,6 +532,19 @@ const WORKBENCH_EN: WorkbenchStrings = {
   dockInspector: 'Dock inspector',
   floatInspector: 'Float inspector',
   clearSearch: 'Clear search',
+  realtimeTpsLabel: 'Realtime speed',
+  sessionAvgTpsLabel: 'Session avg speed',
+  sessionCacheHitLabel: 'Avg cache hit rate',
+  organizeAllTitle: 'Organize unorganized threads (built-in Hydrogen medium · max 4/min)',
+  organizeProjectTitle: (name) => `Organize "${name}" titles with Hydrogen (medium)`,
+  organizeSessionTitle: 'Organize this thread title with Hydrogen (medium)',
+  organizingWithModel: (model) => `Organizing titles with built-in ${model}…`,
+  organizeCooldownBanner: (sec) => `Title organize cooldown ${sec}s (max 4/min)`,
+  organizeSkippedNote: (n) => `Skipped ${n} previously organized threads`,
+  organizeWindowQuota: (left, max) => `${left}/${max} left this minute`,
+  organizeModelBadge: (model) => `Built-in · ${model}`,
+  copyImageAction: 'Copy image',
+  copiedImageAction: 'Image copied',
 };
 
 // 语言切换使用同一组字段。每种语言自行处理复数、语序和数值插入，组件只提供数据。

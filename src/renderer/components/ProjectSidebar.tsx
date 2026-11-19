@@ -22,6 +22,8 @@ import {
 import {
   isLegacyPollutionSessionTitle,
   normalizeWorkspacePath,
+  TITLE_ORGANIZE_MODEL_LABEL,
+  TITLE_ORGANIZE_RATE_LIMIT,
   type AccountsStateSnapshot,
   type AcpConnectionStatus,
   type AgentExecutionMode,
@@ -30,6 +32,7 @@ import {
   type ImportedHistorySessionRecord,
   type ManagedSessionSummary,
   type SessionAction,
+  type TitleOrganizeRequest,
   type WorkspaceProjectConfig,
 } from '@shared';
 import { startSessionDrag } from '../lib/session-drag';
@@ -50,6 +53,12 @@ export interface ProjectSidebarProps {
   selectedHistoryId: string | null;
   hideLegacyPollutionSessions: boolean;
   organizingTitles: boolean;
+  /** 当前正在整理的目标标识（all / project:<cwd> / session:<id>） */
+  organizingTarget?: string | null;
+  /** 共享 1 分钟 4 次冷却剩余秒数（0 表示当前可用） */
+  organizeCooldownSec?: number;
+  /** 当前 1 分钟窗口剩余整理次数（默认 4） */
+  organizeQuotaLeft?: number;
   pluginCount?: number;
   projects?: WorkspaceProjectConfig[];
   onToggleCollapse: () => void;
@@ -59,7 +68,7 @@ export interface ProjectSidebarProps {
   onOpenNewSession: () => void;
   onCreateSessionInProject?: (cwd: string, mode?: AgentExecutionMode) => void;
   onOpenProjects?: () => void;
-  onOrganizeTitles: () => Promise<void>;
+  onOrganizeTitles: (request?: TitleOrganizeRequest) => Promise<void>;
   onTogglePollutionVisibility: () => Promise<void>;
   onRenameSession: (sessionId: string, newTitle: string) => Promise<void>;
   onTogglePinSession: (sessionId: string) => Promise<void>;
@@ -99,6 +108,9 @@ export function ProjectSidebar({
   selectedHistoryId,
   hideLegacyPollutionSessions,
   organizingTitles,
+  organizingTarget = null,
+  organizeCooldownSec = 0,
+  organizeQuotaLeft = TITLE_ORGANIZE_RATE_LIMIT.maxCalls,
   projects = [],
   onToggleCollapse,
   onSelectSession,
@@ -268,6 +280,12 @@ export function ProjectSidebar({
 
   const visibleHistory = q ? history.slice(0, 100) : history.slice(0, historyLimit);
   const totalThreads = groups.reduce((acc, g) => acc + g.list.length, 0);
+  const organizeBlocked = organizingTitles || organizeCooldownSec > 0;
+  const organizeAllTooltip = organizingTitles
+    ? dict.ui.organizingWithModel(TITLE_ORGANIZE_MODEL_LABEL)
+    : organizeCooldownSec > 0
+      ? dict.ui.organizeCooldownBanner(organizeCooldownSec)
+      : `${dict.ui.organizeAllTitle} · ${dict.ui.organizeWindowQuota(organizeQuotaLeft, TITLE_ORGANIZE_RATE_LIMIT.maxCalls)}`;
 
   async function commitRename(sessionId: string): Promise<void> {
     const trimmed = editingValue.trim();
@@ -345,14 +363,14 @@ export function ProjectSidebar({
           <span className="spacer" />
           <button
             type="button"
-            className="icon-btn icon-btn-sm"
-            disabled={organizingTitles}
-            onClick={() => void onOrganizeTitles()}
-            title={organizingTitles ? dict.organizingTitles : dict.organizeTitlesBtn}
+            className={`icon-btn icon-btn-sm ${organizingTarget === 'all' ? 'is-active' : ''}`}
+            disabled={organizeBlocked}
+            onClick={() => void onOrganizeTitles({ scope: 'all' })}
+            title={organizeAllTooltip}
             aria-label={dict.organizeTitlesBtn}
             data-testid="btn-organize-titles"
           >
-            <Sparkles size={13} />
+            <Sparkles size={13} className={organizingTarget === 'all' ? 'spin' : undefined} />
           </button>
           <button
             type="button"
@@ -405,6 +423,20 @@ export function ProjectSidebar({
               </button>
             )}
           </div>
+          {(organizingTitles || organizeCooldownSec > 0) && (
+            <div
+              className={`organize-status-pill ${organizingTitles ? 'is-running' : 'is-cooldown'}`}
+              role="status"
+              data-testid="organize-model-status"
+            >
+              <Sparkles size={11} className={organizingTitles ? 'spin' : undefined} />
+              <span className="truncate">
+                {organizingTitles
+                  ? dict.ui.organizingWithModel(TITLE_ORGANIZE_MODEL_LABEL)
+                  : dict.ui.organizeCooldownBanner(organizeCooldownSec)}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="sidebar-scroll">
@@ -436,6 +468,31 @@ export function ProjectSidebar({
                     <span className="truncate">{groupLabel}</span>
                     <span className="group-count">{list.length}</span>
                   </button>
+                  {list.length > 0 && (
+                    <button
+                      type="button"
+                      className={`icon-btn icon-btn-sm group-quick-add group-organize-btn ${organizingTarget === `project:${key}` ? 'is-active' : ''}`}
+                      disabled={organizeBlocked}
+                      title={
+                        organizingTitles
+                          ? dict.ui.organizingWithModel(TITLE_ORGANIZE_MODEL_LABEL)
+                          : organizeCooldownSec > 0
+                            ? dict.ui.organizeCooldownBanner(organizeCooldownSec)
+                            : dict.ui.organizeProjectTitle(groupLabel)
+                      }
+                      aria-label={dict.ui.organizeProjectTitle(groupLabel)}
+                      onClick={() =>
+                        void onOrganizeTitles({
+                          scope: 'project',
+                          projectCwd: key,
+                          sessionIds: list.map((item) => item.sessionId),
+                        })
+                      }
+                      data-testid={`organize-project-${key}`}
+                    >
+                      <Sparkles size={11} className={organizingTarget === `project:${key}` ? 'spin' : undefined} />
+                    </button>
+                  )}
                   {onCreateSessionInProject && (
                     <button
                       type="button"
@@ -525,6 +582,28 @@ export function ProjectSidebar({
                         {!editing && <span className="thread-time">{formatRelativeTime(s.updatedAt, dict)}</span>}
                         {!editing && (
                           <div className="thread-actions" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              className={`icon-btn icon-btn-sm ${organizingTarget === `session:${s.sessionId}` ? 'is-active' : ''}`}
+                              disabled={organizeBlocked}
+                              title={
+                                organizingTitles
+                                  ? dict.ui.organizingWithModel(TITLE_ORGANIZE_MODEL_LABEL)
+                                  : organizeCooldownSec > 0
+                                    ? dict.ui.organizeCooldownBanner(organizeCooldownSec)
+                                    : dict.ui.organizeSessionTitle
+                              }
+                              aria-label={dict.ui.organizeSessionTitle}
+                              onClick={() =>
+                                void onOrganizeTitles({
+                                  scope: 'session',
+                                  sessionIds: [s.sessionId],
+                                })
+                              }
+                              data-testid={`organize-session-${s.sessionId}`}
+                            >
+                              <Sparkles size={11} className={organizingTarget === `session:${s.sessionId}` ? 'spin' : undefined} />
+                            </button>
                             <button
                               type="button"
                               className="icon-btn icon-btn-sm"

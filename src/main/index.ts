@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, screen, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -66,6 +66,12 @@ async function createWindow(): Promise<void> {
     openTargetHandler: async (resolvedTarget, mode, isDir) => {
       if (mode === 'copy') {
         clipboard.writeText(resolvedTarget);
+      } else if (mode === 'copy-image') {
+        const img = resolvedTarget.startsWith('data:image/')
+          ? nativeImage.createFromDataURL(resolvedTarget)
+          : nativeImage.createFromPath(resolvedTarget);
+        if (img.isEmpty()) throw new Error('无法读取图片数据以复制到剪贴板');
+        clipboard.writeImage(img);
       } else if (mode === 'browser') {
         await shell.openExternal(resolvedTarget);
       } else if (mode === 'reveal-in-folder') {

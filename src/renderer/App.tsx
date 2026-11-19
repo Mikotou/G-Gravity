@@ -7,6 +7,8 @@ import {
   EXECUTION_MODE_ORDER,
   GRAVITY_BUILTIN_CAPABILITIES,
   MAX_PARALLEL_ACTIVE_SESSIONS, placeSession, workspaceSlots, withoutSession,
+  TITLE_ORGANIZE_MODEL_LABEL,
+  TITLE_ORGANIZE_RATE_LIMIT,
   UI_SCALE_LIMITS,
   type AccountsStateSnapshot,
   type AcpConnectionStatus,
@@ -32,6 +34,7 @@ import {
   type SessionInspectorData,
   type SwarmTopologyState,
   type TelemetryDashboardSnapshot,
+  type TitleOrganizeRequest,
   type TitleOrganizeResult,
   type TokenCostSummary,
   type WorkspaceLayoutState,
@@ -190,9 +193,31 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   const [organizeOpen, setOrganizeOpen] = useState(false);
   const [organizeResult, setOrganizeResult] = useState<TitleOrganizeResult | null>(null);
   const [organizing, setOrganizing] = useState(false);
+  const [organizingTarget, setOrganizingTarget] = useState<string | null>(null);
+  const [organizeQuotaLeft, setOrganizeQuotaLeft] = useState<number>(TITLE_ORGANIZE_RATE_LIMIT.maxCalls);
+  const [organizeCooldownUntil, setOrganizeCooldownUntil] = useState<number>(0);
+  const [organizeCooldownSec, setOrganizeCooldownSec] = useState<number>(0);
   const [toast, setToast] = useState<{ id: number; message: string; tone: ToastTone } | null>(
     initialNotice ? { id: 0, message: initialNotice, tone: 'info' } : null
   );
+
+  useEffect(() => {
+    if (!organizeCooldownUntil) {
+      setOrganizeCooldownSec(0);
+      return;
+    }
+    const tick = () => {
+      const remain = Math.max(0, Math.ceil((organizeCooldownUntil - Date.now()) / 1000));
+      setOrganizeCooldownSec(remain);
+      if (remain <= 0) {
+        setOrganizeCooldownUntil(0);
+        setOrganizeQuotaLeft(TITLE_ORGANIZE_RATE_LIMIT.maxCalls);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [organizeCooldownUntil]);
 
   const scrollMemoryRef = useRef<Record<string, number>>({});
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -569,21 +594,62 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   );
 
   const handleOrganizeTitles = useCallback(
-    async (useExternalModelPolish = false) => {
+    async (request: TitleOrganizeRequest = { scope: 'all' }) => {
       const bridge = getDesktopBridge();
+      const dict = UI_DICTIONARIES[preferences.locale];
+      const scope =
+        request.scope ??
+        (request.projectCwd ? 'project' : request.sessionIds?.length === 1 ? 'session' : request.sessionIds?.length ? 'project' : 'all');
+      const targetKey =
+        scope === 'session' && request.sessionIds?.[0]
+          ? `session:${request.sessionIds[0]}`
+          : scope === 'project' && request.projectCwd
+            ? `project:${request.projectCwd}`
+            : 'all';
+
       setOrganizing(true);
+      setOrganizingTarget(targetKey);
+      showToast(dict.ui.organizingWithModel(TITLE_ORGANIZE_MODEL_LABEL), 'info');
       try {
-        const res = await bridge.organizeTitles({ useExternalModelPolish });
+        const res = await bridge.organizeTitles({ ...request, scope });
         setSessions(await bridge.listSessions(!layout.hideLegacyPollutionSessions));
-        setOrganizeResult(res);
-        setOrganizeOpen(true);
+        const remaining = res.remainingQuotaInWindow ?? TITLE_ORGANIZE_RATE_LIMIT.maxCalls;
+        setOrganizeQuotaLeft(remaining);
+        if (remaining <= 0 && res.cooldownResetAt) {
+          const until = Date.parse(res.cooldownResetAt);
+          if (Number.isFinite(until) && until > Date.now()) setOrganizeCooldownUntil(until);
+        }
+        const modelLabel = res.modelUsed || TITLE_ORGANIZE_MODEL_LABEL;
+        if (scope === 'session') {
+          const suggestion = res.suggestions[0];
+          showToast(
+            suggestion
+              ? preferences.locale === 'zh-CN'
+                ? `已通过 ${modelLabel} 整理为「${suggestion.organizedTitle}」`
+                : `Organized with ${modelLabel}: "${suggestion.organizedTitle}"`
+              : preferences.locale === 'zh-CN'
+                ? `${modelLabel} 已核对，该会话标题无需调整`
+                : `Checked with ${modelLabel} — no title change needed`,
+            'success'
+          );
+        } else {
+          setOrganizeResult(res);
+          setOrganizeOpen(true);
+        }
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const waitMatch = /请\s*(\d+)\s*秒后/.exec(msg);
+        if (waitMatch) {
+          setOrganizeQuotaLeft(0);
+          setOrganizeCooldownUntil(Date.now() + Number(waitMatch[1]) * 1000);
+        }
         reportError(err);
       } finally {
         setOrganizing(false);
+        setOrganizingTarget(null);
       }
     },
-    [layout.hideLegacyPollutionSessions, reportError]
+    [layout.hideLegacyPollutionSessions, preferences.locale, reportError, showToast]
   );
 
   const handleTogglePollution = useCallback(async () => {
@@ -921,6 +987,9 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           selectedHistoryId={stageHistoryId}
           hideLegacyPollutionSessions={layout.hideLegacyPollutionSessions}
           organizingTitles={organizing}
+          organizingTarget={organizingTarget}
+          organizeCooldownSec={organizeCooldownSec}
+          organizeQuotaLeft={organizeQuotaLeft}
           projects={preferences.projects}
           onToggleCollapse={() => void patchLayout({ leftSidebarCollapsed: true })}
           onSelectSession={(s) => void handleActivateSession(s)}
@@ -928,7 +997,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           onRefreshHistory={handleRefreshHistory}
           onOpenNewSession={() => setNewSessionOpen(true)}
           onCreateSessionInProject={(cwd, mode) => void handleCreateSession(cwd, undefined, mode).catch(reportError)}
-          onOrganizeTitles={() => handleOrganizeTitles(false)}
+          onOrganizeTitles={(req) => handleOrganizeTitles(req)}
           onTogglePollutionVisibility={handleTogglePollution}
           onRenameSession={handleRenameSession}
           onTogglePinSession={handleTogglePin}
@@ -1047,6 +1116,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         <TitleOrganizerModal
           open={organizeOpen}
           result={organizeResult}
+          cooldownSec={organizeCooldownSec}
           onClose={() => setOrganizeOpen(false)}
           onRunOrganize={handleOrganizeTitles}
         />

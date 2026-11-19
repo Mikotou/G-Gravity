@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
-import { Gauge, RefreshCw } from 'lucide-react';
+import { Clock, Gauge, RefreshCw } from 'lucide-react';
 import type { QuotaBucket } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { accountQuotaFeed } from '../lib/account-quota-feed';
@@ -7,9 +7,20 @@ import { accountQuotaFeed } from '../lib/account-quota-feed';
 function bucketLabel(id: string, zh: boolean) {
   const match = /^(gemini|3p)-(5h|weekly)$/i.exec(id);
   if (!match) return id;
-  const model = match[1].toLowerCase() === '3p' ? (zh ? '第三方模型' : 'Third-party models') : 'Gemini';
-  const period = match[2].toLowerCase() === '5h' ? (zh ? '5 小时' : '5 hours') : (zh ? '每周' : 'Weekly');
+  const model = match[1].toLowerCase() === '3p' ? (zh ? '第三方模型' : 'Third-party') : 'Gemini';
+  const period = match[2].toLowerCase() === '5h' ? (zh ? '5 小时' : '5h window') : (zh ? '每周' : 'Weekly');
   return model + ' · ' + period;
+}
+
+type QuotaLevel = 'high' | 'mid' | 'low' | 'empty' | 'unknown';
+
+function resolveQuotaLevel(bucket?: QuotaBucket): QuotaLevel {
+  if (!bucket || bucket.disabled) return 'unknown';
+  if (bucket.remainingFraction === undefined) return 'unknown';
+  if (bucket.remainingFraction <= 0.05) return 'empty';
+  if (bucket.remainingFraction <= 0.2) return 'low';
+  if (bucket.remainingFraction <= 0.5) return 'mid';
+  return 'high';
 }
 
 export function AccountQuotaFooter({ profileId, generating = false, children }: {
@@ -61,8 +72,17 @@ export function AccountQuotaFooter({ profileId, generating = false, children }: 
     return bucket?.remainingAmount?.toLocaleString(locale) ?? '—';
   }
 
-  const weekly = amount(quota?.buckets.find(bucket => bucket.id.toLowerCase() === 'gemini-weekly'));
-  const date = (iso: string) => new Date(iso).toLocaleString(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const weeklyBucket = quota?.buckets.find(bucket => bucket.id.toLowerCase() === 'gemini-weekly');
+  const weekly = amount(weeklyBucket);
+  const weeklyLevel = resolveQuotaLevel(weeklyBucket);
+  const weeklyPct =
+    weeklyBucket && !weeklyBucket.disabled && weeklyBucket.remainingFraction !== undefined
+      ? Math.min(100, Math.max(0, weeklyBucket.remainingFraction * 100))
+      : null;
+
+  const date = (iso: string) =>
+    new Date(iso).toLocaleString(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
   const trigger = {
     type: 'button' as const,
     'aria-expanded': open,
@@ -77,34 +97,126 @@ export function AccountQuotaFooter({ profileId, generating = false, children }: 
       window.requestAnimationFrame(() => root.current?.querySelector<HTMLElement>('.quota-view')?.focus());
     },
   };
-  return <div ref={root} className="quota-footer"
-    onPointerLeave={e => { if (e.pointerType !== 'touch') setOpen(false); }}
-    onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
-    <button {...trigger} className="quota-trigger" aria-label={label} data-testid="quota-trigger">
-      <Gauge size={13} /><span>{zh ? '额度' : 'Quota'}</span>
-    </button>
-    {children}
-    <button {...trigger} className="quota-weekly" data-testid="quota-weekly">
-      <span>{zh ? 'Gemini 周额度' : 'Gemini weekly'}</span><strong>{weekly}</strong>
-    </button>
-    {open && <section id={id} tabIndex={-1} className="quota-view" aria-label={label} aria-busy={loading} data-testid="quota-details">
-      <header><h3>{label}</h3>
-        <button type="button" className="btn btn-sm" disabled={loading} onClick={() => void feed.manual()}>
-          <RefreshCw size={12} />{zh ? '刷新' : 'Refresh'}
-        </button>
-      </header>
-      {loading && <p role="status">{zh ? '正在读取官方额度…' : 'Reading official quota…'}</p>}
-      {error && <p role="alert">{zh ? error : profileId === 'default'
-        ? 'Could not refresh official quota. Check sign-in and try again.' : 'The installed CLI reports quota for its default sign-in only.'}</p>}
-      {quota && <>
-        <p>{quota.plan && <strong>{quota.plan} · </strong>}{zh ? '上次更新 ' : 'Last updated '}{date(quota.checkedAt)}</p>
-        <div className="quota-buckets">{quota.buckets.map(bucket => <article key={bucket.id} title={bucket.id} data-testid="quota-bucket">
-          <header><strong>{bucketLabel(bucket.id, zh)}</strong><span>{amount(bucket)}</span></header>
-          {!bucket.disabled && bucket.remainingFraction !== undefined &&
-            <progress value={bucket.remainingFraction} max={1} aria-label={zh ? '剩余额度' : 'Remaining quota'} />}
-          {bucket.resetAt && <small>{zh ? '重置于 ' : 'Resets '}{date(bucket.resetAt)}</small>}
-        </article>)}</div>
-      </>}
-    </section>}
-  </div>;
+
+  return (
+    <div
+      ref={root}
+      className="quota-footer"
+      onPointerLeave={e => { if (e.pointerType !== 'touch') setOpen(false); }}
+      onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}
+    >
+      {children}
+      <button
+        {...trigger}
+        className={`quota-weekly level-${weeklyLevel}`}
+        aria-label={`${label}: ${zh ? 'Gemini 周额度' : 'Gemini weekly'} ${weekly}`}
+        data-testid="quota-weekly"
+      >
+        <Gauge size={11} className="quota-pill-icon" aria-hidden="true" />
+        <span className="quota-weekly-label">{zh ? 'Gemini 周额度' : 'Gemini weekly'}</span>
+        <span
+          className={`quota-mini-bar level-${weeklyLevel}`}
+          aria-hidden="true"
+          data-testid="quota-weekly-bar"
+          data-quota-level={weeklyLevel}
+        >
+          <span style={{ width: `${weeklyPct === null ? 0 : Math.max(weeklyPct > 0 ? 3 : 0, weeklyPct)}%` }} />
+        </span>
+        <strong className={`quota-weekly-pct level-${weeklyLevel}`}>{weekly}</strong>
+      </button>
+
+      {open && (
+        <section
+          id={id}
+          tabIndex={-1}
+          className="quota-view"
+          aria-label={label}
+          aria-busy={loading}
+          data-testid="quota-details"
+        >
+          <header className="quota-view-head">
+            <div className="quota-view-title-wrap">
+              <span className="quota-view-icon" aria-hidden="true">
+                <Gauge size={13} />
+              </span>
+              <div className="quota-view-heading">
+                <div className="quota-view-title-row">
+                  <h3>{label}</h3>
+                  {quota?.plan && <span className="quota-plan-pill">{quota.plan}</span>}
+                </div>
+                {quota && (
+                  <p className="quota-updated-at">
+                    {zh ? '更新于 ' : 'Updated '}
+                    {date(quota.checkedAt)}
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm quota-refresh-btn"
+              disabled={loading}
+              onClick={() => void feed.manual()}
+            >
+              <RefreshCw size={12} className={loading ? 'spin' : undefined} />
+              <span>{zh ? '刷新' : 'Refresh'}</span>
+            </button>
+          </header>
+
+          {loading && !quota && (
+            <p className="quota-state-note" role="status">
+              {zh ? '正在读取官方额度…' : 'Reading official quota…'}
+            </p>
+          )}
+          {error && (
+            <p className="quota-state-error" role="alert">
+              {zh
+                ? error
+                : profileId === 'default'
+                  ? 'Could not refresh official quota. Check sign-in and try again.'
+                  : 'The installed CLI reports quota for its default sign-in only.'}
+            </p>
+          )}
+
+          {quota && (
+            <div className="quota-buckets">
+              {quota.buckets.map(bucket => {
+                const level = resolveQuotaLevel(bucket);
+                const frac = !bucket.disabled && bucket.remainingFraction !== undefined
+                  ? Math.min(1, Math.max(0, bucket.remainingFraction))
+                  : null;
+                return (
+                  <article
+                    key={bucket.id}
+                    className={`quota-bucket-card level-${level}`}
+                    title={bucket.id}
+                    data-testid="quota-bucket"
+                  >
+                    <header>
+                      <strong>{bucketLabel(bucket.id, zh)}</strong>
+                      <span className={`quota-pct level-${level}`}>{amount(bucket)}</span>
+                    </header>
+                    {frac !== null && (
+                      <progress
+                        className={`quota-progress level-${level}`}
+                        value={frac}
+                        max={1}
+                        aria-label={zh ? '剩余额度' : 'Remaining quota'}
+                      />
+                    )}
+                    {bucket.resetAt && (
+                      <small className="quota-reset">
+                        <Clock size={10} aria-hidden="true" />
+                        <span>{zh ? '重置于 ' : 'Resets '}{date(bucket.resetAt)}</span>
+                      </small>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  );
 }

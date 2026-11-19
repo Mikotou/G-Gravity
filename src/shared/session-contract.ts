@@ -327,6 +327,10 @@ export interface ManagedSessionSummary {
   title: string;
   rawTitle?: string;
   categoryTag?: string;
+  /** 已通过标题整理功能整理过的时间戳；存在时「全部整理」将跳过该会话 */
+  titleOrganizedAt?: string;
+  /** 上次整理所使用的模型标识（例如 Hydrogen (medium)） */
+  titleOrganizedModel?: string;
   pinned: boolean;
   isLegacyApprovalPollution: boolean;
   status: ManagedSessionStatus;
@@ -455,8 +459,19 @@ export const BUILTIN_SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   },
 ] as const;
 
+export const TITLE_ORGANIZE_MODEL_LABEL = 'Hydrogen (medium)';
+export const TITLE_ORGANIZE_RATE_LIMIT = {
+  maxCalls: 4,
+  windowMs: 60_000,
+} as const;
+
+export type TitleOrganizeScope = 'all' | 'project' | 'session';
+
 export interface TitleOrganizeRequest {
+  /** 整理范围：all 跳过已整理会话；project / session 显式整理目标 */
+  scope?: TitleOrganizeScope;
   sessionIds?: string[];
+  projectCwd?: string;
   useExternalModelPolish?: boolean;
 }
 
@@ -470,6 +485,10 @@ export interface TitleOrganizeSuggestion {
 export interface TitleOrganizeResult {
   updatedCount: number;
   hiddenPollutionCount: number;
+  skippedOrganizedCount?: number;
+  modelUsed?: string;
+  remainingQuotaInWindow?: number;
+  cooldownResetAt?: string;
   suggestions: TitleOrganizeSuggestion[];
 }
 
@@ -511,6 +530,7 @@ const LEGACY_POLLUTION_PATTERNS: readonly RegExp[] = [
   /automated tool-approval (?:security )?reviewer/i,
   /^根据输入数据为每条对话整理标题/,
   /^\[Gravity Translator\]/i,
+  /^\[Gravity Title Organizer\]/i,
 ];
 
 export function isLegacyPollutionSessionTitle(title?: string | null): boolean {

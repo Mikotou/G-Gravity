@@ -1,5 +1,18 @@
 # G-Gravity 整体验收记录
 
+## 本机 Windows 版 v0.2.0
+
+2026-11-19，Windows x64。产品名为 Gravity。便携版位于 `release/v0.2.0/Gravity.exe`，大小为 121,395,503 字节，SHA-256 为 `3B7FD8A02969ED353EA45D6F8A8543B2ACBA60D67C006A0DCAB9264F67E0F752`。源码压缩包位于 `release/v0.2.0/G-Gravity-v0.2.0-source.zip`（对应本地 `v0.2.0` 分支，未推送 GitHub）。
+
+| 项目 | 验证结果 |
+| --- | --- |
+| 额度条与重设计弹层 | 删除 `ctx` 左侧独立额度触发器，统一收拢至对话框右下角以「百分比 + 独立钴蓝渐变进度条（与 `ctx` 绿条明确区分）」呈现；额度弹层重构为右下锚定玻璃拟态 Studio 卡片 + 2 列 Bento 仪表格（含套餐标签、更新时间、刷新按钮、定制圆角 `<progress>` 与重置时间）。 |
+| Context 会话指标与实时 TPS | `TelemetryStore` 新增每会话累计平均输出速率（`averageTokensPerSecond`，持久化至 `session-telemetry.json`）与平均缓存命中率（`averageCacheHitRate = cachedInput / (input + cachedInput)`）；对话框底部 `ContextStatusBar` 实时显示当前滑动窗口 `tok/s`，右侧 Context 窗口呈现「会话平均速率」与「平均缓存命中率」双指标卡。 |
+| 内置 Hydrogen (medium) 标题整理与共享冷却 | 取消自动分类整理，仅在用户主动点击时执行；通过官方 `agy acp` 临时只读会话切换 `gemini-4-hydrogen` + `thought_level=medium` 并实时在侧栏状态条与轻提示中告知当前使用的内置模型；「全部整理」自动跳过先前已整理的会话（`titleOrganizedAt` 持久化于 `titles.json`），同时为每个 Project 分组和每条 Session 增加单独整理按钮，三类按钮共享 1 分钟最多 4 次滑动窗口冷却限制。 |
+| 中文思考显影动效 | `useFluidStreamText` 的 `morph` 模式改为按最长公共前缀渐进推进，解决英文思考被更短中文译文替换时一帧闪切的问题；`ThinkingBlock` 外层在翻译/切换轨道时叠加柔和流光左轨与 260ms 模糊淡入，且不改变段落 DOM 节点与行距指标（`test:layout` 段距保持 `0/5/5px` 零抖动）。 |
+| 正文图片复制与分屏焦点美化 | `openLinkOrFileTarget` 新增 `copy-image` 动作（主进程通过 `nativeImage` + `clipboard.writeImage` 写入系统位图剪贴板，继续经敏感凭据路径拦截）；正文末尾图片支持缩略图悬浮复制按钮、大图工具栏复制 + `Ctrl+C` 快捷键以及右键菜单「复制图片」。双栏模式去除标题间生硬的整条橙色横线，改用居中羽化冷蓝微线 + 柔光顶栏提示焦点，不影响 `streaming` 流光接缝动画。 |
+| 回归与打包 | 四组 TypeScript 类型检查（shared / main / renderer / tests）0 错误；35 个测试文件共 369 项自动化测试全部通过（1 项联机 smoke 跳过，含新增 `v020-features.test.ts` 与 `v020-ui.test.tsx`）；Playwright 实拍深浅主题与填充态额度弹层/图片复制/双栏聚焦 6 组界面 0 报错；生产构建、`test:layout`、以及 `test:desktop` 目录版 + 便携版双启动冒烟均通过。打包目录 96 个运行产物文件与 `dist/` 逐一校验一致。 |
+
 ## 本机 Windows 版 v0.1.6
 
 2026-11-19，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.6/Gravity.exe`，大小为 121,389,447 字节，SHA-256 为 `BC3EF22FAB827BDF184F54C924083AFE0AE0F3DAAA13FD24BF80DA19C6929437`。源码压缩包位于 `release/v0.1.6/G-Gravity-v0.1.6-source.zip`（对应本地 `v0.1.6` 分支，未推送 GitHub）。

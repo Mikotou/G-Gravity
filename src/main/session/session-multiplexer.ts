@@ -28,6 +28,7 @@ export const CHINESE_SESSION_GUIDANCE =
   '默认使用简体中文向用户回复，保留代码标识符、文件路径和命令。尊重用户明确指定的语言。';
 
 const TRANSLATOR_MARKER = '[Gravity Translator]';
+const TITLE_ORGANIZER_MARKER = '[Gravity Title Organizer]';
 
 export function isTempExtractionDir(rawPath?: string): boolean {
   if (!rawPath) return false;
@@ -319,6 +320,18 @@ export class SessionMultiplexer extends EventEmitter {
     this.reservations++;
   }
 
+  /** 为短生命周期后台任务（如内置 Hydrogen 标题整理）借用一个并发槽位，遵守最多 4 路并发上限。 */
+  reserveExternalSlot(): void {
+    if (this.active.size + this.reservations >= MAX_PARALLEL_ACTIVE_SESSIONS) {
+      throw new Error('当前已打开 4 个活动会话，请先关闭一个标签页后再使用内置模型 Hydrogen (medium) 整理标题');
+    }
+    this.reservations++;
+  }
+
+  releaseExternalSlot(): void {
+    this.reservations = Math.max(0, this.reservations - 1);
+  }
+
   setStatus(id: string, status: ManagedSessionSummary['status']): void {
     const session = this.sessions.get(id);
     if (!session) return;
@@ -342,6 +355,7 @@ export class SessionMultiplexer extends EventEmitter {
         for (const item of result.sessions) {
           if (
             (item.title && item.title.includes(TRANSLATOR_MARKER)) ||
+            (item.title && item.title.includes(TITLE_ORGANIZER_MARKER)) ||
             (item.title && /^Gravity Translator\b/i.test(item.title))
           ) {
             continue;

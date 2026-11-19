@@ -263,8 +263,13 @@ export interface SessionContextTelemetry {
   breakdown: ContextTokenBreakdown;
   attachments: AttachmentAuditItem[];
   compactions?: ContextCompactionRecord[];
+  /** 对话框底栏显示的实时输出速率（滑动时间窗 / 最近回合） */
   currentTokensPerSecond: number;
+  /** 当前会话累计平均输出速率（供 Context 检视器展示） */
+  averageTokensPerSecond?: number;
   peakTokensPerSecond: number;
+  /** 当前会话平均缓存命中率（0–1，cachedInput / (input + cachedInput)） */
+  averageCacheHitRate?: number;
   costSummary: TokenCostSummary;
   usageSource: TelemetryUsageSource;
   pricingSource: TelemetryPricingSource;

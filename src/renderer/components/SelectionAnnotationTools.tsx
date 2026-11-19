@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Copy, ExternalLink, FileCode2, FolderOpen, MessageSquarePlus, Pencil, Quote, Trash2, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, FileCode2, FolderOpen, Image as ImageIcon, MessageSquarePlus, Pencil, Quote, Trash2, X } from 'lucide-react';
 import type { ClientLocale } from '@shared';
 import { getDesktopBridge } from '../services/desktop-bridge';
+import { copyMessageImageToClipboard } from './MessageImage';
 
 export interface TextQuoteItem {
   id: string;
@@ -21,12 +22,14 @@ export interface TextNotationItem {
   createdAt: string;
 }
 
-export type DetectedTargetKind = 'url' | 'openable-file' | 'executable-file' | 'directory';
+export type DetectedTargetKind = 'url' | 'openable-file' | 'executable-file' | 'directory' | 'image';
 
 export interface DetectedContextTarget {
   kind: DetectedTargetKind;
   target: string;
   displayPath: string;
+  imageUrl?: string;
+  imageEl?: HTMLImageElement | null;
 }
 
 const EXECUTABLE_EXT_RE = /\.(?:exe|msi|msp|bat|cmd|ps1|psm1|vbs|vbe|jse|wsf|wsh|scr|pif|com|reg|dll|sys|cpl|hta|sh|bash|zsh)$/i;
@@ -83,6 +86,28 @@ export function looksLikePlausibleLocalTarget(rawText: string): boolean {
  */
 export function detectContextTargetFromElement(targetEl: HTMLElement | null): DetectedContextTarget | null {
   if (!targetEl) return null;
+
+  const imageWrap = targetEl.closest('.message-image-wrap') as HTMLElement | null;
+  const imgNode = (targetEl.tagName === 'IMG' ? targetEl : imageWrap?.querySelector('img.md-img')) as HTMLImageElement | null;
+  if (imageWrap || imgNode?.classList.contains('md-img')) {
+    const rawSource = imageWrap?.getAttribute('data-image-source') || imgNode?.getAttribute('src') || '';
+    const resolvedUrl = imageWrap?.getAttribute('data-image-url') || imgNode?.getAttribute('src') || rawSource;
+    if (resolvedUrl) {
+      let display = imgNode?.alt || rawSource;
+      if (/^file:\/\//i.test(rawSource)) {
+        try { display = decodeURIComponent(rawSource.replace(/^file:\/\/\/?/i, '')); } catch { display = rawSource; }
+      } else if (/^data:image\//i.test(rawSource)) {
+        display = imgNode?.alt || 'Embedded image';
+      }
+      return {
+        kind: 'image',
+        target: rawSource || resolvedUrl,
+        displayPath: display,
+        imageUrl: resolvedUrl,
+        imageEl: imgNode,
+      };
+    }
+  }
 
   // Markdown 链接已标记过目标类型，优先取其原始地址。只有落在行内代码上时才从文字推断目标。
   const anchor = targetEl.closest('a.md-link') as HTMLAnchorElement | null;
@@ -395,8 +420,21 @@ export function TargetContextMenu({
   const clampedTop = typeof window !== 'undefined' ? Math.max(12, Math.min(y, window.innerHeight - 180)) : y;
 
   /** 将当前工作目录和会话号随目标一并传给主进程，以便解析相对路径。复制操作另有浏览器剪贴板后备路径。 */
-  async function invokeOpen(action: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy'): Promise<void> {
+  async function invokeOpen(action: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image'): Promise<void> {
     onClose();
+    if (action === 'copy-image') {
+      const ok = await copyMessageImageToClipboard({
+        source: detected.target,
+        resolvedUrl: detected.imageUrl || detected.target,
+        imgEl: detected.imageEl,
+        cwd,
+        sessionId,
+      });
+      if (!ok && onError) {
+        onError(isZh ? '复制图片到剪贴板失败' : 'Failed to copy image to clipboard');
+      }
+      return;
+    }
     try {
       await getDesktopBridge().openLinkOrFileTarget({
         target: detected.target,
@@ -415,6 +453,8 @@ export function TargetContextMenu({
     }
   }
 
+  const isLocalImage = detected.kind === 'image' && !/^(?:data:|https?:|blob:)/i.test(detected.target);
+
   const menuEl = (
     <div
       className="popover target-context-menu"
@@ -426,6 +466,30 @@ export function TargetContextMenu({
       <div className="menu-label truncate" title={detected.displayPath}>
         {detected.displayPath}
       </div>
+      {detected.kind === 'image' && (
+        <>
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => void invokeOpen('copy-image')}
+            data-testid="ctx-copy-image"
+          >
+            <ImageIcon size={13} />
+            <span>{isZh ? '复制图片' : 'Copy image'}</span>
+          </button>
+          {isLocalImage && (
+            <button
+              type="button"
+              className="menu-item"
+              onClick={() => void invokeOpen('reveal-in-folder')}
+              data-testid="ctx-reveal-folder"
+            >
+              <FolderOpen size={13} />
+              <span>{isZh ? '在文件管理器中定位' : 'Show in File Explorer'}</span>
+            </button>
+          )}
+        </>
+      )}
       {detected.kind === 'url' && (
         <button
           type="button"
@@ -478,24 +542,28 @@ export function TargetContextMenu({
           </span>
         </button>
       )}
-      <div className="menu-sep" />
-      <button
-        type="button"
-        className="menu-item"
-        onClick={() => void invokeOpen('copy')}
-        data-testid="ctx-copy-target"
-      >
-        <Copy size={13} />
-        <span>
-          {detected.kind === 'url'
-            ? isZh
-              ? '复制链接地址'
-              : 'Copy link URL'
-            : isZh
-              ? '复制本地路径'
-              : 'Copy local path'}
-        </span>
-      </button>
+      {(detected.kind !== 'image' || isLocalImage) && (
+        <>
+          <div className="menu-sep" />
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => void invokeOpen('copy')}
+            data-testid="ctx-copy-target"
+          >
+            <Copy size={13} />
+            <span>
+              {detected.kind === 'url'
+                ? isZh
+                  ? '复制链接地址'
+                  : 'Copy link URL'
+                : isZh
+                  ? '复制本地路径'
+                  : 'Copy local path'}
+            </span>
+          </button>
+        </>
+      )}
     </div>
   );
 

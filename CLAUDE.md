@@ -140,3 +140,14 @@ npm run build
   - `src/renderer/components/SessionPane.tsx` / `TurnActivity.tsx` / `InlineRequestView.tsx`：重构 `WelcomePane`（柔和陶土光晕 + 衬线编辑风问候 + 快捷键栏）、在收起态 `Activity · N` 摘要条中加入工具语义色微点（`.tool-cat-dot`），并将审批卡片的 `1.`–`4.` 前缀升级为触感键帽（`.option-num`）且保持 `.textContent` 与旧版完全一致。
   - `src/renderer/styles/claude-studio.css`：在 `design-system.css` 之后加载的 Claude Code Studio 视觉层（暖炭黑/羊皮纸阶梯表面、暖陶土强调色、悬浮岛输入卡片、双栏窄窗格 Composer 防溢出容器查询、悬浮检视器玻璃拟态层），同步在 `src/renderer/main.tsx` 与 `tests/desktop-layout.fixture.tsx` 引入。
 - **自动化守卫**：`tests/v016-claude-studio.test.tsx` 覆盖活动栏、抽屉选中高亮与清除搜索、检视器停靠/悬浮切换及纯净 tablist、工具语义微点与审批键帽。
+
+---
+
+## 八、v0.2.0 体验与内置 AI 标题整理升级（前后端约定）
+
+- **右下角独立色系额度条与重设计弹层**：`AccountQuotaView.tsx` 移除 `ctx` 左侧的独立额度按钮，统一收拢至对话框右下角以「百分比 + 进度条（`--quota-fill` 钴蓝独立色系，区别于 `ctx` 绿条）」展示；弹层重设计为右下锚定玻璃卡片 + 2 列 Bento 仪表格。
+- **实时 TPS vs 会话平均 TPS & 平均缓存命中率**：`TelemetryStore` 新增每会话累计速度统计（`sessionSpeedStats`，落盘 `session-telemetry.json`）与 `averageTokensPerSecond`、`averageCacheHitRate`（`cachedInput / (input + cachedInput)`）。对话框底栏 `ContextStatusBar` 展示实时滑窗速率（`currentTokensPerSecond`），右侧 Context 检视器 `ContextCostInspectorView` 展示当前会话平均速率与平均缓存命中率。
+- **内置 Hydrogen (medium) 标题整理与共享冷却**：`CoreService.organizeTitles` 严禁自动触发，仅在用户主动点击侧栏「全部整理 / 单项目整理 / 单会话整理」按钮时执行；通过官方 `agy acp` 临时只读会话（遵守 4 路并发上限，标记 `[Gravity Title Organizer]` 防污染，用毕立即关闭）切换 `gemini-4-hydrogen` + `thought_level=medium`，界面实时提示正在使用 `Hydrogen (medium)`；「全部整理」自动跳过已整理会话（`titleOrganizedAt` 持久化于 `titles.json`），单项目与单会话按钮可显式重整；三个入口共享 1 分钟最多 4 次滑动窗口冷却（`TITLE_ORGANIZE_RATE_LIMIT`）。
+- **中文思考显影动效**：`useFluidStreamText` 的 `morph` 模式按公共前缀推进，修复英文被更短中文替换时的瞬时闪切；`ThinkingBlock` 外层在翻译/切换轨道时叠加流光左轨与 260ms 柔和显影，不改动内部 `<p>` 节点与排布尺寸。
+- **正文图片复制与分屏焦点美化**：`openLinkOrFileTarget` 支持 `action: 'copy-image'`（主进程通过 `nativeImage` + `clipboard.writeImage` 写入系统位图剪贴板，仍经敏感凭据路径校验），支持缩略图悬浮按钮、大图预览工具栏 / `Ctrl+C` 与右键菜单复制；双栏聚焦窗格去掉生硬全宽橙线，改用居中羽化冷蓝星光微线（不影响 `.pane[data-pane-state="streaming"]::before` 动画接缝）。
+- **自动化守卫**：`tests/v020-features.test.ts` 与 `tests/v020-ui.test.tsx`。

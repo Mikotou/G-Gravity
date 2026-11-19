@@ -21,6 +21,13 @@
     0 24px 64px -16px color-mix(in srgb, #000 54%, transparent),
     0 4px 16px -4px color-mix(in srgb, #000 28%, transparent);
   --stream-max: 840px;
+  /* 额度条与分屏焦点色：与左侧上下文窗口绿色、主强调暖陶土明确区分 */
+  --quota-fill: #6aa9ff;
+  --quota-fill-end: #9bc4ff;
+  --quota-fill-mid: #74a4f2;
+  --quota-fill-low: #e6a348;
+  --quota-fill-empty: var(--status-danger);
+  --focus-pane-accent: #82acf8;
 }
 
 [data-polarity='light'] {
@@ -34,6 +41,12 @@
   --studio-float-shadow:
     0 22px 54px -14px color-mix(in srgb, #1a1613 20%, transparent),
     0 4px 14px -4px color-mix(in srgb, #1a1613 10%, transparent);
+  --quota-fill: #376fd9;
+  --quota-fill-end: #5d93f0;
+  --quota-fill-mid: #4a7de0;
+  --quota-fill-low: #c97d1d;
+  --quota-fill-empty: var(--status-danger);
+  --focus-pane-accent: #4778db;
 }
 
 /* ============================================================================
@@ -1039,4 +1052,619 @@
 /* 悬浮模式下检视器不挤占主舞台，限制最宽为视口 55% 以保留左侧背景感知 */
 .inspector.is-floating:not(.is-collapsed) {
   max-width: min(1000px, 55vw);
+}
+
+/* ============================================================================
+ * 11. v0.2.0 精修层：分屏焦点指示、右下角额度条与重设计弹层、Context 会话指标、
+ *     内置 Hydrogen 标题整理状态条、中文思考显影动效、消息图片复制
+ * ========================================================================== */
+
+/* --- 11.1 分屏当前选中窗格：去掉生硬整条橙线，改用居中羽化冷蓝星光微线 + 柔和柔光顶栏 --- */
+.workspace.mode-split-2 .pane.is-focused {
+  box-shadow: none;
+}
+
+.workspace.mode-split-2 .pane .pane-header {
+  position: relative;
+  transition: background var(--dur-2) var(--ease-out), opacity var(--dur-2) var(--ease-out);
+}
+
+.workspace.mode-split-2 .pane.is-focused .pane-header {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--focus-pane-accent) 9%, transparent) 0%,
+    transparent 100%
+  );
+}
+
+.workspace.mode-split-2 .pane.is-focused .pane-header::before {
+  content: '';
+  position: absolute;
+  inset: 0 22% auto 22%;
+  height: 2px;
+  border-radius: 99px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--focus-pane-accent) 75%, transparent) 24%,
+    var(--focus-pane-accent) 50%,
+    color-mix(in srgb, var(--focus-pane-accent) 75%, transparent) 76%,
+    transparent 100%
+  );
+  box-shadow: 0 1px 10px color-mix(in srgb, var(--focus-pane-accent) 34%, transparent);
+  pointer-events: none;
+}
+
+.workspace.mode-split-2 .pane:not(.is-focused) .pane-header {
+  opacity: 0.58;
+}
+
+.workspace.mode-split-2 .pane:not(.is-focused):hover .pane-header {
+  opacity: 0.9;
+}
+
+/* --- 11.2 对话框右下角额度：百分比 + 独立色系进度条 + Claude Studio 悬浮弹层 --- */
+.quota-footer {
+  gap: 8px;
+  padding-top: 3px;
+}
+
+.quota-weekly {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 99px;
+  border: 1px solid color-mix(in srgb, var(--quota-fill) 20%, transparent);
+  background: color-mix(in srgb, var(--quota-fill) 6%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1);
+}
+
+.quota-weekly:hover,
+.quota-weekly:focus-visible {
+  background: color-mix(in srgb, var(--quota-fill) 13%, var(--hover));
+  border-color: color-mix(in srgb, var(--quota-fill) 38%, var(--hairline-strong));
+  color: var(--text-primary);
+}
+
+.quota-pill-icon {
+  color: var(--quota-fill);
+  flex-shrink: 0;
+}
+
+.quota-weekly.level-low .quota-pill-icon {
+  color: var(--quota-fill-low);
+}
+
+.quota-weekly.level-empty .quota-pill-icon {
+  color: var(--quota-fill-empty);
+}
+
+.quota-mini-bar {
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 5px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--quota-fill) 18%, var(--active));
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.quota-mini-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--quota-fill), var(--quota-fill-end));
+  transition: width 280ms var(--ease-out), background var(--dur-2);
+}
+
+.quota-mini-bar.level-mid > span {
+  background: linear-gradient(90deg, var(--quota-fill-mid), var(--quota-fill));
+}
+
+.quota-mini-bar.level-low {
+  background: color-mix(in srgb, var(--quota-fill-low) 20%, var(--active));
+}
+
+.quota-mini-bar.level-low > span {
+  background: var(--quota-fill-low);
+}
+
+.quota-mini-bar.level-empty {
+  background: color-mix(in srgb, var(--quota-fill-empty) 20%, var(--active));
+}
+
+.quota-mini-bar.level-empty > span {
+  background: var(--quota-fill-empty);
+}
+
+.quota-weekly-pct {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-weekly-pct.level-low {
+  color: var(--quota-fill-low);
+}
+
+.quota-weekly-pct.level-empty {
+  color: var(--quota-fill-empty);
+}
+
+@container pane (max-width: 440px) {
+  .quota-weekly-label {
+    display: none;
+  }
+  .quota-mini-bar {
+    width: 34px;
+  }
+}
+
+/* 重设计的账户额度弹层（右下锚定 Studio 玻璃卡片 + 2 列 Bento 仪表格） */
+.quota-view {
+  inset-inline: auto 0;
+  bottom: calc(100% + 8px);
+  width: min(420px, 100%);
+  max-height: min(400px, 60dvh);
+  padding: 14px 15px 15px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg-surface) 95%, transparent);
+  backdrop-filter: blur(16px) saturate(1.18);
+  box-shadow:
+    var(--studio-float-shadow),
+    inset 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent);
+  animation: quota-pop-in 180ms var(--ease-out);
+  transform-origin: bottom right;
+}
+
+@keyframes quota-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.quota-view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.quota-view-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.quota-view-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--quota-fill) 14%, var(--bg-app));
+  border: 1px solid color-mix(in srgb, var(--quota-fill) 28%, var(--hairline));
+  color: var(--quota-fill);
+  flex-shrink: 0;
+}
+
+.quota-view-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.quota-view-title-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.quota-view h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.quota-plan-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--quota-fill) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--quota-fill) 30%, transparent);
+  color: var(--quota-fill);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.quota-updated-at {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-refresh-btn {
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 11.5px;
+}
+
+.quota-state-note,
+.quota-state-error {
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.quota-state-note {
+  background: color-mix(in srgb, var(--quota-fill) 8%, var(--bg-app));
+  border: 1px solid color-mix(in srgb, var(--quota-fill) 22%, var(--hairline));
+  color: var(--text-secondary);
+}
+
+.quota-state-error {
+  background: color-mix(in srgb, var(--status-danger) 10%, var(--bg-app));
+  border: 1px solid color-mix(in srgb, var(--status-danger) 30%, var(--hairline));
+  color: var(--status-danger);
+}
+
+.quota-buckets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+@container pane (max-width: 400px) {
+  .quota-buckets {
+    grid-template-columns: 1fr;
+  }
+}
+
+.quota-view article.quota-bucket-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--bg-app) 50%, var(--studio-card));
+  transition: border-color var(--dur-1), background var(--dur-1);
+}
+
+.quota-view article.quota-bucket-card:hover {
+  border-color: color-mix(in srgb, var(--quota-fill) 34%, var(--hairline-strong));
+  background: color-mix(in srgb, var(--bg-app) 35%, var(--studio-card));
+}
+
+.quota-view article.quota-bucket-card header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.quota-view article.quota-bucket-card header strong {
+  font-size: 11.5px;
+  font-weight: 560;
+  color: var(--text-secondary);
+}
+
+.quota-pct {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 660;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-pct.level-low {
+  color: var(--quota-fill-low);
+}
+
+.quota-pct.level-empty {
+  color: var(--quota-fill-empty);
+}
+
+.quota-view progress.quota-progress {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  margin: 0;
+  border: 0;
+  border-radius: 99px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--quota-fill) 16%, var(--active));
+}
+
+.quota-view progress.quota-progress::-webkit-progress-bar {
+  background: color-mix(in srgb, var(--quota-fill) 16%, var(--active));
+  border-radius: 99px;
+}
+
+.quota-view progress.quota-progress::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--quota-fill), var(--quota-fill-end));
+  border-radius: 99px;
+  transition: width 280ms var(--ease-out);
+}
+
+.quota-view progress.quota-progress.level-low::-webkit-progress-bar {
+  background: color-mix(in srgb, var(--quota-fill-low) 18%, var(--active));
+}
+
+.quota-view progress.quota-progress.level-low::-webkit-progress-value {
+  background: var(--quota-fill-low);
+}
+
+.quota-view progress.quota-progress.level-empty::-webkit-progress-bar {
+  background: color-mix(in srgb, var(--quota-fill-empty) 18%, var(--active));
+}
+
+.quota-view progress.quota-progress.level-empty::-webkit-progress-value {
+  background: var(--quota-fill-empty);
+}
+
+.quota-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- 11.3 Context 窗口会话平均速率 + 平均缓存命中率指标卡 --- */
+.ctx-session-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.ctx-metric-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--bg-app) 46%, var(--studio-card));
+  min-width: 0;
+}
+
+.ctx-metric-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ctx-metric-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ctx-metric-val {
+  font-size: 13px;
+  font-weight: 620;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- 11.4 侧栏标题整理状态提示条（内置 Hydrogen medium / 共享冷却） --- */
+.organize-status-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  border: 1px solid var(--accent-border);
+  background: color-mix(in srgb, var(--accent-primary) 10%, var(--studio-card));
+  color: var(--text-primary);
+}
+
+.organize-status-pill svg {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.organize-status-pill.is-cooldown {
+  border-color: color-mix(in srgb, var(--status-warning) 36%, var(--hairline));
+  background: color-mix(in srgb, var(--status-warning) 10%, var(--studio-card));
+  color: var(--text-secondary);
+}
+
+.organize-status-pill.is-cooldown svg {
+  color: var(--status-warning);
+}
+
+.group-head-row .group-organize-btn.is-active {
+  opacity: 1;
+  color: var(--accent-primary);
+}
+
+/* 悬停或聚焦会话行时同步让位静态置顶图标，为「AI 整理 / 重命名 / 置顶 / 更多」留足空间 */
+.thread-item:hover .thread-pin,
+.thread-item:focus-within .thread-pin {
+  display: none;
+}
+
+/* --- 11.5 思考片段中文显示动效（流光左轨 + 柔和显影，不改动段落尺寸与排布） --- */
+.cc-thinking-body {
+  position: relative;
+}
+
+.cc-thinking.is-zh-track.is-translating .cc-thinking-body::before,
+.cc-thinking.is-zh-track.is-zh-morphing .cc-thinking-body::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--accent-primary) 35%,
+    color-mix(in srgb, var(--quota-fill) 65%, var(--accent-primary)) 65%,
+    transparent 100%
+  );
+  background-size: 100% 220%;
+  animation: zh-rail-flow 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes zh-rail-flow {
+  0% {
+    background-position: 0% 120%;
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    background-position: 0% -120%;
+    opacity: 0.45;
+  }
+}
+
+.cc-thinking.is-zh-reveal .cc-thinking-body {
+  animation: zh-silk-reveal 260ms var(--ease-out);
+}
+
+.cc-thinking.is-zh-reveal .cc-thinking-preview {
+  animation: zh-silk-reveal 240ms var(--ease-out);
+}
+
+@keyframes zh-silk-reveal {
+  from {
+    opacity: 0.54;
+    filter: blur(1.4px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+/* --- 11.6 消息末尾图片悬停复制按钮与大图工具栏 --- */
+.message-image-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: flex-start;
+  max-width: min(100%, 420px, 66cqi);
+  vertical-align: middle;
+}
+
+.message-image-wrap > .message-image {
+  max-width: 100%;
+}
+
+.composer-image-tray .message-image-wrap {
+  max-width: 100%;
+}
+
+.composer-image-tray .message-image-copy {
+  display: none;
+}
+
+.message-image-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+  transition: opacity var(--dur-1), background var(--dur-1), color var(--dur-1), transform var(--dur-1);
+}
+
+.message-image-wrap:hover .message-image-copy,
+.message-image-wrap:focus-within .message-image-copy,
+.message-image-copy.is-copied {
+  opacity: 1;
+}
+
+.message-image-copy:hover {
+  background: var(--bg-elevated);
+  border-color: var(--accent-border);
+}
+
+.message-image-copy.is-copied,
+.image-lightbox-copy.is-copied {
+  border-color: color-mix(in srgb, var(--status-success) 55%, var(--hairline));
+  color: var(--status-success);
+}
+
+.image-lightbox-bar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: 6px;
+}
+
+.image-lightbox-bar > button {
+  background: color-mix(in srgb, var(--bg-surface) 90%, transparent);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.image-lightbox-bar > button:hover {
+  background: var(--bg-elevated);
+  border-color: var(--accent-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quota-view,
+  .cc-thinking.is-zh-track.is-translating .cc-thinking-body::before,
+  .cc-thinking.is-zh-track.is-zh-morphing .cc-thinking-body::before,
+  .cc-thinking.is-zh-reveal .cc-thinking-body,
+  .cc-thinking.is-zh-reveal .cc-thinking-preview {
+    animation: none;
+  }
 }

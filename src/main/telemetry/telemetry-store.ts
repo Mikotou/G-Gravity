@@ -69,6 +69,7 @@ export class TelemetryStore extends EventEmitter {
   private states = new Map<string, SessionContextTelemetry>();
   private ledger = new Map<string, HourRecord>();
   private sessionCounts = new Map<string, Map<string, FourDimTokenCounts>>();
+  private sessionSpeedStats = new Map<string, { totalGeneratedTokens: number; totalDurationSec: number; completedTurns: number }>();
   private samples = new Map<string, Array<{ time: number; tokens: number }>>();
   private turns = new Map<string, Turn>();
   private reportedUsed = new Map<string, number>();
@@ -115,9 +116,30 @@ export class TelemetryStore extends EventEmitter {
     const savedSessions = options.store.read<{
       states?: Record<string, SessionContextTelemetry>;
       sessionCounts?: Record<string, Record<string, FourDimTokenCounts>>;
+      sessionSpeedStats?: Record<string, { totalGeneratedTokens: number; totalDurationSec: number; completedTurns: number }>;
       reportedUsed?: Record<string, number>;
       checkpointLimits?: Record<string, number>;
     }>('session-telemetry.json', {});
+    if (savedSessions?.sessionSpeedStats && typeof savedSessions.sessionSpeedStats === 'object') {
+      for (const [sid, stat] of Object.entries(savedSessions.sessionSpeedStats)) {
+        if (
+          stat &&
+          typeof stat === 'object' &&
+          Number.isFinite(stat.totalGeneratedTokens) &&
+          stat.totalGeneratedTokens >= 0 &&
+          Number.isFinite(stat.totalDurationSec) &&
+          stat.totalDurationSec >= 0 &&
+          Number.isFinite(stat.completedTurns) &&
+          stat.completedTurns >= 0
+        ) {
+          this.sessionSpeedStats.set(sid, {
+            totalGeneratedTokens: stat.totalGeneratedTokens,
+            totalDurationSec: stat.totalDurationSec,
+            completedTurns: stat.completedTurns,
+          });
+        }
+      }
+    }
     if (savedSessions?.checkpointLimits && typeof savedSessions.checkpointLimits === 'object') {
       for (const [sid, lim] of Object.entries(savedSessions.checkpointLimits)) {
         if (typeof lim === 'number' && lim >= 16_000 && lim <= 2_000_000) {
@@ -150,6 +172,16 @@ export class TelemetryStore extends EventEmitter {
           // 将旧版落盘的 1,048,576 原始输入容量统一迁移为实际模型压缩窗口上限
           copy.maxContextTokens = this.resolveMaxWindow(sid, copy.modelId);
           copy.usageRatio = Math.min(1, copy.usedContextTokens / Math.max(1, copy.maxContextTokens));
+          const speedStat = this.sessionSpeedStats.get(sid);
+          if (speedStat && speedStat.totalGeneratedTokens > 0 && speedStat.totalDurationSec > 0) {
+            copy.averageTokensPerSecond = Math.round((speedStat.totalGeneratedTokens / speedStat.totalDurationSec) * 10) / 10;
+          } else if (copy.averageTokensPerSecond === undefined) {
+            copy.averageTokensPerSecond = copy.currentTokensPerSecond || 0;
+          }
+          const promptTotal = (copy.costSummary?.inputTokens || 0) + (copy.costSummary?.cachedInputTokens || 0);
+          copy.averageCacheHitRate = promptTotal > 0
+            ? Math.min(1, Math.max(0, (copy.costSummary?.cachedInputTokens || 0) / promptTotal))
+            : 0;
           this.states.set(sid, copy);
         }
       }
@@ -241,7 +273,9 @@ export class TelemetryStore extends EventEmitter {
         attachments: [],
         compactions: structuredClone(this.compactionsBySession.get(sessionId) || []),
         currentTokensPerSecond: 0,
+        averageTokensPerSecond: 0,
         peakTokensPerSecond: 0,
+        averageCacheHitRate: 0,
         costSummary: calculateTokenCost(zero(), resolveModelRateCard(modelId, this.rateCards)),
         usageSource: 'estimated',
         pricingSource: this.customRates ? 'user-custom-rate' : 'reference-api-estimate',
@@ -559,8 +593,19 @@ export class TelemetryStore extends EventEmitter {
           turn.lastChunkAt > turn.firstChunkAt
             ? (turn.lastChunkAt - turn.firstChunkAt) / 1000
             : Math.max(0.4, (now - turn.startedAt) / 1000);
-        state.currentTokensPerSecond = Math.round((totalGenerated / Math.max(0.2, spanSec)) * 10) / 10;
+        const clampedSpan = Math.max(0.2, spanSec);
+        state.currentTokensPerSecond = Math.round((totalGenerated / clampedSpan) * 10) / 10;
         state.peakTokensPerSecond = Math.max(state.peakTokensPerSecond, state.currentTokensPerSecond);
+        const prev = this.sessionSpeedStats.get(sessionId) || {
+          totalGeneratedTokens: 0,
+          totalDurationSec: 0,
+          completedTurns: 0,
+        };
+        prev.totalGeneratedTokens += totalGenerated;
+        prev.totalDurationSec += clampedSpan;
+        prev.completedTurns += 1;
+        this.sessionSpeedStats.set(sessionId, prev);
+        state.averageTokensPerSecond = Math.round((prev.totalGeneratedTokens / prev.totalDurationSec) * 10) / 10;
       }
     }
     this.scheduleFlush();
@@ -578,6 +623,7 @@ export class TelemetryStore extends EventEmitter {
     this.turns.delete(sessionId);
     this.samples.delete(sessionId);
     this.sessionCounts.delete(sessionId);
+    this.sessionSpeedStats.delete(sessionId);
     this.reportedUsed.delete(sessionId);
     this.pendingCompaction.delete(sessionId);
     this.scheduleFlush();
@@ -601,9 +647,9 @@ export class TelemetryStore extends EventEmitter {
             ? 'moderate'
             : 'healthy';
 
-    // 速度只采样最近五秒的增量。短时间窗口设置最小分母，避免首个分片使瞬时速度异常放大。
+    // 实时速度采用最近 3.5 秒滑动窗口（供对话框底栏展示实时 tok/s）；同时累积会话平均速度（供 Context 检视器展示）。
     const now = this.now();
-    const samples = (this.samples.get(state.sessionId) || []).filter((sample) => sample.time >= now - 5000);
+    const samples = (this.samples.get(state.sessionId) || []).filter((sample) => sample.time >= now - 3500);
     this.samples.set(state.sessionId, samples);
     const turn = this.turns.get(state.sessionId);
     if (turn && samples.length > 0) {
@@ -616,11 +662,37 @@ export class TelemetryStore extends EventEmitter {
         state.currentTokensPerSecond = Math.round((sumTokens / elapsedSec) * 10) / 10;
       }
     }
+    const prevSpeed = this.sessionSpeedStats.get(state.sessionId);
+    let accTokens = prevSpeed?.totalGeneratedTokens ?? 0;
+    let accSec = prevSpeed?.totalDurationSec ?? 0;
+    if (turn) {
+      const liveGenerated = Math.max(
+        turn.streamedTokens,
+        turn.counts.outputTokens + turn.counts.thinkingTokens
+      );
+      if (liveGenerated > 0) {
+        const liveSpan =
+          turn.firstChunkAt !== undefined && now > turn.firstChunkAt
+            ? Math.max(0.25, (now - turn.firstChunkAt) / 1000)
+            : Math.max(0.5, (now - turn.startedAt) / 1000);
+        accTokens += liveGenerated;
+        accSec += liveSpan;
+      }
+    }
+    if (accTokens > 0 && accSec > 0) {
+      state.averageTokensPerSecond = Math.round((accTokens / accSec) * 10) / 10;
+    } else if (state.averageTokensPerSecond === undefined) {
+      state.averageTokensPerSecond = state.currentTokensPerSecond || 0;
+    }
     state.peakTokensPerSecond = Math.max(state.peakTokensPerSecond, state.currentTokensPerSecond);
     state.compactions = structuredClone(this.compactionsBySession.get(state.sessionId) || []);
     state.costSummary = this.sumCosts(
       this.modelBreakdowns(this.sessionCounts.get(state.sessionId) || new Map())
     );
+    const promptInputTotal = state.costSummary.inputTokens + state.costSummary.cachedInputTokens;
+    state.averageCacheHitRate = promptInputTotal > 0
+      ? Math.min(1, Math.max(0, state.costSummary.cachedInputTokens / promptInputTotal))
+      : 0;
     state.pricingSource = this.customRates ? 'user-custom-rate' : 'reference-api-estimate';
     state.updatedAt = new Date(now).toISOString();
     if (emit) this.emit('updated', this.snapshot());
@@ -750,6 +822,7 @@ export class TelemetryStore extends EventEmitter {
     this.options.store.write('session-telemetry.json', {
       states: recentStates,
       sessionCounts: serializedCounts,
+      sessionSpeedStats: Object.fromEntries(this.sessionSpeedStats),
       reportedUsed: Object.fromEntries(this.reportedUsed),
       checkpointLimits: Object.fromEntries(this.checkpointLimits),
     });

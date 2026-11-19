@@ -1,7 +1,7 @@
 {
   "name": "g-gravity",
   "productName": "Gravity",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "private": true,
   "description": "Gravity — 基于官方 agy acp 协议的本地智能编码工作台",
   "main": "dist/main/index.js",

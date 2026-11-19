@@ -27,6 +27,13 @@ export function clampToCodePointBoundary(text: string, rawIndex: number): number
   return idx;
 }
 
+function commonPrefixLength(a: string, b: string): number {
+  const max = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < max && a.charCodeAt(i) === b.charCodeAt(i)) i += 1;
+  return clampToCodePointBoundary(b, i);
+}
+
 const PROFILE_PARAMS: Record<
   FluidStreamProfile,
   { baseCps: number; catchupFactor: number; tailChars: number }
@@ -34,7 +41,7 @@ const PROFILE_PARAMS: Record<
   // 思考流：从容舒缓的雾化显影节奏
   thought: { baseCps: 42, catchupFactor: 3.0, tailChars: 24 },
   // 译文替换：清晰可感知的中文渐进覆盖英文节奏
-  morph: { baseCps: 34, catchupFactor: 3.4, tailChars: 18 },
+  morph: { baseCps: 36, catchupFactor: 3.6, tailChars: 18 },
   // 正文输出：优雅稳健的编辑流式滑入节奏
   assistant: { baseCps: 56, catchupFactor: 3.8, tailChars: 20 },
 };
@@ -55,6 +62,7 @@ export function useFluidStreamText(
   // 保留小数游标来积累不足一个字符的帧间增量。目标文本单独保存在 ref 中，动画帧会读到最新内容。
   const cursorRef = useRef<number>(shouldAnimate ? 0 : targetText.length);
   const targetRef = useRef<string>(targetText);
+  const prevTargetRef = useRef<string>(targetText);
   targetRef.current = targetText;
 
   const [revealedLen, setRevealedLen] = useState<number>(() =>
@@ -62,10 +70,22 @@ export function useFluidStreamText(
   );
 
   useEffect(() => {
+    const prevTarget = prevTargetRef.current;
+    prevTargetRef.current = targetText;
+
     if (!shouldAnimate) {
       cursorRef.current = targetText.length;
       setRevealedLen(targetText.length);
       return;
+    }
+
+    // 译文形态（morph）：当英文段落在原地被更短的中文译文替换时，从公共前缀处平滑推进中文，避免瞬时闪切
+    if (profile === 'morph' && prevTarget !== targetText) {
+      const lcp = commonPrefixLength(prevTarget, targetText);
+      if (lcp < targetText.length && lcp < cursorRef.current) {
+        cursorRef.current = lcp;
+        setRevealedLen(lcp);
+      }
     }
 
     // 若目标文本被重置或回退（例如切换会话或译文重写），立即对齐游标防越界

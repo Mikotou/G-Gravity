@@ -88,7 +88,13 @@ export function ContextStatusBar({
             {formatTokenShort(used)}/{formatTokenShort(max)}
           </span>
         </span>
-        <span className="status-seg status-seg-rate">{rate.toFixed(1)} tok/s</span>
+        <span
+          className="status-seg status-seg-rate"
+          title={dict.ui.realtimeTpsLabel}
+          data-testid={`composer-realtime-tps-${sessionId}`}
+        >
+          {rate.toFixed(1)} tok/s
+        </span>
         <span className="status-seg">{formatUsd(cost)}</span>
       </button>
       <button
