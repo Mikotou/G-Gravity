@@ -1,5 +1,5 @@
 import React from 'react';
-import { Columns2, PanelLeftOpen, PanelRight, Plus, ShieldAlert, Square, X } from 'lucide-react';
+import { Columns2, PanelLeftOpen, PanelRight, Plus, Square, X } from 'lucide-react';
 import {
   type ManagedSessionSummary,
   type PendingApprovalRequest,
@@ -91,7 +91,7 @@ export function TopBar({
             >
               <span className={`status-dot is-${tabState}`} />
               <span className="tab-title">{tab.title}</span>
-              {pending && <span className="tab-alert-count">{pendingCount}</span>}
+              {pending && <span className="tab-alert-count" title={dict.pendingApprovalsBadge(pendingCount)}>{pendingCount}</span>}
               <button
                 type="button"
                 className="icon-btn icon-btn-sm"
@@ -118,13 +118,6 @@ export function TopBar({
           <Plus size={15} />
         </button>
       </nav>
-
-      {pendingApprovals.length > 0 && (
-        <span className="approval-indicator" data-testid="pending-approvals-indicator">
-          <ShieldAlert size={12} />
-          {dict.pendingApprovalsBadge(pendingApprovals.length)}
-        </span>
-      )}
 
       <div className="segmented" data-testid="layout-mode-switcher">
         {LAYOUTS.map(({ mode, Icon }) => (

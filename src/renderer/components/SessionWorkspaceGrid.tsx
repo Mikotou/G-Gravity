@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
-import { workspaceSlots } from '@shared';
+import React, { useEffect, useRef, useState } from 'react';
+import { clampSplitRatio, LAYOUT_LIMITS, workspaceSlots } from '@shared';
 import { droppedSession, isSessionDrag } from '../lib/session-drag';
+import { useI18n } from '../i18n/I18nContext';
+import { ResizeHandle } from './ResizeHandle';
 import type {
   ApprovalAuditEntry,
   ChatMessageItem,
@@ -24,6 +26,7 @@ export interface SessionWorkspaceGridProps extends Omit<SharedPaneProps, 'availa
   messagesBySession: Record<string, ChatMessageItem[]>;
   auditLog: ApprovalAuditEntry[];
   swarmBySession: Record<string, SwarmTopologyState>;
+  onCommitSplitRatio?: (ratio: number) => void;
 }
 
 /** 窗格只控制正在显示的会话。其余会话由后台继续管理。 */
@@ -35,6 +38,7 @@ export function SessionWorkspaceGrid({
   auditLog,
   historyIds = [], renderHistory,
   swarmBySession,
+  onCommitSplitRatio,
   ...paneProps
 }: SessionWorkspaceGridProps): React.ReactElement {
   // 可供选择的历史会话与可以放进窗格的活动会话范围不同，后者还须属于当前标签列表且处于打开状态。
@@ -42,12 +46,19 @@ export function SessionWorkspaceGrid({
   const active = visibleSessions.filter(s => !s.archivedAt && (s.status !== 'closed' || s.readOnly));
   const slots = workspaceSlots(layout, [...active.map(s => s.sessionId), ...historyIds]);
   const [dragSlot, setDragSlot] = useState<number | null>(null);
+  const { dict } = useI18n();
+  const gridRef = useRef<HTMLElement | null>(null);
+  const [ratio, setRatio] = useState(clampSplitRatio(layout.splitRatio));
+  useEffect(() => { setRatio(clampSplitRatio(layout.splitRatio)); }, [layout.splitRatio]);
+  const split = layout.layoutMode === 'split-2';
 
   return (
     <main
+      ref={gridRef}
       className={`workspace mode-${layout.layoutMode}`}
       data-testid="workspace-grid"
       data-layout-mode={layout.layoutMode}
+      style={split ? { gridTemplateColumns: `minmax(0, ${ratio}fr) minmax(0, ${1 - ratio}fr)` } : undefined}
     >
       {slots.map((id, idx) => {
         const slot = active.find(s => s.sessionId === id);
@@ -79,6 +90,21 @@ export function SessionWorkspaceGrid({
           latestAudit={slot ? auditLog.find((entry) => entry.sessionId === slot.sessionId) : undefined}
           swarmState={slot ? swarmBySession[slot.sessionId] : undefined}
         />}
+        {split && idx === 0 && onCommitSplitRatio && (
+          // 分隔条挂在左栏右缘，网格仍只有两个子节点。
+          <ResizeHandle
+            value={ratio}
+            min={LAYOUT_LIMITS.splitRatio.min}
+            max={LAYOUT_LIMITS.splitRatio.max}
+            defaultValue={0.5}
+            unitPx={() => gridRef.current?.clientWidth || 1000}
+            label={dict.ui.resizeSplit}
+            className="edge-right split-handle"
+            testId="split-resize-handle"
+            onPreview={setRatio}
+            onCommit={(r) => onCommitSplitRatio(Math.round(r * 1000) / 1000)}
+          />
+        )}
         </div>
         );
       })}

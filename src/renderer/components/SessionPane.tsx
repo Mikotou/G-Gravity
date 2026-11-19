@@ -44,6 +44,7 @@ import { SentAnnotations } from './SentAnnotations';
 import { ThinkingBlock } from './ThinkingBlock';
 import { AccountQuotaFooter } from './AccountQuotaView';
 import { PaneStatusChip, ToolActivityStream, TurnOutcomeBar } from './TurnActivity';
+import { WorkingIndicator } from './WorkingIndicator';
 
 export interface SessionPaneProps {
   slotIndex: number;
@@ -655,12 +656,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
                 />
               ))}
 
-            {showWorking && (
-              <div className="cc-thinking-head" style={{ cursor: 'default' }}>
-                <span className="cc-thinking-glyph is-streaming">✻</span>
-                <span className="cc-thinking-title is-streaming">{dict.thinkingStreamingTitle}</span>
-              </div>
-            )}
+            {showWorking && <WorkingIndicator startedAt={lastUserAt} />}
           </div>
         </div>
 
@@ -672,15 +668,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
             data-testid={`jump-latest-${session.sessionId}`}
           >
             <ArrowDown size={13} />
-            <span>
-              {hasUnseen
-                ? locale === 'zh-CN'
-                  ? '有新内容'
-                  : 'New activity'
-                : locale === 'zh-CN'
-                  ? '回到最新'
-                  : 'Latest'}
-            </span>
+            <span>{hasUnseen ? dict.ui.newActivity : dict.ui.backToLatest}</span>
           </button>
         )}
       </div>

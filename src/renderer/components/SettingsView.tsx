@@ -21,8 +21,10 @@ import {
 } from 'lucide-react';
 import {
   APP_BRAND,
+  clampUiScale,
   EXECUTION_MODE_ORDER,
   normalizeWorkspacePath,
+  UI_SCALE_LIMITS,
   type AccountsStateSnapshot,
   type AcpConnectionStatus,
   type AgentExecutionMode,
@@ -42,6 +44,7 @@ import { getDesktopBridge } from '../services/desktop-bridge';
 import { resolveGravityIconVariant } from '../styles/theme';
 import { IconsPanel, ThemesPanel, TokensPanel } from './settings/AppearancePanels';
 import { AccountsPanel, ApprovalsPanel, PluginsPanel, RatesPanel } from './settings/WorkspacePanels';
+import { ResizeHandle } from './ResizeHandle';
 
 export type { SettingsSection };
 
@@ -103,20 +106,11 @@ function GeneralPanel({
 }): React.ReactElement {
   const { locale, dict, setLocale } = useI18n();
   const isZh = locale === 'zh-CN';
-  const [defaultDirDraft, setDefaultDirDraft] = useState(preferences.defaultWorkspaceCwd || '');
+  const [scale, setScale] = useState(clampUiScale(preferences.uiScale));
 
   useEffect(() => {
-    setDefaultDirDraft(preferences.defaultWorkspaceCwd || '');
-  }, [preferences.defaultWorkspaceCwd]);
-
-  // 通过桌面桥接打开系统目录选择器。取消选择时保留当前设置，用户选中目录后再更新相应字段。
-  async function browseDefaultDir(): Promise<void> {
-    const picked = await getDesktopBridge().selectDirectory(defaultDirDraft || undefined);
-    if (picked) {
-      setDefaultDirDraft(picked);
-      await onUpdatePreferences({ defaultWorkspaceCwd: picked });
-    }
-  }
+    setScale(clampUiScale(preferences.uiScale));
+  }, [preferences.uiScale]);
 
   return (
     <div className="settings-section">
@@ -177,44 +171,45 @@ function GeneralPanel({
         </div>
       </div>
 
-      <h3 className="settings-group-title">{isZh ? '默认项目文件夹' : 'Default Workspace Folder'}</h3>
-      <div className="settings-group" style={{ padding: 14 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input
-            className="input input-mono"
-            style={{ flex: 1 }}
-            placeholder={isZh ? '新建会话时默认打开的本地目录绝对路径…' : 'Default folder path for new threads…'}
-            value={defaultDirDraft}
-            onChange={(e) => setDefaultDirDraft(e.target.value)}
-            data-testid="general-default-cwd-input"
-          />
-          <button type="button" className="btn btn-sm" onClick={() => void browseDefaultDir()}>
-            <FolderOpen size={13} />
-            <span>{isZh ? '浏览…' : 'Browse…'}</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() =>
-              void onUpdatePreferences({
-                defaultWorkspaceCwd: defaultDirDraft.trim() ? normalizeWorkspacePath(defaultDirDraft.trim()) : '',
-              })
-            }
-            data-testid="general-save-default-cwd-btn"
-          >
-            {dict.saveAction}
-          </button>
+      <h3 className="settings-group-title">{isZh ? '显示' : 'Display'}</h3>
+      <div className="settings-group">
+        <div className="setting-row">
+          <span className="setting-label">{dict.ui.uiScaleLabel}</span>
+          <span className="kbd">Ctrl = / −</span>
+          <span className="spacer" />
+          <div className="scale-control" data-testid="ui-scale-control">
+            <input
+              type="range"
+              min={UI_SCALE_LIMITS.min}
+              max={UI_SCALE_LIMITS.max}
+              step={0.05}
+              value={scale}
+              aria-label={dict.ui.uiScaleLabel}
+              onChange={(e) => setScale(Number(e.target.value))}
+              onMouseUp={() => void onUpdatePreferences({ uiScale: scale })}
+              onKeyUp={() => void onUpdatePreferences({ uiScale: scale })}
+              data-testid="ui-scale-range"
+            />
+            <span className="scale-value mono">{Math.round(scale * 100)}%</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={scale === UI_SCALE_LIMITS.default}
+              onClick={() => { setScale(UI_SCALE_LIMITS.default); void onUpdatePreferences({ uiScale: UI_SCALE_LIMITS.default }); }}
+            >
+              {dict.ui.resetAction}
+            </button>
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', marginTop: 8, fontSize: 12 }} className="muted">
-          <span>
-            {isZh
-              ? `已配置 ${(preferences.projects ?? []).length} 个自定义 Project`
-              : `${(preferences.projects ?? []).length} custom Projects configured`}
+        <div className="setting-row">
+          <span className="setting-label">{isZh ? '默认工作目录' : 'Default folder'}</span>
+          <span className="muted truncate mono" style={{ fontSize: 12 }}>
+            {preferences.defaultWorkspaceCwd || '—'}
           </span>
           <span className="spacer" />
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenProjectsTab}>
+          <button type="button" className="btn btn-sm" onClick={onOpenProjectsTab}>
             <FolderKanban size={13} />
-            <span>{isZh ? '管理全部项目…' : 'Manage Projects…'}</span>
+            <span>{(preferences.projects ?? []).length}</span>
           </button>
         </div>
       </div>
@@ -337,13 +332,8 @@ function ProjectsPanel({
         </div>
       )}
 
-      <h3 className="settings-group-title">{isZh ? '默认工作目录 (Default Folder)' : 'Default Workspace Folder'}</h3>
+      <h3 className="settings-group-title">{isZh ? '默认工作目录' : 'Default folder'}</h3>
       <div className="settings-group" style={{ padding: 14 }}>
-        <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-          {isZh
-            ? '点击「新建会话」时优先填入此文件夹路径；支持手动输入绝对路径或浏览本地目录。'
-            : 'Pre-filled whenever you start a new thread. Enter an absolute folder path or browse locally.'}
-        </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <input
             className="input input-mono"
@@ -375,19 +365,13 @@ function ProjectsPanel({
       </div>
 
       <h3 className="settings-group-title">
-        {editingId
-          ? isZh
-            ? '编辑项目 (Edit Project)'
-            : 'Edit Project'
-          : isZh
-            ? '新建自定义项目 (Add Project)'
-            : 'Add Project'}
+        {editingId ? (isZh ? '编辑项目' : 'Edit project') : isZh ? '添加项目' : 'Add project'}
       </h3>
       <form className="settings-group" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }} onSubmit={(e) => void submitProject(e)}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 8 }}>
           <input
             className="input"
-            placeholder={isZh ? '项目显示名称（如：Gravity 桌面端）' : 'Project display name'}
+            placeholder={isZh ? '项目名称' : 'Project name'}
             value={projName}
             onChange={(e) => setProjName(e.target.value)}
             data-testid="project-name-input"
@@ -412,7 +396,7 @@ function ProjectsPanel({
           <input
             className="input input-mono"
             style={{ flex: 1 }}
-            placeholder={isZh ? '项目本地文件夹绝对路径…' : 'Project folder absolute path…'}
+            placeholder={isZh ? '项目文件夹绝对路径' : 'Project folder path'}
             value={projPath}
             onChange={(e) => setProjPath(e.target.value)}
             data-testid="project-path-input"
@@ -432,7 +416,7 @@ function ProjectsPanel({
           <input
             className="input"
             style={{ flex: 1 }}
-            placeholder={isZh ? '项目备注说明（可选，悬停在侧栏项目分组时展示）' : 'Optional description'}
+            placeholder={isZh ? '备注（可选）' : 'Note (optional)'}
             value={projDesc}
             onChange={(e) => setProjDesc(e.target.value)}
             data-testid="project-desc-input"
@@ -455,14 +439,12 @@ function ProjectsPanel({
       </form>
 
       <h3 className="settings-group-title">
-        {isZh ? `已保存的项目 (${projects.length})` : `Configured Projects (${projects.length})`}
+        {isZh ? `已保存的项目 · ${projects.length}` : `Projects · ${projects.length}`}
       </h3>
       <div className="settings-group">
         {projects.length === 0 ? (
           <div className="empty-state">
-            {isZh
-              ? '尚未添加自定义 Project。添加后将在左侧边栏独立置顶分组，并支持一键新建会话。'
-              : 'No custom Projects yet. Add a folder above to pin it in the sidebar.'}
+            {isZh ? '暂无项目' : 'No projects yet'}
           </div>
         ) : (
           projects.map((proj) => {
@@ -629,6 +611,7 @@ function AboutPanel({
 export function SettingsView(props: SettingsViewProps): React.ReactElement {
   const { dict } = useI18n();
   const { section, onSectionChange, onClose } = props;
+  const [navWidth, setNavWidth] = useState(216);
 
   // Escape 交给当前设置页关闭回调。组件卸载时移除监听，以便工作台恢复对快捷键的处理。
   useEffect(() => {
@@ -727,7 +710,7 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
   return (
     <div className="overlay" onMouseDown={onClose} data-testid="settings-overlay">
       <div className="settings" onMouseDown={(e) => e.stopPropagation()} data-testid="theme-settings-modal">
-        <nav className="settings-nav">
+        <nav className="settings-nav" style={{ width: navWidth }}>
           <div className="settings-nav-title">{dict.settingsTitle}</div>
           {(['app', 'workspace', 'info'] as const).map((group) => (
             <React.Fragment key={group}>
@@ -741,11 +724,22 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
                   data-testid={`settings-tab-${id}`}
                 >
                   <Icon size={15} />
-                  <span>{dict.settingsNav[id]}</span>
+                  <span className="truncate">{dict.settingsNav[id]}</span>
                 </button>
               ))}
             </React.Fragment>
           ))}
+          <ResizeHandle
+            value={navWidth}
+            min={176}
+            max={300}
+            defaultValue={216}
+            label={dict.ui.resizeSidebar}
+            className="edge-right"
+            testId="settings-nav-resize-handle"
+            onPreview={setNavWidth}
+            onCommit={(w) => setNavWidth(Math.round(w))}
+          />
         </nav>
         <section className="settings-main">
           <header className="settings-head">
@@ -754,7 +748,7 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
               <X size={16} />
             </button>
           </header>
-          <div className="settings-body">{content}</div>
+          <div className="settings-body" key={section}>{content}</div>
         </section>
       </div>
     </div>

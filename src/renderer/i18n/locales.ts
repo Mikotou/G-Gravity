@@ -33,6 +33,7 @@ export type SettingsSection =
 
 /** 两种语言共用的词典结构。固定文案是字符串，含计数、时间或状态的文案可用类型明确的格式化函数。 */
 export interface UiDictionary {
+  ui: WorkbenchStrings;
   appName: string;
   appTagline: string;
 
@@ -428,9 +429,77 @@ const TOKEN_LABELS_EN: Record<keyof ThemePaletteTokens, string> = {
   syntaxComment: 'Comment',
 };
 
+/** v0.1.5 工作台新增的交互文案（缩放、拖拽调整、分级菜单、状态反馈）。 */
+export interface WorkbenchStrings {
+  interruptHint: string;
+  uiScaleLabel: string;
+  uiScaleToast: (percent: number) => string;
+  resetAction: string;
+  resizeSidebar: string;
+  resizeInspector: string;
+  resizeSplit: string;
+  resizeComposer: string;
+  accountMenu: string;
+  projects: string;
+  modelMenuTitle: string;
+  effortTitle: string;
+  changesTab: string;
+  viewDiff: string;
+  viewFiles: string;
+  detailsAction: string;
+  newActivity: string;
+  backToLatest: string;
+  workingElapsed: (seconds: string) => string;
+}
+
+const WORKBENCH_ZH: WorkbenchStrings = {
+  interruptHint: 'Esc 中断',
+  uiScaleLabel: '界面缩放',
+  uiScaleToast: (p) => `界面缩放 ${p}%`,
+  resetAction: '重置',
+  resizeSidebar: '拖动调整侧栏宽度，双击恢复默认',
+  resizeInspector: '拖动调整检视器宽度，双击恢复默认',
+  resizeSplit: '拖动调整分屏比例，双击对半',
+  resizeComposer: '拖动调整输入框高度，双击恢复默认',
+  accountMenu: '账户与工作区',
+  projects: '项目与目录',
+  modelMenuTitle: '模型',
+  effortTitle: '推理强度',
+  changesTab: 'Changes',
+  viewDiff: 'Diff',
+  viewFiles: 'Files',
+  detailsAction: '详情',
+  newActivity: '有新内容',
+  backToLatest: '回到最新',
+  workingElapsed: (s) => s,
+};
+
+const WORKBENCH_EN: WorkbenchStrings = {
+  interruptHint: 'Esc to interrupt',
+  uiScaleLabel: 'Interface scale',
+  uiScaleToast: (p) => `Interface scale ${p}%`,
+  resetAction: 'Reset',
+  resizeSidebar: 'Drag to resize the sidebar, double-click to reset',
+  resizeInspector: 'Drag to resize the inspector, double-click to reset',
+  resizeSplit: 'Drag to resize panes, double-click to split evenly',
+  resizeComposer: 'Drag to resize the input, double-click to reset',
+  accountMenu: 'Account & workspace',
+  projects: 'Projects',
+  modelMenuTitle: 'Model',
+  effortTitle: 'Thinking effort',
+  changesTab: 'Changes',
+  viewDiff: 'Diff',
+  viewFiles: 'Files',
+  detailsAction: 'Details',
+  newActivity: 'New activity',
+  backToLatest: 'Latest',
+  workingElapsed: (s) => s,
+};
+
 // 语言切换使用同一组字段。每种语言自行处理复数、语序和数值插入，组件只提供数据。
 export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
   'zh-CN': {
+    ui: WORKBENCH_ZH,
     appName: 'Gravity',
     appTagline: '基于官方 ACP 协议的本地编码工作台',
 
@@ -843,6 +912,7 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
   },
 
   'en-US': {
+    ui: WORKBENCH_EN,
     appName: 'Gravity',
     appTagline: 'Local coding studio on the official ACP protocol',
 

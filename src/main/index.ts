@@ -1,11 +1,11 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { CoreService } from './core-service';
 import { registerIpcRouter } from './ipc-router';
-import { GRAVITY_ICON_VARIANTS, type GravityIconId } from '../shared/theme-i18n-contract';
+import { GRAVITY_ICON_VARIANTS, clampUiScale, type GravityIconId } from '../shared/theme-i18n-contract';
 
 /** 窗口拦截到的导航统一从这里分流。网页和邮件交给系统处理，本地文件定位到所在目录。 */
 function handleSafeLinkNavigation(rawUrl: string): void {
@@ -62,6 +62,7 @@ async function createWindow(): Promise<void> {
     dataDir: app.getPath('userData'),
     acpOptions: { binaryPath: process.env.AGY_BINARY_PATH, loginLauncher: launchLogin },
     setIcon: id => { window?.setIcon(iconPath(id)); },
+    setZoom: factor => { window?.webContents.setZoomFactor(clampUiScale(factor)); },
     openTargetHandler: async (resolvedTarget, mode, isDir) => {
       if (mode === 'copy') {
         clipboard.writeText(resolvedTarget);
@@ -86,11 +87,17 @@ async function createWindow(): Promise<void> {
     },
   });
   const preferences = service.getPreferences();
+  // 首次窗口尺寸按主显示器可用区域取比例，在 2K/4K 屏上不会显得过小，在小屏上也不会超出屏幕。
+  const work = screen.getPrimaryDisplay().workAreaSize;
+  const width = Math.max(960, Math.min(1760, Math.round(work.width * 0.86)));
+  const height = Math.max(640, Math.min(1120, Math.round(work.height * 0.88)));
   window = new BrowserWindow({
-    width: 1440, height: 960, minWidth: 960, minHeight: 640, title: 'Gravity', backgroundColor: '#171513', icon: iconPath(preferences.appIcon),
+    width, height, minWidth: 960, minHeight: 640, title: 'Gravity', backgroundColor: '#171513', icon: iconPath(preferences.appIcon),
     webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
   });
   Menu.setApplicationMenu(null);
+  // 缩放倍率由偏好决定。页面每次加载完成后重新写入，避免导航重置 zoomFactor。
+  window.webContents.on('did-finish-load', () => { window?.webContents.setZoomFactor(clampUiScale(service?.getPreferences().uiScale)); });
   // 同时拦截弹窗和当前页导航，让点击消息中的链接时工作台仍停留在原页面。
   window.webContents.setWindowOpenHandler(({ url }) => {
     handleSafeLinkNavigation(url);

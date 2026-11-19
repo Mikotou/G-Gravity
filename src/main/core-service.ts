@@ -9,9 +9,9 @@ import type { ApprovalDecisionSubmission, ApprovalMode, ApproveForMeConfig } fro
 import type { AppBootstrapPayload, AcpConnectionStatus, CreateSessionInput, OpenLinkOrFileInput, OpenLinkOrFileResult, SendPromptInput } from '../shared/ipc-channels';
 import { isForbiddenCredentialOrStatePath } from '../shared/accounts-history-contract';
 import type { ChatMessageItem, ManagedSessionSummary, TitleOrganizeRequest, WorkspaceLayoutState } from '../shared/session-contract';
-import { generateStructuredChineseTitle, isLegacyPollutionSessionTitle, isRightInspectorTab, normalizeWorkspacePath } from '../shared/session-contract';
+import { clampSplitRatio, generateStructuredChineseTitle, isLegacyPollutionSessionTitle, isRightInspectorTab, LAYOUT_LIMITS, normalizeWorkspacePath } from '../shared/session-contract';
 import type { ClientPreferences, GravityIconId, WorkspaceProjectConfig } from '../shared/theme-i18n-contract';
-import { THEME_PRESETS, GRAVITY_ICON_VARIANTS, validateCustomThemeConfig } from '../shared/theme-i18n-contract';
+import { THEME_PRESETS, GRAVITY_ICON_VARIANTS, UI_SCALE_LIMITS, clampUiScale, validateCustomThemeConfig } from '../shared/theme-i18n-contract';
 import type { ModelRateCard } from '../shared/telemetry-contract';
 import type { CreateAccountProfileInput, ContinueHistoryInGravityInput } from '../shared/accounts-history-contract';
 import type { PluginActionInput, McpActionInput } from '../shared/plugins-contract';
@@ -42,8 +42,8 @@ import { appendImage } from './session/message-images';
 import { LocalTranslator } from './translation/local-translator';
 
 export const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'gravity-claude-dark', defaultThoughtTrack: 'zh', translationEngine: 'local', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [] };
-export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context' };
-export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; setIcon?: (iconId: GravityIconId) => void | Promise<void>; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
+export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context', splitRatio: 0.5 };
+export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; setIcon?: (iconId: GravityIconId) => void | Promise<void>; setZoom?: (factor: number) => void; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
 /** 主进程的业务入口。窗口请求进入此处，ACP 更新按会话分发给消息、审批、统计和检视器，再由事件通知渲染层。 */
 export class CoreService extends EventEmitter {
   readonly store: ClientStore; readonly client: AcpClient; readonly sessions: SessionMultiplexer; readonly approval: ApprovalEngine;
@@ -95,6 +95,15 @@ export class CoreService extends EventEmitter {
       this.layout.openTabSessionIds = [...new Set([...this.layout.openTabSessionIds, tertiarySessionId, quaternarySessionId].filter((id): id is string => Boolean(id)))];
     }
     if (!isRightInspectorTab(this.layout.activeInspectorTab)) this.layout.activeInspectorTab = DEFAULT_LAYOUT.activeInspectorTab;
+    // 启动时修复越界的栏宽与分屏比例，避免一个坏值让之后所有布局保存都被整体拒绝。
+    const fitWidth = (value: unknown, key: 'leftSidebarWidth' | 'rightInspectorWidth') => {
+      const { min, max } = LAYOUT_LIMITS[key];
+      return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : DEFAULT_LAYOUT[key];
+    };
+    this.layout.leftSidebarWidth = fitWidth(this.layout.leftSidebarWidth, 'leftSidebarWidth');
+    this.layout.rightInspectorWidth = fitWidth(this.layout.rightInspectorWidth, 'rightInspectorWidth');
+    this.layout.splitRatio = clampSplitRatio(this.layout.splitRatio);
+    if (this.preferences.uiScale !== undefined) this.preferences.uiScale = clampUiScale(this.preferences.uiScale);
     this.client = options.acp || new AcpClient({ ...options.acpOptions, args: options.acpOptions?.args || ['acp', ...(this.preferences.processPerSession ? ['--process-per-session'] : [])] });
     this.sessions = new SessionMultiplexer(this.client, this.store);
     let config = this.store.read<ApproveForMeConfig>('approval-config.json', structuredClone(DEFAULT_APPROVAL_CONFIG));
@@ -501,7 +510,12 @@ export class CoreService extends EventEmitter {
       next.projects = normalizedProjects;
     }
     if (this.client.connected && next.processPerSession !== this.preferences.processPerSession) throw new Error('请重启客户端后修改进程隔离设置');
+    if (next.uiScale !== undefined) {
+      if (typeof next.uiScale !== 'number' || !Number.isFinite(next.uiScale) || next.uiScale < UI_SCALE_LIMITS.min || next.uiScale > UI_SCALE_LIMITS.max) throw new Error('界面缩放倍率无效');
+      next.uiScale = clampUiScale(next.uiScale);
+    }
     if (next.appIcon !== this.preferences.appIcon) await this.options.setIcon?.(next.appIcon);
+    if ((next.uiScale ?? 1) !== (this.preferences.uiScale ?? 1)) this.options.setZoom?.(next.uiScale ?? 1);
     this.preferences = next; this.store.write('preferences.json', next);
     if (!this.client.connected) { this.client.options.args = ['acp', ...(next.processPerSession ? ['--process-per-session'] : [])]; this.accounts.applyArgs(); }
     return structuredClone(next);
@@ -813,7 +827,8 @@ export class CoreService extends EventEmitter {
   async saveWorkspaceLayout(patch: Partial<WorkspaceLayoutState>): Promise<WorkspaceLayoutState> {
     const next = { ...this.layout, ...patch };
     if (!Array.isArray(next.openTabSessionIds) || !next.openTabSessionIds.every(id => typeof id === 'string') || !['single', 'split-2'].includes(next.layoutMode) || typeof next.hideLegacyPollutionSessions !== 'boolean') throw new Error('工作台布局无效');
-    if (typeof next.leftSidebarCollapsed !== 'boolean' || typeof next.rightInspectorCollapsed !== 'boolean' || !Number.isFinite(next.leftSidebarWidth) || next.leftSidebarWidth < 160 || next.leftSidebarWidth > 600 || !Number.isFinite(next.rightInspectorWidth) || next.rightInspectorWidth < 240 || next.rightInspectorWidth > 1000 || !isRightInspectorTab(next.activeInspectorTab)) throw new Error('Inspector 布局或栏宽无效');
+    if (typeof next.leftSidebarCollapsed !== 'boolean' || typeof next.rightInspectorCollapsed !== 'boolean' || !Number.isFinite(next.leftSidebarWidth) || next.leftSidebarWidth < LAYOUT_LIMITS.leftSidebarWidth.min || next.leftSidebarWidth > LAYOUT_LIMITS.leftSidebarWidth.max || !Number.isFinite(next.rightInspectorWidth) || next.rightInspectorWidth < LAYOUT_LIMITS.rightInspectorWidth.min || next.rightInspectorWidth > LAYOUT_LIMITS.rightInspectorWidth.max || !isRightInspectorTab(next.activeInspectorTab)) throw new Error('Inspector 布局或栏宽无效');
+    if (next.splitRatio !== undefined && (typeof next.splitRatio !== 'number' || !Number.isFinite(next.splitRatio) || next.splitRatio < LAYOUT_LIMITS.splitRatio.min || next.splitRatio > LAYOUT_LIMITS.splitRatio.max)) throw new Error('分屏比例无效');
     this.layout = next; this.store.write('layout.json', next); return structuredClone(next);
   }
   async renameSession(sessionId: string, newTitle: string) { const session = this.titles.rename(this.sessions.get(sessionId), newTitle); this.sessions.updateSessionRecord(session); this.emit('session-updated', session); return session; }

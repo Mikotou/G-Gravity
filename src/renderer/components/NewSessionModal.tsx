@@ -178,7 +178,7 @@ export function NewSessionModal({
         <div className="modal-body">
           {projects.length > 0 && (
             <div className="field">
-              <span className="field-label">{isZh ? '我的项目 (Projects)' : 'Projects'}</span>
+              <span className="field-label">{isZh ? '项目' : 'Projects'}</span>
               <div className="chip-row">
                 {projects.map((proj) => {
                   const active =

@@ -1,4 +1,5 @@
-import { isRightInspectorTab, withoutSession } from '../../shared/session-contract';
+import { isRightInspectorTab, LAYOUT_LIMITS, withoutSession } from '../../shared/session-contract';
+import { clampUiScale, UI_SCALE_LIMITS } from '../../shared/theme-i18n-contract';
 import { prepareRevision } from '../../shared/message-revision';
 import {
   calculateTokenCost,
@@ -356,6 +357,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     rightInspectorCollapsed: false,
     rightInspectorWidth: 380,
     activeInspectorTab: 'diff',
+    splitRatio: 0.5,
   };
 
   let pendingApprovals: PendingApprovalRequest[] = [
@@ -1120,7 +1122,8 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     },
 
     async updatePreferences(patch: Partial<ClientPreferences>): Promise<ClientPreferences> {
-      preferences = { ...preferences, ...patch };
+      if (patch.uiScale !== undefined && (typeof patch.uiScale !== 'number' || patch.uiScale < UI_SCALE_LIMITS.min || patch.uiScale > UI_SCALE_LIMITS.max)) throw new Error('界面缩放倍率无效');
+      preferences = { ...preferences, ...patch, ...(patch.uiScale !== undefined ? { uiScale: clampUiScale(patch.uiScale) } : {}) };
       return structuredClone(preferences);
     },
 
@@ -1514,6 +1517,11 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       patch: Partial<WorkspaceLayoutState>
     ): Promise<WorkspaceLayoutState> {
       if (patch.activeInspectorTab !== undefined && !isRightInspectorTab(patch.activeInspectorTab)) throw new Error('未知的检视器页签');
+      // 与主进程相同的栏宽与分屏比例边界，预览环境也能复现越界保存时的错误反馈。
+      const within = (v: unknown, r: { min: number; max: number }) => typeof v === 'number' && Number.isFinite(v) && v >= r.min && v <= r.max;
+      if (patch.leftSidebarWidth !== undefined && !within(patch.leftSidebarWidth, LAYOUT_LIMITS.leftSidebarWidth)) throw new Error('Inspector 布局或栏宽无效');
+      if (patch.rightInspectorWidth !== undefined && !within(patch.rightInspectorWidth, LAYOUT_LIMITS.rightInspectorWidth)) throw new Error('Inspector 布局或栏宽无效');
+      if (patch.splitRatio !== undefined && !within(patch.splitRatio, LAYOUT_LIMITS.splitRatio)) throw new Error('分屏比例无效');
       layout = {
         ...layout,
         ...patch,

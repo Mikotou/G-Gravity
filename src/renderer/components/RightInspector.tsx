@@ -22,6 +22,7 @@ import type {
 } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { ContextCostInspectorView } from './ContextCostInspectorView';
+import { ResizeHandle } from './ResizeHandle';
 import { SwarmPanel } from './SwarmPanel';
 import { UnifiedDiffBlock } from './UnifiedDiffBlock';
 
@@ -47,7 +48,6 @@ export interface RightInspectorProps {
 
 const TABS: ReadonlyArray<{ id: RightInspectorTab; Icon: typeof FileDiff }> = [
   { id: 'diff', Icon: FileDiff },
-  { id: 'files', Icon: FileCode2 },
   { id: 'plan', Icon: ListTodo },
   { id: 'terminal', Icon: SquareTerminal },
   { id: 'context', Icon: BarChart3 },
@@ -55,7 +55,12 @@ const TABS: ReadonlyArray<{ id: RightInspectorTab; Icon: typeof FileDiff }> = [
 ];
 
 const MIN_WIDTH = 280;
-const MAX_WIDTH = 680;
+const DEFAULT_WIDTH = 380;
+/** 常规屏幕上限 680px；宽屏（如 2K / 4K）允许拉到窗口一半，最高 1000px。 */
+function maxInspectorWidth(): number {
+  const viewport = typeof window !== 'undefined' ? window.innerWidth : 1280;
+  return Math.max(680, Math.min(1000, Math.round(viewport * 0.5)));
+}
 
 export function RightInspector({
   collapsed,
@@ -75,33 +80,12 @@ export function RightInspector({
   onOpenRateCardsSettings,
 }: RightInspectorProps): React.ReactElement {
   const { dict } = useI18n();
-  const [liveWidth, setLiveWidth] = useState<number>(width || 380);
-  const [dragging, setDragging] = useState(false);
+  const ui = dict.ui;
+  const [liveWidth, setLiveWidth] = useState<number>(width || DEFAULT_WIDTH);
 
   useEffect(() => {
-    if (!dragging && width) setLiveWidth(width);
-  }, [width, dragging]);
-
-  /** 拖动期间只更新本地显示宽度，鼠标释放时提交一次最终宽度，避免每个移动事件都保存布局。 */
-  function startResize(e: React.MouseEvent): void {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = liveWidth;
-    let latest = startW;
-    setDragging(true);
-    function onMove(ev: MouseEvent): void {
-      latest = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startW + (startX - ev.clientX)));
-      setLiveWidth(latest);
-    }
-    function onUp(): void {
-      setDragging(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      onCommitWidth(latest);
-    }
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }
+    if (width) setLiveWidth(width);
+  }, [width]);
 
   // 只统计已完成的文件改动，挂起 / 失败的工具调用不算变更
   const diffs = useMemo<FileDiffEntry[]>(() => {
@@ -192,18 +176,21 @@ export function RightInspector({
 
   // 标签徽标各自表示不同数量。终端有失败时优先显示失败数，协作面板显示正在工作的成员数。
   const counts: Partial<Record<RightInspectorTab, number>> = {
-    files: diffs.length,
+    diff: diffs.length,
     plan: todos.length,
     terminal: unread.length,
     swarm: swarmTopology?.isActive ? swarmTopology.stats.working : 0,
   };
   const countTone: Partial<Record<RightInspectorTab, 'danger' | 'accent' | 'muted'>> = {
-    files: 'accent',
+    diff: 'accent',
     plan: 'muted',
     terminal: failedTerminals ? 'danger' : 'muted',
     swarm: 'accent',
   };
   const doneTodos = todos.filter((t) => t.status === 'completed').length;
+  // “变更”是一级页签，差异与文件清单是它的二级视图，共用同一份统计与焦点文件。
+  const changesView = activeTab === 'files' ? 'files' : 'diff';
+  const isChanges = activeTab === 'diff' || activeTab === 'files';
 
   const changeSummary = diffs.length > 0 && (
     <div className="inspector-summary" data-testid="inspector-change-summary">
@@ -225,46 +212,77 @@ export function RightInspector({
     </div>
   );
 
+  const changesSwitch = (
+    <div className="segmented segmented-sm inspector-subnav" role="tablist" aria-label={ui.changesTab}>
+      {(['diff', 'files'] as const).map((view) => (
+        <button
+          key={view}
+          type="button"
+          role="tab"
+          aria-selected={changesView === view}
+          className={`segmented-btn ${changesView === view ? 'is-active' : ''}`}
+          onClick={() => onSelectTab(view)}
+          data-testid={view === 'files' ? 'inspector-tab-files' : 'inspector-subtab-diff'}
+        >
+          {view === 'diff' ? <FileDiff size={12} /> : <FileCode2 size={12} />}
+          <span>{view === 'diff' ? ui.viewDiff : ui.viewFiles}</span>
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <aside
-      className={`inspector ${collapsed ? 'is-collapsed' : ''} ${dragging ? 'is-dragging' : ''}`}
+      className={`inspector ${collapsed ? 'is-collapsed' : ''}`}
       style={{ width: collapsed ? 0 : liveWidth }}
       data-testid="right-inspector"
       aria-hidden={collapsed}
     >
       {!collapsed && (
-        <div
-          className={`resize-handle ${dragging ? 'is-dragging' : ''}`}
-          onMouseDown={startResize}
-          data-testid="inspector-resize-handle"
+        <ResizeHandle
+          value={liveWidth}
+          min={MIN_WIDTH}
+          max={maxInspectorWidth}
+          defaultValue={DEFAULT_WIDTH}
+          direction={-1}
+          label={ui.resizeInspector}
+          className="edge-left"
+          testId="inspector-resize-handle"
+          onPreview={setLiveWidth}
+          onCommit={(w) => onCommitWidth(Math.round(w))}
         />
       )}
       <div className="inspector-inner">
         <div className="inspector-head" role="tablist">
-          {TABS.map(({ id, Icon }) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === id}
-              className={`inspector-tab ${activeTab === id ? 'is-active' : ''}`}
-              onClick={() => onSelectTab(id)}
-              aria-label={dict.inspectorTabs[id]}
-              title={dict.inspectorTabs[id]}
-              data-testid={`inspector-tab-${id}`}
-            >
-              <Icon size={13} />
-              <span className="inspector-tab-label">{dict.inspectorTabs[id]}</span>
-              {counts[id] ? (
-                <span className={`tab-count tone-${countTone[id] ?? 'muted'}`}>{counts[id]}</span>
-              ) : null}
-            </button>
-          ))}
+          {TABS.map(({ id, Icon }) => {
+            const selected = id === 'diff' ? isChanges : activeTab === id;
+            const label = id === 'diff' ? ui.changesTab : dict.inspectorTabs[id];
+            return (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                className={`inspector-tab ${selected ? 'is-active' : ''}`}
+                onClick={() => onSelectTab(id === 'diff' && isChanges ? activeTab : id)}
+                aria-label={label}
+                title={label}
+                data-testid={`inspector-tab-${id}`}
+              >
+                <Icon size={13} />
+                <span className="inspector-tab-label">{label}</span>
+                {counts[id] ? (
+                  <span className={`tab-count tone-${countTone[id] ?? 'muted'}`}>{counts[id]}</span>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
 
-        <div className="inspector-body">
+        <div className="inspector-body" key={isChanges ? 'changes' : activeTab}>
           {activeTab === 'diff' && (
             <div className="inspector-stack" data-testid="inspector-view-diff">
+              <div className="inspector-toolbar">{changesSwitch}</div>
               {diffs.length === 0 ? (
                 <div className="empty-state">{dict.diffEmpty}</div>
               ) : (
@@ -280,6 +298,7 @@ export function RightInspector({
 
           {activeTab === 'files' && (
             <div className="inspector-stack" style={{ gap: 2 }} data-testid="inspector-view-files">
+              <div className="inspector-toolbar">{changesSwitch}</div>
               {diffs.length === 0 ? (
                 <div className="empty-state">{dict.filesChangedEmpty}</div>
               ) : (

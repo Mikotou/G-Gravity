@@ -18,8 +18,9 @@ import {
   ArrowUp,
   AtSign,
   Check,
+  ChevronDown,
+  Cpu,
   FileText,
-  ImagePlus,
   MessageSquarePlus,
   Paperclip,
   Quote,
@@ -33,6 +34,7 @@ import { formatActionError } from '../i18n/locales';
 import { MessageImage } from './MessageImage';
 import { ContextStatusBar } from './ContextStatusBar';
 import { AccountQuotaFooter } from './AccountQuotaView';
+import { ResizeHandle } from './ResizeHandle';
 import {
   type TextNotationItem,
   type TextQuoteItem,
@@ -87,6 +89,22 @@ const FALLBACK_MODELS: AcpModelOption[] = [
   { modelId: 'claude-opus-4-6-thinking', name: 'Claude Opus 4.6 (Thinking)' },
   { modelId: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)' },
 ];
+
+const COMPOSER_MIN_HEIGHT_KEY = 'gravity.composer.minHeight';
+const COMPOSER_DEFAULT_HEIGHT = 46;
+const COMPOSER_MAX_HEIGHT = 520;
+/** 输入框高度只影响本机界面，按设备保存在 localStorage，不进入会话或主进程数据。 */
+function readComposerMinHeight(): number {
+  try {
+    const v = Number(window.localStorage.getItem(COMPOSER_MIN_HEIGHT_KEY));
+    return Number.isFinite(v) && v >= COMPOSER_DEFAULT_HEIGHT ? Math.min(COMPOSER_MAX_HEIGHT, v) : COMPOSER_DEFAULT_HEIGHT;
+  } catch {
+    return COMPOSER_DEFAULT_HEIGHT;
+  }
+}
+function saveComposerMinHeight(v: number): void {
+  try { window.localStorage.setItem(COMPOSER_MIN_HEIGHT_KEY, String(Math.round(v))); } catch { /* 本次窗口内保持即可 */ }
+}
 
 const TEXT_FILE_EXT_RE =
   /\.(?:txt|md|markdown|rst|json|jsonl|jsonc|yaml|yml|toml|ini|cfg|conf|env|xml|svg|csv|tsv|log|sql|graphql|gql|prisma|html|htm|css|scss|sass|less|js|jsx|mjs|cjs|ts|tsx|mts|cts|vue|svelte|py|pyi|rb|php|go|rs|java|kt|kts|scala|c|h|cc|cpp|cxx|hpp|cs|swift|m|mm|sh|bash|zsh|ps1|psm1|bat|cmd|dockerfile|makefile|cmake|gradle|lua|r|pl|dart|ex|exs|erl|hs|clj)$/i;
@@ -220,10 +238,13 @@ export function Composer({
   const [menuIndex, setMenuIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [approvalMenuOpen, setApprovalMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [inputMinHeight, setInputMinHeight] = useState(readComposerMinHeight);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const anyFileInputRef = useRef<HTMLInputElement | null>(null);
   const approvalMenuRef = useRef<HTMLDivElement | null>(null);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
+  const ui = dict.ui;
 
   const isStreaming = session.status === 'streaming';
   const normalizedMode: AgentExecutionMode = (EXECUTION_MODE_ORDER as readonly string[]).includes(session.executionMode)
@@ -245,21 +266,33 @@ export function Composer({
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    // 先释放旧高度再读 scrollHeight，删除文字时输入框也能缩回。上限留给会话正文足够空间。
+    // 先释放旧高度再读 scrollHeight，删除文字时输入框也能缩回。用户拖高输入框后，上限随之放宽。
     el.style.height = 'auto';
-    el.style.height = `${Math.min(240, Math.max(46, el.scrollHeight))}px`;
-  }, [draft]);
+    const maxHeight = Math.max(240, inputMinHeight);
+    el.style.height = `${Math.min(maxHeight, Math.max(inputMinHeight, el.scrollHeight))}px`;
+    el.style.maxHeight = `${maxHeight}px`;
+  }, [draft, inputMinHeight]);
 
   useEffect(() => {
-    if (!approvalMenuOpen) return;
+    if (!approvalMenuOpen && !modelMenuOpen) return;
     function onDown(e: MouseEvent): void {
-      if (approvalMenuRef.current && !approvalMenuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (approvalMenuRef.current && !approvalMenuRef.current.contains(target)) setApprovalMenuOpen(false);
+      if (modelMenuRef.current && !modelMenuRef.current.contains(target)) setModelMenuOpen(false);
+    }
+    function onKey(e: KeyboardEvent): void {
+      if (e.key === 'Escape') {
         setApprovalMenuOpen(false);
+        setModelMenuOpen(false);
       }
     }
     window.addEventListener('mousedown', onDown);
-    return () => window.removeEventListener('mousedown', onDown);
-  }, [approvalMenuOpen]);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [approvalMenuOpen, modelMenuOpen]);
 
   const slashMatches = useMemo(() => {
     const trimmed = draft.trimStart();
@@ -472,6 +505,12 @@ export function Composer({
       }
     }
     // 中文输入法正在组词时由输入法接管回车。普通回车先确认候选，候选已是完整命令时才直接提交。
+    if (e.key === 'Escape' && isStreaming && !approvalMenuOpen && !modelMenuOpen) {
+      // Claude Code 式中断：生成中按 Esc 停止当前回合，草稿保持不变。
+      e.preventDefault();
+      void onCancelPrompt(session.sessionId).catch(reportError);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       const item = menuItems[menuIndex] ?? menuItems[0];
       if (item && !(item.type === 'slash' && draft.trim() === item.command)) {
@@ -497,6 +536,14 @@ export function Composer({
     : REASONING_EFFORT_ORDER.map((ef) => ({ value: ef, name: dict.effortLevels[ef] }));
 
   const modeArrows = normalizedMode === 'default' ? '›' : normalizedMode === 'plan' ? '⏸' : '⏵⏵';
+  const allModelChoices: AcpModelOption[] =
+    session.modelId && !modelChoices.some((m) => m.modelId === session.modelId)
+      ? [...modelChoices, { modelId: session.modelId, name: session.modelId }]
+      : modelChoices;
+  const currentModelName = allModelChoices.find((m) => m.modelId === session.modelId)?.name || session.modelId || 'Model';
+  const effectiveEffort: AgentReasoningEffort = effortChoices.some((ef) => ef.value === currentEffort)
+    ? currentEffort
+    : effortChoices[0]?.value ?? currentEffort;
 
   return (
     <div className="composer-dock">
@@ -553,12 +600,25 @@ export function Composer({
         )}
 
         <div
-          className="composer"
+          className={`composer ${isStreaming ? 'is-busy' : ''}`}
           onDragOver={(e) => {
             if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
           }}
           onDrop={handleDrop}
         >
+          <ResizeHandle
+            axis="y"
+            value={inputMinHeight}
+            min={COMPOSER_DEFAULT_HEIGHT}
+            max={COMPOSER_MAX_HEIGHT}
+            defaultValue={COMPOSER_DEFAULT_HEIGHT}
+            direction={-1}
+            label={ui.resizeComposer}
+            className="composer-grip"
+            testId={`composer-resize-${session.sessionId}`}
+            onPreview={setInputMinHeight}
+            onCommit={(v) => { setInputMinHeight(v); saveComposerMinHeight(v); }}
+          />
           {hasQuotesOrNotations && (
             <div className="composer-annotations-tray" data-testid={`composer-annotations-${session.sessionId}`}>
               {quotes.map((q) => (
@@ -650,7 +710,7 @@ export function Composer({
             ref={textareaRef}
             className="composer-input"
             rows={1}
-            placeholder={isStreaming ? dict.composerPlaceholderBusy : dict.composerPlaceholder}
+            placeholder={isStreaming ? `${dict.composerPlaceholderBusy}  ·  ${ui.interruptHint}` : dict.composerPlaceholder}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={handlePaste}
@@ -679,9 +739,7 @@ export function Composer({
                 data-testid={`approval-mode-pill-${session.sessionId}`}
               >
                 <ShieldCheck size={13} />
-                <span className="approval-label">
-                  {dict.permissionPillPrefix} · {dict.approvalModes[approvalConfig.mode].label}
-                </span>
+                <span className="approval-label">{dict.approvalModes[approvalConfig.mode].label}</span>
               </button>
               {approvalMenuOpen && (
                 <div className="popover menu-up" style={{ width: 230 }} data-testid={`approval-menu-${session.sessionId}`}>
@@ -743,7 +801,7 @@ export function Composer({
             <button
               type="button"
               className="icon-btn attach-btn"
-              title={dict.attachFileLabel}
+              title={`${dict.attachFileLabel} / ${dict.attachImageLabel}`}
               aria-label={dict.attachFileLabel}
               onClick={() => anyFileInputRef.current?.click()}
               data-testid={`attach-file-btn-${session.sessionId}`}
@@ -751,68 +809,71 @@ export function Composer({
               <Paperclip size={15} />
             </button>
 
-            <input
-              ref={imageInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif"
-              multiple
-              hidden
-              onChange={(e) => {
-                const files = Array.from(e.target.files ?? []);
-                e.target.value = '';
-                if (files.length) void addFiles(files);
-              }}
-            />
-            <button
-              type="button"
-              className="icon-btn attach-btn"
-              title={dict.attachImageLabel}
-              aria-label={dict.attachImageLabel}
-              onClick={() => imageInputRef.current?.click()}
-            >
-              <ImagePlus size={15} />
-            </button>
-
-            <select
-              className="select-chip"
-              aria-label="Model"
-              value={session.modelId}
-              onChange={(e) => void onSetSessionModel(session.sessionId, e.target.value).catch(reportError)}
-              data-testid={`model-select-${session.sessionId}`}
-            >
-              {modelChoices.map((m) => (
-                <option key={m.modelId} value={m.modelId}>
-                  {m.name || m.modelId}
-                </option>
-              ))}
-              {session.modelId && !modelChoices.some((m) => m.modelId === session.modelId) && (
-                <option value={session.modelId}>{session.modelId}</option>
-              )}
-            </select>
-
-            {effortChoices.length > 0 && (
-              <select
-                className="select-chip effort-chip"
-                style={{ maxWidth: 108 }}
-                aria-label="Effort"
-                title="Thinking Level"
-                value={
-                  effortChoices.some((ef) => ef.value === currentEffort)
-                    ? currentEffort
-                    : effortChoices[0].value
-                }
-                onChange={(e) =>
-                  void onSetSessionEffort(session.sessionId, e.target.value as AgentReasoningEffort).catch(reportError)
-                }
-                data-testid={`effort-select-${session.sessionId}`}
+            <div className="menu-anchor" ref={modelMenuRef}>
+              <button
+                type="button"
+                className={`model-chip ${modelMenuOpen ? 'is-open' : ''}`}
+                onClick={() => setModelMenuOpen((open) => !open)}
+                aria-haspopup="menu"
+                aria-expanded={modelMenuOpen}
+                title={`${ui.modelMenuTitle} · ${ui.effortTitle}`}
+                data-testid={`model-select-${session.sessionId}`}
               >
-                {effortChoices.map((ef) => (
-                  <option key={ef.value} value={ef.value}>
-                    {dict.effortLevels[ef.value] ?? ef.value}
-                  </option>
-                ))}
-              </select>
-            )}
+                <Cpu size={12} className="model-chip-icon" />
+                <span className="model-chip-name truncate">{currentModelName}</span>
+                {effortChoices.length > 0 && (
+                  <span className="model-chip-effort">{dict.effortLevels[effectiveEffort] ?? effectiveEffort}</span>
+                )}
+                <ChevronDown size={12} className="model-chip-chev" />
+              </button>
+              {modelMenuOpen && (
+                <div className="popover menu-up menu-right model-menu" role="menu" data-testid={`model-menu-${session.sessionId}`}>
+                  <div className="menu-label">{ui.modelMenuTitle}</div>
+                  <div className="model-menu-list">
+                    {allModelChoices.map((m) => (
+                      <button
+                        key={m.modelId}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={m.modelId === session.modelId}
+                        className={`menu-item ${m.modelId === session.modelId ? 'is-checked' : ''}`}
+                        title={m.description || m.modelId}
+                        onClick={() => {
+                          setModelMenuOpen(false);
+                          if (m.modelId !== session.modelId) void onSetSessionModel(session.sessionId, m.modelId).catch(reportError);
+                        }}
+                      >
+                        <span className="menu-check">{m.modelId === session.modelId ? <Check size={13} /> : null}</span>
+                        <span className="truncate">{m.name || m.modelId}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {effortChoices.length > 0 && (
+                    <>
+                      <div className="menu-sep" />
+                      <div className="menu-label">{ui.effortTitle}</div>
+                      <div className="segmented segmented-sm effort-segmented" role="radiogroup" aria-label="Effort"
+                        data-testid={`effort-select-${session.sessionId}`}>
+                        {effortChoices.map((ef) => (
+                          <button
+                            key={ef.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={effectiveEffort === ef.value}
+                            className={`segmented-btn ${effectiveEffort === ef.value ? 'is-active' : ''}`}
+                            onClick={() => {
+                              if (ef.value !== effectiveEffort) void onSetSessionEffort(session.sessionId, ef.value).catch(reportError);
+                            }}
+                          >
+                            {dict.effortLevels[ef.value] ?? ef.value}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
 
             {canTriggerDemoApproval && (
               <button

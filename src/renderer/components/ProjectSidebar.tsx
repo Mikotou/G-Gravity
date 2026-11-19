@@ -4,10 +4,12 @@ import {
   BookOpen,
   Blocks,
   ChevronDown,
+  ChevronsUpDown,
   Eye,
   EyeOff,
   Folder,
   FolderKanban,
+  Languages,
   PanelLeftClose,
   Pencil,
   Pin,
@@ -16,6 +18,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  UserRound,
 } from 'lucide-react';
 import {
   isLegacyPollutionSessionTitle,
@@ -31,6 +34,7 @@ import {
   type WorkspaceProjectConfig,
 } from '@shared';
 import { startSessionDrag } from '../lib/session-drag';
+import { ResizeHandle } from './ResizeHandle';
 import { useI18n } from '../i18n/I18nContext';
 import { formatRelativeTime } from '../i18n/locales';
 import { resolveGravityIconVariant } from '../styles/theme';
@@ -66,6 +70,15 @@ export interface ProjectSidebarProps {
   onOpenPlugins: () => void;
   onOpenSettings: () => void;
   onChangeLocale: (locale: ClientLocale) => void;
+  onCommitWidth?: (width: number) => void;
+}
+
+const SIDEBAR_MIN = 200;
+const SIDEBAR_DEFAULT = 264;
+/** 常规屏幕最宽 440px；宽屏放宽到窗口的 30%，但不超过主进程允许的 600px。 */
+function sidebarMax(): number {
+  const viewport = typeof window !== 'undefined' ? window.innerWidth : 1280;
+  return Math.max(440, Math.min(600, Math.round(viewport * 0.3)));
 }
 
 function folderName(path: string): string {
@@ -104,6 +117,7 @@ export function ProjectSidebar({
   onOpenPlugins,
   onOpenSettings,
   onChangeLocale,
+  onCommitWidth,
 }: ProjectSidebarProps): React.ReactElement {
   const { locale, dict } = useI18n();
   const [search, setSearch] = useState('');
@@ -133,6 +147,18 @@ export function ProjectSidebar({
   const icon = resolveGravityIconVariant(appIcon);
   const q = search.trim().toLowerCase();
   const openSet = new Set(openTabSessionIds);
+  const [liveWidth, setLiveWidth] = useState(width || SIDEBAR_DEFAULT);
+  React.useEffect(() => { if (width) setLiveWidth(width); }, [width]);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const accountMenuRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (!accountMenuOpen) return;
+    const outside = (e: MouseEvent) => { if (!accountMenuRef.current?.contains(e.target as Node)) setAccountMenuOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setAccountMenuOpen(false); };
+    window.addEventListener('mousedown', outside);
+    window.addEventListener('keydown', esc);
+    return () => { window.removeEventListener('mousedown', outside); window.removeEventListener('keydown', esc); };
+  }, [accountMenuOpen]);
 
   // 按规范化、小写路径建立项目索引。会话中的大小写或分隔符不同，仍可关联到用户保存的项目名称。
   const projectByPath = useMemo(() => {
@@ -260,7 +286,7 @@ export function ProjectSidebar({
   return (
     <aside
       className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}
-      style={{ width: collapsed ? 0 : width || 268 }}
+      style={{ width: collapsed ? 0 : liveWidth }}
       data-testid="project-sidebar"
       aria-hidden={collapsed}
     >
@@ -310,18 +336,18 @@ export function ProjectSidebar({
           </div>
         </div>
 
-        <nav className="nav-list">
+        <nav className="sidebar-quick-nav" aria-label={dict.ui.accountMenu}>
           {onOpenProjects && (
-            <button type="button" className="nav-item" onClick={onOpenProjects} data-testid="open-projects-modal-btn">
-              <FolderKanban size={15} />
-              <span>{locale === 'zh-CN' ? '项目与目录' : 'Projects'}</span>
-              {projects.length > 0 && <span className="badge">{projects.length}</span>}
+            <button type="button" className="quick-nav-btn" onClick={onOpenProjects} title={dict.ui.projects} data-testid="open-projects-modal-btn">
+              <FolderKanban size={14} />
+              <span>{dict.ui.projects}</span>
+              {projects.length > 0 && <span className="quick-nav-count">{projects.length}</span>}
             </button>
           )}
-          <button type="button" className="nav-item" onClick={onOpenPlugins} data-testid="open-plugins-modal-btn">
-            <Blocks size={15} />
+          <button type="button" className="quick-nav-btn" onClick={onOpenPlugins} title={dict.navPlugins} data-testid="open-plugins-modal-btn">
+            <Blocks size={14} />
             <span>{dict.navPlugins}</span>
-            {pluginCount > 0 && <span className="badge">{pluginCount}</span>}
+            {pluginCount > 0 && <span className="quick-nav-count">{pluginCount}</span>}
           </button>
         </nav>
 
@@ -569,36 +595,60 @@ export function ProjectSidebar({
           )}
         </div>
 
-        <div className="sidebar-foot">
+        <div className="sidebar-foot" ref={accountMenuRef}>
+          {accountMenuOpen && (
+            <div className="popover account-menu" role="menu" data-testid="account-menu">
+              <div className="account-menu-head">
+                <span className="avatar avatar-lg">{profileName.trim().charAt(0).toUpperCase() || 'G'}</span>
+                <div className="account-menu-id">
+                  <strong className="truncate">{profileName}</strong>
+                  <span className={`account-menu-conn ${connection.connected ? 'is-on' : 'is-off'}`}>
+                    <span className={`status-dot ${connection.connected ? 'is-idle' : 'is-error'}`} />
+                    {connection.connected ? dict.acpConnected : dict.acpDisconnected}
+                    {connection.agyVersion ? ` · ${connection.agyVersion}` : ''}
+                  </span>
+                </div>
+              </div>
+              <div className="menu-sep" />
+              <button type="button" role="menuitem" className="menu-item" data-testid="open-accounts-modal-btn"
+                onClick={() => { setAccountMenuOpen(false); onOpenAccounts(); }}>
+                <UserRound size={14} className="muted" />
+                <span>{dict.navAccounts}</span>
+                <span className="menu-item-hint">{accounts.profiles.length || 1}</span>
+              </button>
+              <button type="button" role="menuitem" className="menu-item"
+                onClick={() => { setAccountMenuOpen(false); onOpenSettings(); }}>
+                <Settings size={14} className="muted" />
+                <span>{dict.navSettings}</span>
+                <span className="kbd">Ctrl ,</span>
+              </button>
+              <div className="menu-sep" />
+              <div className="menu-row">
+                <Languages size={14} className="muted" />
+                <span>{dict.languageLabel}</span>
+                <div className="segmented segmented-sm locale-toggle" data-testid="locale-switcher">
+                  <button type="button" className={`segmented-btn ${locale === 'zh-CN' ? 'is-active' : ''}`}
+                    onClick={() => onChangeLocale('zh-CN')} data-testid="locale-switch-zh">中</button>
+                  <button type="button" className={`segmented-btn ${locale === 'en-US' ? 'is-active' : ''}`}
+                    onClick={() => onChangeLocale('en-US')} data-testid="locale-switch-en">EN</button>
+                </div>
+              </div>
+            </div>
+          )}
           <button
             type="button"
-            className="account-chip"
-            onClick={onOpenAccounts}
+            className={`account-chip ${accountMenuOpen ? 'is-open' : ''}`}
+            onClick={() => setAccountMenuOpen((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={accountMenuOpen}
             title={`${profileName} · ${connection.connected ? dict.acpConnected : dict.acpDisconnected}`}
-            data-testid="open-accounts-modal-btn"
+            data-testid="account-menu-btn"
           >
             <span className="avatar">{profileName.trim().charAt(0).toUpperCase() || 'G'}</span>
             <span className={`status-dot ${connection.connected ? 'is-idle' : 'is-error'}`} />
             <span className="account-name truncate">{profileName}</span>
+            <ChevronsUpDown size={13} className="account-chev" />
           </button>
-          <div className="segmented locale-toggle" data-testid="locale-switcher">
-            <button
-              type="button"
-              className={`segmented-btn ${locale === 'zh-CN' ? 'is-active' : ''}`}
-              onClick={() => onChangeLocale('zh-CN')}
-              data-testid="locale-switch-zh"
-            >
-              中
-            </button>
-            <button
-              type="button"
-              className={`segmented-btn ${locale === 'en-US' ? 'is-active' : ''}`}
-              onClick={() => onChangeLocale('en-US')}
-              data-testid="locale-switch-en"
-            >
-              EN
-            </button>
-          </div>
           <button
             type="button"
             className="icon-btn"
@@ -611,6 +661,19 @@ export function ProjectSidebar({
           </button>
         </div>
       </div>
+      {!collapsed && onCommitWidth && (
+        <ResizeHandle
+          value={liveWidth}
+          min={SIDEBAR_MIN}
+          max={sidebarMax}
+          defaultValue={SIDEBAR_DEFAULT}
+          label={dict.ui.resizeSidebar}
+          className="edge-right"
+          testId="sidebar-resize-handle"
+          onPreview={setLiveWidth}
+          onCommit={(w) => onCommitWidth(Math.round(w))}
+        />
+      )}
     </aside>
   );
 }

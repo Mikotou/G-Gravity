@@ -1,5 +1,17 @@
 # G-Gravity 整体验收记录
 
+## 本机 Windows 版 v0.1.5
+
+2026-11-19，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.5/Gravity.exe`，大小为 121,385,457 字节，SHA-256 为 `D04C216A1C99A639D4E0D10D1593C5654D3888786AAD6CB7B1D44E7385B70EB4`。源码压缩包位于 `release/v0.1.5/G-Gravity-v0.1.5-source.zip`（对应 `main` 分支 `v0.1.5` 标签）。
+
+| 项目 | 验证结果 |
+| --- | --- |
+| 模块与栏宽拖拽 | 新增统一分隔条组件 `ResizeHandle`（鼠标拖动实时预览、释放持久化、双击复位、键盘方向键 / Home / End / Enter 微调）。覆盖左侧栏（`leftSidebarWidth`，200–600px）、右侧检视器（`rightInspectorWidth`，280–680px，宽屏自适应最高 50% 视口 / 1000px）、双栏分隔条（`splitRatio`，0.25–0.75）、输入框高度（46–520px）以及设置页左侧导航栏（176–300px）。 |
+| 高分辨率适配 | 主进程首次启动按主显示器工作区比例计算窗口尺寸；新增界面整体缩放偏好 `uiScale`（0.8–1.6，写入 Electron `zoomFactor` 并在 `did-finish-load` 保持），支持 `Ctrl+=` / `Ctrl+-` / `Ctrl+0` 与「设置 → 通用 → 界面缩放」调节；阅读列与宽检视器通过 `@container pane` / `@container insp` 自动展开列宽与标签。 |
+| 信息层级与 2/3 级菜单 | 检视器一级标签收拢为 5 项，`Diff / Files` 合并为 `Changes` 二级视图；输入框右下合并为 `Model + Effort` 二级菜单；侧栏底部收拢为账户弹出菜单（账号、设置、语言）；审批卡一级只保留命令、风险与用意，作用范围 / 转交原因 / AI 说明收入「详情」，选项说明悬停显现；单栏模式隐藏重复的窗格标题，移除顶栏重复审批角标。 |
+| 动效与即时反馈 | 新增生成中 `Esc` 中断回合、等待首分片计时与中断提示（`WorkingIndicator`）、输入框顶部流光条与停止按钮外圈旋转动效、三态轻提示（`info / success / error` 含倒计时条与关闭键）及全界面微交互与明暗对比精修。 |
+| 回归与打包 | 四组 TypeScript 类型检查（shared / main / renderer / tests）0 错误；32 个测试文件共 356 项自动化测试全部通过（1 项联机 smoke 跳过，含新增 `v015-layout-core.test.ts` 与 `v015-workbench.test.tsx`）；生产构建、`test:layout` Chromium 布局与动效接缝测试、以及 `test:desktop` 目录版 + 便携版双启动冒烟均通过。打包目录 96 个运行产物文件与 `dist/` 逐一校验一致。 |
+
 ## 本机 Windows 版 v0.1.4
 
 2026-11-18，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.4/Gravity.exe`，大小为 121,378,877 字节，SHA-256 为 `646EE1C32DBB9FE47503E865EE9B6ADB1346F26DD2E44797AB0931AA3F525176`。变更前的 0.1.3 源码和便携版已在 [GitHub 发布](https://github.com/Mikotou/G-Gravity/releases/tag/v0.1.3)。

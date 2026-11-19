@@ -64,6 +64,7 @@ describe('Request View 四种原生交互', () => {
 describe('App 主界面演示桥接交互（不等同真实服务）', () => {
   it('中英热切、主题六选及全局 Shift+Tab 四档Mode循环', async () => {
     await mount();
+    fireEvent.click(screen.getByTestId('account-menu-btn'));
     fireEvent.click(screen.getByTestId('locale-switch-en'));
     await waitFor(() => expect(document.documentElement.lang).toBe('en-US'));
     fireEvent.click(screen.getByTestId('locale-switch-zh'));

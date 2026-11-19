@@ -7,7 +7,7 @@
 export const APP_BRAND = {
   name: 'Gravity',
   productName: 'Gravity',
-  version: '0.1.4',
+  version: '0.1.5',
   descriptionZh: '基于官方 ACP 协议的本地智能编码工作台',
   descriptionEn: 'Local Agentic Coding Studio powered by Official ACP',
 } as const;
@@ -592,4 +592,16 @@ export interface ClientPreferences {
   activeProfileId: string;
   defaultWorkspaceCwd?: string;
   projects?: WorkspaceProjectConfig[];
+  /** 界面缩放倍率（高分辨率屏幕适配），由主进程写入窗口 zoomFactor，缺省 1 */
+  uiScale?: number;
+}
+
+/** 界面缩放的允许区间与步进。快捷键 Ctrl+= / Ctrl+- / Ctrl+0 与设置页共用。 */
+export const UI_SCALE_LIMITS = { min: 0.8, max: 1.6, step: 0.1, default: 1 } as const;
+
+/** 把缩放倍率对齐到 0.05 并限制在允许区间。非数字回到 1。 */
+export function clampUiScale(value: unknown): number {
+  const n = typeof value === 'number' && Number.isFinite(value) ? value : UI_SCALE_LIMITS.default;
+  const snapped = Math.round(n * 20) / 20;
+  return Math.min(UI_SCALE_LIMITS.max, Math.max(UI_SCALE_LIMITS.min, snapped));
 }

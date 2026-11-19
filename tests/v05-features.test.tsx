@@ -398,7 +398,7 @@ describe('v0.5 六项核心增强验收测试', () => {
     expect(editIntent.meaning).toContain('修改源码文件');
     expect(editIntent.meaning).toContain('resolveCompaction');
 
-    // 验证 InlineRequestView 在转交人工审理卡片上突出展示「代码用意」与「AI 代审说明」
+    // 验证 InlineRequestView 在转交人工审理卡片上一级展示代码用意，AI 代审说明收入「详情」
     const pendingReq: PendingApprovalRequest = {
       requestId: 'req-intent-1',
       sessionId: 'sess-1',
@@ -423,7 +423,7 @@ describe('v0.5 六项核心增强验收测试', () => {
     };
 
     render(wrapI18n(<InlineRequestView request={pendingReq} onSubmitDecision={async () => {}} />));
-    expect(screen.getByTestId('request-code-intent-req-intent-1').textContent).toContain('代码用意');
+    expect(screen.getByTestId('request-code-intent-req-intent-1').textContent).toContain('详情');
     expect(screen.getByTestId('request-code-intent-req-intent-1').textContent).toContain('直接执行内联脚本代码');
     expect(screen.getByTestId('request-ai-reason-req-intent-1').textContent).toContain(
       'AI 代审说明：该 Python 单行脚本会发起外部 HTTP 连接并查询 SQLite'

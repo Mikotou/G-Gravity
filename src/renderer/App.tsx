@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 import {
   APPROVAL_MODE_ORDER,
+  clampUiScale,
   DEFAULT_MODEL_RATE_CARDS,
   EXECUTION_MODE_ORDER,
   GRAVITY_BUILTIN_CAPABILITIES,
   MAX_PARALLEL_ACTIVE_SESSIONS, placeSession, workspaceSlots, withoutSession,
+  UI_SCALE_LIMITS,
   type AccountsStateSnapshot,
   type AcpConnectionStatus,
   type AgentExecutionMode,
@@ -57,6 +59,8 @@ import {
 } from './styles/theme';
 
 const SPLIT_CYCLE: readonly WorkspaceSplitMode[] = ['single', 'split-2'];
+
+type ToastTone = 'info' | 'success' | 'error';
 
 const ZERO_COST: TokenCostSummary = {
   inputTokens: 0,
@@ -185,19 +189,27 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   const [organizeOpen, setOrganizeOpen] = useState(false);
   const [organizeResult, setOrganizeResult] = useState<TitleOrganizeResult | null>(null);
   const [organizing, setOrganizing] = useState(false);
-  const [toast, setToast] = useState<string | null>(initialNotice || null);
+  const [toast, setToast] = useState<{ id: number; message: string; tone: ToastTone } | null>(
+    initialNotice ? { id: 0, message: initialNotice, tone: 'info' } : null
+  );
 
   const scrollMemoryRef = useRef<Record<string, number>>({});
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
+  const dismissToast = useCallback(() => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = setTimeout(() => setToast(null), 3600);
+    setToast(null);
+  }, []);
+
+  /** 统一的轻提示：错误停留更久，成功与信息提示短暂出现；同一时刻只保留最新一条。 */
+  const showToast = useCallback((msg: string, tone: ToastTone = 'info') => {
+    setToast((prev) => ({ id: (prev?.id ?? 0) + 1, message: msg, tone }));
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), tone === 'error' ? 5200 : 3200);
   }, []);
 
   const reportError = useCallback(
-    (err: unknown) => showToast(formatActionError(err, UI_DICTIONARIES[preferences.locale])),
+    (err: unknown) => showToast(formatActionError(err, UI_DICTIONARIES[preferences.locale]), 'error'),
     [preferences.locale, showToast]
   );
 
@@ -642,7 +654,8 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         showToast(
           preferences.locale === 'zh-CN'
             ? '已放行本次操作，并开启本会话 Approve for me 智能批量代审'
-            : 'Approved and enabled Approve for me smart batch review'
+            : 'Approved and enabled Approve for me smart batch review',
+          'success'
         );
       }
       setAuditEntries(await bridge.listApprovalAudit(50));
@@ -750,6 +763,8 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
   /* ---------------------------------------------------------------- 快捷键 */
   const overlayOpen = settingsSection !== null || newSessionOpen || organizeOpen;
+  const uiScaleRef = useRef(preferences.uiScale);
+  useEffect(() => { uiScaleRef.current = preferences.uiScale; }, [preferences.uiScale]);
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent): void {
       const mod = e.ctrlKey || e.metaKey;
@@ -757,6 +772,20 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       if (mod && key === ',') {
         e.preventDefault();
         setSettingsSection((prev) => (prev ? null : 'general'));
+        return;
+      }
+      // 界面缩放（高分屏适配）：Ctrl+= 放大，Ctrl+- 缩小，Ctrl+0 复原。设置页打开时同样可用。
+      if (mod && !e.altKey && (e.key === '=' || e.key === '+' || e.key === '-' || e.key === '_' || e.key === '0')) {
+        e.preventDefault();
+        const current = clampUiScale(uiScaleRef.current);
+        const next = e.key === '0' ? UI_SCALE_LIMITS.default
+          : clampUiScale(current + (e.key === '-' || e.key === '_' ? -UI_SCALE_LIMITS.step : UI_SCALE_LIMITS.step));
+        // 连续按键时以最近一次请求为基准，不必等上一次保存返回。
+        uiScaleRef.current = next;
+        if (next !== current || e.key === '0') {
+          void handleUpdatePreferences({ uiScale: next }).then(() =>
+            showToast(UI_DICTIONARIES[preferences.locale].ui.uiScaleToast(Math.round(next * 100))));
+        }
         return;
       }
       // 设置或弹窗打开时暂停后续工作台快捷键，防止一次按键同时作用于覆盖层和底层会话。
@@ -803,14 +832,18 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     focusedSessionId,
     handleSetApprovalMode,
     handleSetSessionMode,
+    handleUpdatePreferences,
     layout.activePrimarySessionId,
     layout.layoutMode,
     layout.leftSidebarCollapsed,
     layout.rightInspectorCollapsed,
     overlayOpen,
     patchLayout,
+    preferences.locale,
+    preferences.uiScale,
     reportError,
     sessions,
+    showToast,
   ]);
 
   const recentCwds = useMemo(
@@ -888,6 +921,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           onOpenPlugins={() => setSettingsSection('plugins')}
           onOpenSettings={() => setSettingsSection('themes')}
           onChangeLocale={handleChangeLocale}
+          onCommitWidth={(w) => void patchLayout({ leftSidebarWidth: w })}
         />
 
         <div className="main">
@@ -922,6 +956,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
               defaultThoughtTrack={preferences.defaultThoughtTrack}
               telemetryDashboard={telemetry}
               swarmBySession={swarmBySession}
+              onCommitSplitRatio={(r) => void patchLayout({ splitRatio: r })}
               scrollMemoryRef={scrollMemoryRef}
               canTriggerDemoApproval={!isUsingNativeDesktopBridge()}
               appIcon={preferences.appIcon}
@@ -1029,9 +1064,14 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         />
 
         {toast && (
-          <div className="toast" role="status" data-testid="app-toast">
-            <AlertCircle size={14} />
-            <span>{toast}</span>
+          <div key={toast.id} className={`toast tone-${toast.tone}`} role="status" data-testid="app-toast"
+            style={{ '--toast-life': toast.tone === 'error' ? '5200ms' : '3200ms' } as React.CSSProperties}>
+            {toast.tone === 'error' ? <AlertCircle size={15} /> : toast.tone === 'success' ? <CheckCircle2 size={15} /> : <Info size={15} />}
+            <span>{toast.message}</span>
+            <button type="button" className="icon-btn icon-btn-sm toast-close" onClick={dismissToast}
+              aria-label={UI_DICTIONARIES[preferences.locale].closeAction}>
+              <X size={12} />
+            </button>
           </div>
         )}
       </div>

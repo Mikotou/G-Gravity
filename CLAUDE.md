@@ -113,3 +113,17 @@ npm run build
 - **`src/renderer/components/TurnActivity.tsx`**：`ToolActivityStream`（工具流分组）、`TurnOutcomeBar`（回合结果条）、`PaneStatusChip`（窗格状态与实时计时）。
 - 后端仅新增 `ChatMessageItem.completedAt`（`CoreService.finishMessage` 写入），用于计算回合耗时；不涉及任何凭据、外部目录或审批链路。
 - 所有动效遵循 `prefers-reduced-motion`；`ToolCallCard` 折叠态必须保持**单一** `role="button"` 行（测试依赖）。
+
+---
+
+## 六、v0.1.5 可调整工作台（前端约定）
+
+- **拖拽调整**：`src/renderer/components/ResizeHandle.tsx` 是唯一的分隔条组件（鼠标拖动实时预览、释放提交一次、双击复位、方向键 / Home / End / Enter 键盘调整，`role="separator"`）。
+  - 左侧栏（`sidebar-resize-handle`）→ `layout.leftSidebarWidth`；右侧检视器（`inspector-resize-handle`，280–680px，宽屏最高可到窗口一半 / 1000px）→ `layout.rightInspectorWidth`；
+  - 双栏分隔条（`split-resize-handle`，挂在左栏右缘，保证 `workspace-grid` 只有两个子节点）→ `layout.splitRatio`；
+  - 输入框高度（`composer-resize-*`）只影响本机界面，存于 `localStorage['gravity.composer.minHeight']`。
+- **后端契约**：`WorkspaceLayoutState.splitRatio?`（0.25–0.75）与 `ClientPreferences.uiScale?`（0.8–1.6）。边界常量 `LAYOUT_LIMITS` / `UI_SCALE_LIMITS` 与钳制函数 `clampSplitRatio()` / `clampUiScale()` 位于 `src/shared/`，`CoreService` 保存时校验、启动时修复越界旧值；`uiScale` 通过 `CoreServiceOptions.setZoom` 写入窗口 `zoomFactor`（`did-finish-load` 时重新应用）。回归守卫：`tests/v015-layout-core.test.ts`、`tests/v015-workbench.test.tsx`。
+- **高分辨率**：首次窗口尺寸按主显示器可用区域取比例；`Ctrl+=` / `Ctrl+-` / `Ctrl+0` 或「设置 → 通用 → 界面缩放」调整整体缩放；阅读列随窗格宽度（`@container pane`）放宽到 940 / 1080 / 1200px；检视器在宽时显示全部页签文字（`@container insp`）。
+- **信息分级**：检视器一级页签为 Changes / Plan / Terminal / Context / Swarm，`diff` 与 `files` 是 Changes 下的二级视图（`inspector-subtab-diff` / `inspector-tab-files`）；模型与推理强度合并为输入框右下的二级菜单（`model-select-*` → `model-menu-*`）；账号、设置与语言收进侧栏底部账户菜单（`account-menu-btn` → `account-menu`）；审批卡一级只展示用意，作用范围 / 转交原因 / AI 说明收进「详情」。
+- **反馈**：生成中在输入框按 `Esc` 中断当前回合；等待首个分片时显示计时与中断提示（`WorkingIndicator`）；轻提示分 `info / success / error` 三种语气，带剩余时间条与关闭按钮。
+- 新增样式统一写在 `design-system.css` 末尾的「v0.1.5 工作台精修层」，复用 `--dur-*` / `--ease-*` / `--hairline*` 变量。

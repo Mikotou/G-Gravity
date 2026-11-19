@@ -210,9 +210,11 @@ async function checkActivitySeam(page) {
     await page.goto(pathToFileURL(path.join(dir, 'index.html')).href + '?keyboard-workspace');
     const welcome = page.getByTestId('empty-pane-0');
     await welcome.getByRole('heading').waitFor();
-    const inspectorHead = page.getByTestId('right-inspector').getByRole('tablist');
-    assert.equal(await inspectorHead.getByRole('tab').count(), 6);
+    // v0.1.5：一级页签 5 个（Diff 与 Files 合并为 Changes 下的二级视图），二级视图为 2 个页签。
+    const inspectorHead = page.getByTestId('right-inspector').locator('.inspector-head');
+    assert.equal(await inspectorHead.getByRole('tab').count(), 5);
     assert.equal(await inspectorHead.getByRole('button').count(), 0);
+    assert.equal(await page.getByTestId('right-inspector').locator('.inspector-subnav').getByRole('tab').count(), 2);
     await page.getByTestId('toggle-right-inspector-btn').press('Enter');
     await page.getByTestId('toggle-right-inspector-btn').press('Enter');
     assert.equal(await page.locator('[data-testid^="composer-input-"]').count(), 0);

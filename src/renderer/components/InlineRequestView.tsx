@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, FolderGit2, ShieldAlert, Sparkles } from 'lucide-react';
+import { AlertTriangle, ChevronRight, FolderGit2, ShieldAlert, Sparkles } from 'lucide-react';
 import {
   buildClaudeStyleApprovalOptions,
   getCanonicalToolName,
@@ -125,12 +125,11 @@ export function InlineRequestView({
       data-testid={`inline-request-view-${request.requestId}`}
     >
       <div className="request-head">
-        <ShieldAlert size={14} color="var(--status-warning)" />
-        <span className="request-title mono">⏺ {canonicalTool}</span>
+        <ShieldAlert size={14} className="request-head-icon" />
+        <span className="request-title mono">{canonicalTool}</span>
         <span className={riskBadgeClass} data-testid={`risk-badge-${request.requestId}`}>
           {dict.riskLevels[request.riskLevel]}
         </span>
-        <span className="badge">{screeningLabel}</span>
         <span className="spacer" />
         <span className="request-cwd-inline truncate" title={request.cwd}>
           <FolderGit2 size={11} />
@@ -143,42 +142,44 @@ export function InlineRequestView({
         <code>{request.commandOrSummary}</code>
       </div>
 
-      <div className="request-intent-box" data-testid={`request-explanation-${request.requestId}`}>
-        <div className="request-intent-row" data-testid={`request-code-intent-${request.requestId}`}>
-          <span className="request-intent-label">
-            {locale === 'zh-CN' ? '代码用意' : 'Code intent'}
-          </span>
+      {/* 一级只展示用意一句话；作用范围、转交原因、AI 说明等二级信息收进“详情”。 */}
+      <details className="request-intent-box" data-testid={`request-explanation-${request.requestId}`}>
+        <summary className="request-intent-row" data-testid={`request-code-intent-${request.requestId}`}>
           <span className="request-intent-main">{request.explanation.meaning}</span>
-        </div>
-        <div className="request-intent-subrow">
-          <span className="muted">
-            {dict.expTargetLabel}：{request.explanation.target}
+          {request.aiSuggestion?.reason && <Sparkles size={11} className="request-intent-ai" />}
+          {!prefixCandidate && <AlertTriangle size={11} className="request-intent-warn" />}
+          <span className="request-intent-more">
+            {dict.ui.detailsAction}
+            <ChevronRight size={12} className="request-intent-chev" />
           </span>
-          {request.explanation.risk && (
-            <span className="request-risk-inline">
-              · {locale === 'zh-CN' ? '转交原因' : 'Why manual'}：{request.explanation.risk}
-            </span>
+        </summary>
+        <div className="request-intent-detail">
+          <div className="request-intent-subrow">
+            <span className="muted">{dict.expTargetLabel}：{request.explanation.target}</span>
+            {request.explanation.risk && (
+              <span className="request-risk-inline">
+                {locale === 'zh-CN' ? '转交原因' : 'Why manual'}：{request.explanation.risk}
+              </span>
+            )}
+            <span className="muted">{screeningLabel}</span>
+          </div>
+          {request.aiSuggestion?.reason && (
+            <div className="request-ai-reason" data-testid={`request-ai-reason-${request.requestId}`}>
+              <Sparkles size={11} />
+              <span>
+                {locale === 'zh-CN' ? 'AI 代审说明：' : 'AI Review Note: '}
+                {request.aiSuggestion.reason}
+              </span>
+            </div>
+          )}
+          {!prefixCandidate && (
+            <div className="request-warn" data-testid={`prefix-disabled-reason-${request.requestId}`}>
+              <AlertTriangle size={12} />
+              <span>{dict.prefixUnavailableReason}</span>
+            </div>
           )}
         </div>
-        {request.aiSuggestion?.reason && (
-          <div
-            className="request-ai-reason"
-            data-testid={`request-ai-reason-${request.requestId}`}
-          >
-            <Sparkles size={11} />
-            <span>
-              {locale === 'zh-CN' ? 'AI 代审说明：' : 'AI Review Note: '}
-              {request.aiSuggestion.reason}
-            </span>
-          </div>
-        )}
-        {!prefixCandidate && (
-          <div className="request-warn" data-testid={`prefix-disabled-reason-${request.requestId}`}>
-            <AlertTriangle size={12} />
-            <span>{dict.prefixUnavailableReason}</span>
-          </div>
-        )}
-      </div>
+      </details>
 
       {actionError && (
         <div role="alert" className="alert" data-testid={`request-error-${request.requestId}`}>
