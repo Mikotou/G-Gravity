@@ -141,7 +141,14 @@ describe('v0.2.2 Approve for me 完整逻辑修复（无外部复核 + 有外部
     manualEngine.cancelSession('sess-overhaul');
     await manualPromise;
 
-    // SSRF 防护：指向本机或云元数据内网地址的 fetch/other 工具必须强制人工确认且禁止前缀放行
+    // SSRF 防护：指向本机或云元数据内网地址的 fetch/other 工具会带 hardHumanFloor=true 送外部模型评估，
+    // 但无论外部模型返回什么建议都必须强制人工确认且禁止前缀放行
+    reviewer.mockResolvedValueOnce({
+      recommended: 'approve',
+      riskLevel: 'safe',
+      reason: '模拟外部模型误判放行',
+      latencyMs: 15,
+    });
     const ssrfReq = makePerm({
       toolCallId: 'tc-ssrf',
       kind: 'fetch',
@@ -154,7 +161,9 @@ describe('v0.2.2 Approve for me 完整逻辑修复（无外部复核 + 有外部
     expect(ssrfCard.riskLevel).toBe('high');
     expect(ssrfCard.commandPrefix).toBeUndefined();
     expect(ssrfCard.explanation.risk).toContain('SSRF');
-    expect(reviewer).not.toHaveBeenCalled();
+    expect(reviewer).toHaveBeenCalledTimes(1);
+    expect(reviewer.mock.calls[0][3]).toMatchObject({ hardHumanFloor: true });
+    expect(ssrfCard.aiSuggestion?.recommended).toBe('ask');
     hybridWithAi.cancelSession('sess-overhaul');
     await ssrfPromise;
   });
@@ -251,7 +260,12 @@ describe('v0.2.2 Approve for me 完整逻辑修复（无外部复核 + 有外部
   });
 
   it('3) 破坏性/提权 MCP 工具与隐藏终端命令严禁走灰区自动放行或绕过人工确认', async () => {
-    const reviewer = vi.fn();
+    const reviewer = vi.fn().mockResolvedValue({
+      recommended: 'approve',
+      riskLevel: 'safe',
+      reason: '模拟外部模型误判放行',
+      latencyMs: 12,
+    });
     const { engine } = createEngine({ mode: 'hybrid', externalReviewer: enabledGeminiReviewer }, reviewer);
 
     const dangerousCases = [
@@ -265,10 +279,13 @@ describe('v0.2.2 Approve for me 完整逻辑修复（无外部复核 + 有外部
       const [card] = (await ev) as [PendingApprovalRequest];
       expect(card.riskLevel).toBe('high');
       expect(card.commandPrefix).toBeUndefined();
+      expect(card.aiSuggestion?.recommended).toBe('ask');
       engine.cancelSession('sess-overhaul');
       await p;
     }
-    expect(reviewer).not.toHaveBeenCalled();
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    expect(reviewer.mock.calls[0][3]).toMatchObject({ hardHumanFloor: true });
+    expect(reviewer.mock.calls[1][3]).toMatchObject({ hardHumanFloor: true });
   });
 
   it('4) 只读 PowerShell 分析脚本：无外部复核严保人工确认，开启外部复核后交由外部模型复审放行，危险脚本仍坚决拦截', async () => {

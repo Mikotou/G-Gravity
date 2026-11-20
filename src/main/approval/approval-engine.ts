@@ -14,6 +14,7 @@ import {
 import type { ExternalReviewerUsageRecordInput } from '../../shared/telemetry-contract';
 import { ClientStore } from '../storage/client-store';
 import {
+  assessShellHighRiskFloor,
   compileSafePattern,
   hasUnsafeNetworkOrLocalUrl,
   inspectGeminiPathPolicy,
@@ -22,6 +23,7 @@ import {
   isPureReadOnlyLookupTool,
   isReadOnlyScriptReviewCandidate,
   isShellToolName,
+  parseShellCommand,
   screenCommand,
   sensitiveTarget,
 } from './shell-screening';
@@ -58,6 +60,10 @@ interface Pending {
   params: AcpRequestPermissionParams;
   screen: DeterministicScreeningResult;
   withinWorkspace: boolean;
+  explicitAskRule: boolean;
+  hardHumanFloor: boolean;
+  hardHumanFloorReason?: string;
+  conversationContext?: string;
   resolve: (result: AcpRequestPermissionResult) => void;
   reject: (error: unknown) => void;
   started: number;
@@ -349,8 +355,17 @@ export class ApprovalEngine extends EventEmitter {
       .digest('hex');
   }
 
-  /** 调用者等待最终的 ACP 选项。界面显示的说明和风险由完整输入、候选路径及执行类型共同推导。 */
-  requestPermission(params: AcpRequestPermissionParams, cwd: string): Promise<AcpRequestPermissionResult> {
+  /**
+   * 仿 Codex Approve for me（Guardian）三段式审批入口：
+   * Stage 1（内部确定性规则：硬拒绝 / manual 直通 / askPatterns / 本地快筛自动通过）
+   * → Stage 2（未通过 Stage 1 的请求统一转交外部 AI 复核，附带脱敏对话意图上下文）
+   * → Stage 3（AI 未放行、异常超时、命中高危人工底线或未连接外部复核时，交由人工确认）。
+   */
+  requestPermission(
+    params: AcpRequestPermissionParams,
+    cwd: string,
+    conversationContext?: string
+  ): Promise<AcpRequestPermissionResult> {
     if (!params?.sessionId || !params.toolCall?.toolCallId || !Array.isArray(params.options)) {
       return Promise.resolve({ outcome: { outcome: 'cancelled' } });
     }
@@ -436,6 +451,10 @@ export class ApprovalEngine extends EventEmitter {
       !hasOutOfScopeLocations &&
       candidatePaths.every((p) => isPathWithinWorkspace(p, cwd));
 
+    const explicitAskRule = Boolean(screening.matchedRule && screening.verdict === 'force_ask');
+    let hardHumanFloor = false;
+    let hardHumanFloorReason: string | undefined;
+
     if (
       sensitiveTarget(rawSerialized) ||
       candidatePaths.some((p) => sensitiveTarget(p)) ||
@@ -464,14 +483,18 @@ export class ApprovalEngine extends EventEmitter {
       screening.riskLevel = 'high';
       screening.commandPrefix = undefined;
       screening.explanation.risk = '目标位于 .gemini 未分类子目录，转交人工核对确认不含凭据后再读取';
+      hardHumanFloor = true;
+      hardHumanFloorReason = screening.explanation.risk;
     } else if (geminiPolicy.tier === 'user_custom' && isMutatingToolOperation && screening.verdict !== 'deny') {
       screening.verdict = 'force_ask';
       screening.riskLevel = 'medium';
       screening.commandPrefix = undefined;
       screening.explanation.risk = '目标位于 .gemini 用户自定义规则/技能/插件目录，修改全局配置前请人工核对确认';
+      hardHumanFloor = true;
+      hardHumanFloorReason = screening.explanation.risk;
     } else if (screening.verdict !== 'deny') {
       if (isPureReadOrSearchTool) {
-        if (!screening.matchedRule || screening.verdict !== 'force_ask') {
+        if (!explicitAskRule) {
           screening.verdict = 'auto_approve';
           screening.riskLevel = 'safe';
           screening.commandPrefix = declaredKind === 'search' ? 'search' : 'read';
@@ -487,8 +510,10 @@ export class ApprovalEngine extends EventEmitter {
           screening.verdict = 'force_ask';
           screening.riskLevel = 'high';
           screening.commandPrefix = undefined;
-          screening.explanation.risk = '只读工具携带工作区外路径参数，已转交人工确认';
-        } else if (!screening.matchedRule || screening.verdict !== 'force_ask') {
+          screening.explanation.risk = '只读工具携带工作区外路径参数，必须人工确认';
+          hardHumanFloor = true;
+          hardHumanFloorReason = screening.explanation.risk;
+        } else if (!explicitAskRule) {
           screening.verdict = 'auto_approve';
           screening.riskLevel = 'safe';
           screening.commandPrefix = buildSafeToolPrefix(toolName, declaredKind, true);
@@ -503,7 +528,7 @@ export class ApprovalEngine extends EventEmitter {
           !candidatePaths.some((p) => /\.(?:exe|bat|cmd|ps1|vbs|vbe|wsf|wsh|msi|dll|sys|reg|sh|bash|zsh|command|pkg|dmg|app|dylib|plist)$/i.test(p));
         withinWorkspace = allWithinWorkspace;
 
-        if (allWithinWorkspace && (!screening.matchedRule || screening.verdict !== 'force_ask')) {
+        if (allWithinWorkspace && !explicitAskRule) {
           screening.verdict = 'grey_zone';
           screening.riskLevel = 'medium';
           const isWriteOp =
@@ -514,13 +539,17 @@ export class ApprovalEngine extends EventEmitter {
           screening.verdict = 'force_ask';
           screening.riskLevel = 'high';
           screening.commandPrefix = undefined;
-          screening.explanation.risk = '涉及跨工作区文件写入、可执行脚本或缺少明确路径，已解析代码用意并转交人工确认';
+          screening.explanation.risk = '涉及跨工作区文件写入、可执行脚本或缺少明确路径，必须人工确认';
+          hardHumanFloor = true;
+          hardHumanFloorReason = screening.explanation.risk;
         }
       } else if (isDeleteOrMoveTool) {
         screening.verdict = 'force_ask';
         screening.riskLevel = 'high';
         screening.commandPrefix = undefined;
         screening.explanation.risk = '涉及删除或移动文件/资源，必须人工确认';
+        hardHumanFloor = true;
+        hardHumanFloorReason = screening.explanation.risk;
       } else if (commandKind) {
         const explicitCommand =
           typeof raw === 'string' ||
@@ -552,22 +581,31 @@ export class ApprovalEngine extends EventEmitter {
           screening.verdict = 'force_ask';
           screening.riskLevel = 'high';
           screening.commandPrefix = undefined;
-          screening.explanation.risk = '终端命令包含附加文件参数或跨工作区目录，已转交人工确认';
-        } else if (
-          screening.verdict === 'force_ask' &&
-          !screening.matchedRule &&
-          this.config.mode === 'hybrid' &&
-          this.isExternalReviewerReady() &&
-          isReadOnlyScriptReviewCandidate(command)
-        ) {
-          // 已开启外部独立复核模型时，将非破坏、无重定向的纯只读 PowerShell 分析脚本交由外部模型复审
-          screening.verdict = 'grey_zone';
-          screening.riskLevel = 'medium';
-          screening.commandPrefix = undefined;
-          screening.explanation.risk = '只读 PowerShell 统计/分析脚本含变量或脚本块，已交由外部独立模型复核安全性';
+          screening.explanation.risk = '终端命令包含附加文件参数或跨工作区目录，必须人工确认';
+          hardHumanFloor = true;
+          hardHumanFloorReason = screening.explanation.risk;
+        } else {
+          const parsedCmd = parseShellCommand(command.slice(0, 32_768));
+          const floor = assessShellHighRiskFloor(command, parsedCmd);
+          if (floor.hardFloor) {
+            hardHumanFloor = true;
+            hardHumanFloorReason = floor.reason;
+          } else if (
+            screening.verdict === 'force_ask' &&
+            !explicitAskRule &&
+            this.config.mode === 'hybrid' &&
+            this.isExternalReviewerReady()
+          ) {
+            // 三段式 Codex Guardian：未命中 Stage 1 本地快筛且未触及高危底线的命令/只读脚本，统一转交 Stage 2 外部 AI 复核
+            screening.verdict = 'grey_zone';
+            screening.riskLevel = isReadOnlyScriptReviewCandidate(command) ? 'medium' : screening.riskLevel;
+            screening.explanation.risk = isReadOnlyScriptReviewCandidate(command)
+              ? '只读统计/分析脚本已转交外部 AI 复核代码用意与安全性'
+              : '未在内部规则直接通过，已转交外部 AI 复核代码用意与风险';
+          }
         }
       } else {
-        // 非 Shell 结构化扩展 / MCP / other / fetch 工具：区分高危/SSRF 与常规灰区，避免误标为高风险终端命令并打通外部复核
+        // 非 Shell 结构化扩展 / MCP / other / fetch 工具：区分高危/SSRF 与常规灰区
         const hasHiddenShellCmd = Boolean(
           rawObj &&
             (typeof rawObj.command === 'string' ||
@@ -579,18 +617,22 @@ export class ApprovalEngine extends EventEmitter {
           screening.riskLevel = 'high';
           screening.commandPrefix = undefined;
           screening.explanation.risk = '工具参数指向本机/内网地址或非安全协议（防 SSRF），必须人工确认';
+          hardHumanFloor = true;
+          hardHumanFloorReason = screening.explanation.risk;
         } else if (
           hasHiddenShellCmd ||
           isDestructiveOrPrivilegedToolName(toolName) ||
           hasOutOfScopeCwd ||
           hasOutOfScopeLocations ||
-          (screening.matchedRule && screening.verdict === 'force_ask')
+          explicitAskRule
         ) {
           screening.verdict = 'force_ask';
           screening.riskLevel = 'high';
           screening.commandPrefix = undefined;
-          if (!screening.matchedRule) {
+          if (!explicitAskRule) {
             screening.explanation.risk = '该扩展工具涉及破坏性、提权、隐藏终端命令或跨工作区操作，必须人工确认';
+            hardHumanFloor = true;
+            hardHumanFloorReason = screening.explanation.risk;
           }
         } else {
           screening.verdict = 'grey_zone';
@@ -626,12 +668,16 @@ export class ApprovalEngine extends EventEmitter {
         params,
         screen: screening,
         withinWorkspace,
+        explicitAskRule,
+        hardHumanFloor,
+        hardHumanFloorReason,
+        conversationContext,
         resolve: resolvePromise,
         reject: rejectPromise,
         started: this.now(),
         reviewing: false,
       };
-      // 先登记待审项，再开始可能立即完成的自动审批。人工选择、撤销和外部复审据此查找同一请求。
+      // 先登记待审项，再开始三段式自动审批流程。人工选择、撤销和外部复审据此查找同一请求。
       this.pending.set(card.requestId, item);
       void this.initialDecision(item).catch(() => {
         if (this.pending.has(card.requestId)) {
@@ -642,54 +688,78 @@ export class ApprovalEngine extends EventEmitter {
     });
   }
 
-  /** 先处理明确禁止的操作。其余请求依次检查记忆、规则和混合模式，仍未决的才发布到界面。 */
+  /**
+   * 仿 Codex Approve for me 三段式审查流水线：
+   * Stage 1（内部规则：硬拒绝 / manual 直通 / askPatterns / 本地快筛自动通过）
+   * → Stage 2（所有未通过 Stage 1 的操作转交外部 AI 复核）
+   * → Stage 3（AI 未放行、触及高危底线或未连接外部复核时交人工确认）。
+   */
   private async initialDecision(item: Pending): Promise<void> {
+    // ── Stage 1A: 绝对红线硬拒绝（0ms，绝不放行、绝不外发给第三方模型）──
     if (item.screen.verdict === 'deny') {
       this.finish(item, false, 'denied', 'local-rule', item.screen.explanation.risk);
       return;
     }
-    if (this.config.mode !== 'manual') {
-      if (item.screen.verdict !== 'force_ask') {
-        if ((this.cache.get(this.key(item)) || 0) > this.now()) {
-          this.finish(item, true, 'auto_approved', 'cache-hit', '命中同会话、工作区与完整工具参数缓存');
-          return;
-        }
-        if (
-          item.card.commandPrefix &&
-          this.prefixes.get(`${item.card.sessionId}\0${item.card.cwd}`)?.has(item.card.commandPrefix)
-        ) {
-          this.finish(item, true, 'auto_approved', 'session-prefix', '命中本会话经确认的命令前缀');
-          return;
-        }
-      }
-      if (item.screen.verdict === 'auto_approve') {
-        this.finish(item, true, 'auto_approved', 'local-rule', item.screen.explanation.risk);
-        if (this.config.mode === 'hybrid') {
-          this.recordGuardAutoApproval(item.card.sessionId, 'local-burst-guard', item.card.commandOrSummary);
-        }
+
+    // ── Stage 1B: 纯人工模式（除 1A 硬拒绝外全部直达 Stage 3）──
+    if (this.config.mode === 'manual') {
+      if (this.pending.has(item.card.requestId)) this.emit('requested', structuredClone(item.card));
+      return;
+    }
+
+    // ── Stage 1C: 用户显式「总是询问」规则（尊重用户强制拦截意愿，直达 Stage 3）──
+    if (item.explicitAskRule) {
+      if (this.pending.has(item.card.requestId)) this.emit('requested', structuredClone(item.card));
+      return;
+    }
+
+    // ── Stage 1D: 内部规则确定性快速通过（0ms，0 API 消耗）──
+    if (!item.hardHumanFloor && item.screen.verdict !== 'force_ask') {
+      if ((this.cache.get(this.key(item)) || 0) > this.now()) {
+        this.finish(item, true, 'auto_approved', 'cache-hit', '命中同会话、工作区与完整工具参数缓存');
         return;
       }
-      if (item.screen.verdict === 'grey_zone' && this.config.mode === 'hybrid') {
-        const execMode = this.sessionModes.get(item.card.sessionId) || 'default';
-        const isWorkspaceEdit = /^(?:edit_file|write_file)\s*\(/.test(item.card.commandPrefix || '');
-
-        if (this.isExternalReviewerReady()) {
-          // 会话显式选择 accept-edits / auto 时，已通过工作区范围与类型校验的源码编辑直接本地放行，不浪费外部复核延迟与额度
-          if (isWorkspaceEdit && (execMode === 'accept-edits' || execMode === 'auto')) {
-            const reason = `会话处于 ${execMode} 模式，已核验为当前工作区源码/文档编辑并自动放行`;
-            this.finish(item, true, 'auto_approved', 'local-rule', reason);
-            this.recordGuardAutoApproval(item.card.sessionId, 'local-burst-guard', item.card.commandOrSummary);
-            return;
-          }
-          if (await this.review(item)) {
-            return;
-          }
-        } else {
-          // 未连接外部复核模型时严禁伪装 AI 代审自动放行：仅执行最基础的规则通过机制，灰区统一转交人工确认
-          item.card.explanation.risk = '未连接外部复核模型，当前按基础规则模式转交人工确认；连接外部复核后方可开启 AI 代审';
-        }
+      if (
+        item.card.commandPrefix &&
+        this.prefixes.get(`${item.card.sessionId}\0${item.card.cwd}`)?.has(item.card.commandPrefix)
+      ) {
+        this.finish(item, true, 'auto_approved', 'session-prefix', '命中本会话经确认的命令前缀');
+        return;
       }
     }
+    if (item.screen.verdict === 'auto_approve') {
+      this.finish(item, true, 'auto_approved', 'local-rule', item.screen.explanation.risk);
+      if (this.config.mode === 'hybrid') {
+        this.recordGuardAutoApproval(item.card.sessionId, 'local-burst-guard', item.card.commandOrSummary);
+      }
+      return;
+    }
+    const execMode = this.sessionModes.get(item.card.sessionId) || 'default';
+    const isWorkspaceEdit = /^(?:edit_file|write_file)\s*\(/.test(item.card.commandPrefix || '');
+    if (isWorkspaceEdit && !item.hardHumanFloor && (execMode === 'accept-edits' || execMode === 'auto')) {
+      const reason = `会话处于 ${execMode} 模式，已核验为当前工作区源码/文档编辑并自动放行`;
+      this.finish(item, true, 'auto_approved', 'local-rule', reason);
+      if (this.config.mode === 'hybrid') {
+        this.recordGuardAutoApproval(item.card.sessionId, 'local-burst-guard', item.card.commandOrSummary);
+      }
+      return;
+    }
+
+    // ── Stage 2: 外部 AI 复核（所有未在 Stage 1 通过的请求，在 hybrid + 连通外部模型时统一送审）──
+    if (this.config.mode === 'hybrid') {
+      if (this.isExternalReviewerReady()) {
+        if (await this.review(item)) {
+          return;
+        }
+      } else {
+        // 未连接外部复核模型时严禁伪装 AI 代审自动放行：保留原始风险说明，附加基础规则回退提示
+        const baseRisk = item.card.explanation.risk?.trim();
+        const suffix = '未连接外部复核模型，当前按基础规则模式转交人工确认；连接外部复核后方可开启 AI 代审';
+        item.card.explanation.risk = baseRisk ? `${baseRisk}（${suffix}）` : suffix;
+      }
+    }
+
+    // ── Stage 3: 人工内联确认（Stage 1 未通过且 Stage 2 未放行 / 触及高危底线 / 规则模式）──
     if (this.pending.has(item.card.requestId)) this.emit('requested', structuredClone(item.card));
   }
 
@@ -698,8 +768,8 @@ export class ApprovalEngine extends EventEmitter {
     if (
       !this.isExternalReviewerReady() ||
       this.config.mode !== 'hybrid' ||
-      item.screen.verdict === 'force_ask' ||
-      item.screen.verdict === 'deny'
+      item.screen.verdict === 'deny' ||
+      item.explicitAskRule
     ) {
       item.card.explanation.risk = '未启用独立 AI 复核，或此操作必须人工确认';
       return false;
@@ -720,7 +790,10 @@ export class ApprovalEngine extends EventEmitter {
           executionMode: this.sessionModes.get(item.card.sessionId) || 'default',
           intentSummary: item.card.explanation.meaning,
           localRiskLevel: item.screen.riskLevel,
+          localRiskReason: item.hardHumanFloorReason || item.screen.explanation.risk,
           withinWorkspace: item.withinWorkspace,
+          conversationContext: item.conversationContext,
+          hardHumanFloor: item.hardHumanFloor,
         }),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error(`复核超时（超过 ${timeout}ms）`)), timeout);
@@ -745,18 +818,53 @@ export class ApprovalEngine extends EventEmitter {
         item.card.explanation.risk = '审批配置已变更，请按当前规则人工确认';
         return false;
       }
+
+      item.card.screeningSource = 'ai-reviewer-fallback';
+
+      // 防御纵深：触及本地高危底线（管道注入、提权、递归删除、SSRF、越区写删等）时，
+      // 外部 AI 仅提供风险评估建议，绝不允许静默自动放行，必须落到 Stage 3 由人工最终确认。
+      if (review.recommended === 'approve' && ['safe', 'low'].includes(review.riskLevel)) {
+        if (!item.hardHumanFloor) {
+          item.card.aiSuggestion = {
+            ...review,
+            model: reviewerConfig.model,
+            isError: false,
+          };
+          this.recordGuardAutoApproval(item.card.sessionId, 'external-ai', item.card.commandOrSummary);
+          this.finish(item, true, 'ai_approved', 'external-ai', review.reason);
+          return true;
+        }
+        const floorMsg = item.hardHumanFloorReason || '命中本地高危安全底线，此类操作必须人工确认';
+        item.card.aiSuggestion = {
+          ...review,
+          recommended: 'ask',
+          reason: `${floorMsg}（外部 AI 评估：${review.reason}）`,
+          model: reviewerConfig.model,
+          isError: false,
+        };
+        item.card.explanation.risk = floorMsg;
+        return false;
+      }
+
       item.card.aiSuggestion = {
         ...review,
         model: reviewerConfig.model,
         isError: false,
       };
-      item.card.screeningSource = 'ai-reviewer-fallback';
-      if (review.recommended === 'approve' && ['safe', 'low'].includes(review.riskLevel)) {
-        this.recordGuardAutoApproval(item.card.sessionId, 'external-ai', item.card.commandOrSummary);
-        this.finish(item, true, 'ai_approved', 'external-ai', review.reason);
-        return true;
+      // 若外部 AI 判定了更高风险，同步抬高卡片风险徽标以便人工重点关注
+      const riskOrder: Record<PendingApprovalRequest['riskLevel'], number> = {
+        safe: 0,
+        low: 1,
+        medium: 2,
+        high: 3,
+        critical: 4,
+      };
+      if (riskOrder[review.riskLevel] > riskOrder[item.card.riskLevel]) {
+        item.card.riskLevel = review.riskLevel;
       }
-      item.card.explanation.risk = review.reason;
+      item.card.explanation.risk = item.hardHumanFloor && item.hardHumanFloorReason
+        ? item.hardHumanFloorReason
+        : review.reason;
       return false;
     } catch (error) {
       const elapsedMs = Math.max(0, this.now() - start);
@@ -808,7 +916,7 @@ export class ApprovalEngine extends EventEmitter {
         throw new Error('该操作涉及敏感凭据或受保护状态，禁止放行');
       }
       const reviewerReady = this.isExternalReviewerReady();
-      if (item.card.commandPrefix && item.screen.verdict !== 'force_ask') {
+      if (item.card.commandPrefix && !item.hardHumanFloor && item.screen.verdict !== 'force_ask') {
         const prefixKey = `${item.card.sessionId}\0${item.card.cwd}`;
         const prefixes = this.prefixes.get(prefixKey) || new Set<string>();
         prefixes.add(item.card.commandPrefix);
@@ -816,14 +924,14 @@ export class ApprovalEngine extends EventEmitter {
       }
 
       if (reviewerReady) {
-        // 已正常连接外部复核：切至 hybrid（AI 代审）并对灰区尝试由独立模型给出审计结论
+        // 已正常连接外部复核：切至 hybrid（AI 代审）并对当前未触及询问规则的请求重新提交外部 AI 复核
         this.enableSessionDelegation(item.card.sessionId, item.card.cwd);
         if (this.config.mode !== 'hybrid') {
           this.config = { ...this.config, mode: 'hybrid' };
           this.configRevision++;
           this.emit('config-updated', this.getConfig());
         }
-        if (item.screen.verdict === 'grey_zone') {
+        if (!item.explicitAskRule && !item.hardHumanFloor) {
           if (await this.review(item)) {
             return;
           }

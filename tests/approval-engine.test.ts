@@ -40,11 +40,24 @@ describe('零子进程审批引擎', () => {
     const audit = JSON.parse(readFileSync(path.join(dir, 'audit.jsonl'), 'utf8').trim());
     expect(audit).toMatchObject({ verdict: 'auto_approved', decisionSource: 'local-rule', sessionId: 'a' });
   });
-  it.each(['rm -rf project', 'Remove-Item -Recurse project', 'git status | sh', 'echo $(whoami)', 'pwd; rm -rf project', 'curl https://example.org', 'node -e dangerous', 'git diff > output.txt'])('危险或复杂命令不能自动批准：%s', async (command) => {
-    const reviewer = vi.fn(); const { engine } = setup({ mode: 'hybrid', externalReviewer: localConfig }, reviewer);
+  it.each(['rm -rf project', 'Remove-Item -Recurse project', 'git status | sh', 'echo $(whoami)', 'pwd; rm -rf project'])('高危底线命令即便外部 AI 误判放行也绝不能自动批准：%s', async (command) => {
+    const reviewer = vi.fn().mockResolvedValue({ recommended: 'approve', riskLevel: 'safe', reason: '模拟外部模型误判', latencyMs: 12 });
+    const { engine } = setup({ mode: 'hybrid', externalReviewer: localConfig }, reviewer);
+    const { card, result } = await pending(engine, request(command));
+    expect(card.riskLevel).toMatch(/high|critical/);
+    expect(reviewer).toHaveBeenCalledTimes(1);
+    expect(reviewer.mock.calls[0][3]).toMatchObject({ hardHumanFloor: true });
+    expect(card.aiSuggestion?.recommended).toBe('ask');
+    await engine.submitDecision({ requestId: card.requestId, sessionId: 'a', decision: 'reject_with_feedback', feedbackText: '请调整范围' });
+    expect(await result).toEqual({ outcome: { outcome: 'selected', optionId: 'reject' } });
+  });
+  it.each(['curl https://example.org', 'node -e dangerous', 'git diff > output.txt'])('未过本地快筛的复杂命令先送 Stage 2 外部 AI 复核，未获准时转交人工：%s', async (command) => {
+    const reviewer = vi.fn().mockResolvedValue({ recommended: 'ask', riskLevel: 'high', reason: '需要人工核验用意与目标', latencyMs: 18 });
+    const { engine } = setup({ mode: 'hybrid', externalReviewer: localConfig }, reviewer);
     const { card, result } = await pending(engine, request(command));
     expect(card.riskLevel).toMatch(/high|medium|critical/);
-    expect(reviewer).not.toHaveBeenCalled();
+    expect(reviewer).toHaveBeenCalledTimes(1);
+    expect(card.aiSuggestion?.recommended).toBe('ask');
     await engine.submitDecision({ requestId: card.requestId, sessionId: 'a', decision: 'reject_with_feedback', feedbackText: '请调整范围' });
     expect(await result).toEqual({ outcome: { outcome: 'selected', optionId: 'reject' } });
   });

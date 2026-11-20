@@ -232,7 +232,8 @@ export function sensitiveTarget(value: string): boolean {
   const normalized = value.replace(/\\\\/g, '/').replace(/\\ /g, ' ').replace(/\\/g, '/');
   if (
     /(?:^|[\/\s"'])(?:\.ssh|\.aws|\.azure|\.gnupg)(?:[\/\s"']|$)/i.test(normalized) ||
-    /(?:oauth|refresh[_-]?token|access[_-]?token|id[_-]?token|installation_id|state\.vscdb|\.pbtxt|credentials|cookies?|\.env(?:\.[a-z0-9_-]+)?|id_rsa|id_ed25519|google_accounts\.json|application_default_credentials\.json|user_settings\.pb|antigravity_auth|auth_state)(?:\b|[\/])/i.test(
+    /(?:^|[\/\s"'=:,])\.env(?:\.[a-z0-9_-]+)?(?=$|[\/\s"'`,;:])/i.test(normalized) ||
+    /(?:oauth|refresh[_-]?token|access[_-]?token|id[_-]?token|installation_id|state\.vscdb|\.pbtxt|credentials|cookies?|id_rsa|id_ed25519|google_accounts\.json|application_default_credentials\.json|user_settings\.pb|antigravity_auth|auth_state)(?:\b|[\/])/i.test(
       normalized
     )
   ) {
@@ -827,12 +828,21 @@ export function describeOperationIntent(
       stepDescriptions.push(`${prefixGuard}${recursive ? '递归强制删除' : '删除'}本地文件或目录（${clean.slice(0, 72)}）`);
     } else if (/^(?:curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm)\b/i.test(clean)) {
       stepDescriptions.push(`${prefixGuard}向外部服务发起 HTTP 网络请求获取或提交数据（${clean.slice(0, 72)}）`);
-    } else if (/^(?:node|python|python3)\s+-(?:e|c)\b/i.test(clean)) {
+    } else if (/^(?:node|python|python3|py)\s+(?:-e|--eval|-c)\b/i.test(clean)) {
       const capabilities: string[] = [];
-      if (/\bfs\b|open\(|writeFile|unlink|rmSync/i.test(clean)) capabilities.push('读写本地文件');
+      const hasFileWriteOrDelete =
+        /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|createWriteStream|unlink(?:Sync)?|rmSync|rmdir(?:Sync)?|rename(?:Sync)?|truncate(?:Sync)?|copyFile(?:Sync)?|cpSync|mkdir(?:Sync)?|shutil\.(?:rmtree|move|copy)|os\.(?:remove|unlink|rmdir|rename|replace)|\.write_text\b|\.write_bytes\b)\b|open\s*\([^)]*,\s*['"][^'"]*[wax+]/i.test(
+          clean
+        );
+      const hasFileRead =
+        /\b(?:readFile(?:Sync)?|readdir(?:Sync)?|stat(?:Sync)?|existsSync|createReadStream|pathlib|\bfs\b)\b|\bopen\s*\(/i.test(
+          clean
+        );
+      if (hasFileWriteOrDelete) capabilities.push('写入/删除本地文件');
+      else if (hasFileRead) capabilities.push('只读本地文件');
       if (/sqlite|DatabaseSync/i.test(clean)) capabilities.push('访问 SQLite 数据库');
-      if (/child_process|spawn|exec|subprocess/i.test(clean)) capabilities.push('拉起外部子进程');
-      if (/fetch|http|urllib|requests/i.test(clean)) capabilities.push('发起网络请求');
+      if (/child_process|spawn|execSync|execFile|subprocess|os\.system|os\.popen/i.test(clean)) capabilities.push('拉起外部子进程');
+      if (/\bfetch\s*\(|\b(?:https?|urllib|requests|httpx|socket)\b/i.test(clean)) capabilities.push('发起网络请求');
       const capStr = capabilities.length ? `（脚本内含：${capabilities.join('、')}）` : '';
       stepDescriptions.push(`${prefixGuard}直接执行内联脚本代码${capStr}`);
     } else if (/^(?:node|python|python3|ts-node|tsx)\s+\S+/i.test(clean)) {
@@ -854,7 +864,10 @@ export function describeOperationIntent(
     stepDescriptions.push(`等共 ${parts.length} 步串联操作`);
   }
 
-  const redirectNote = /[12]?>+/.test(command) && !/\$LASTEXITCODE\s*-eq/.test(command) ? '（含输出重定向写入）' : '';
+  // 剥离引号内字面量后再检测真实 Shell 重定向，避免把 JS 箭头函数 `=>` 或比较符 `> 1000` 误判为重定向写入
+  const unquotedForRedirect = command.replace(/'[^']*'/g, "''").replace(/"(?:\\.|[^"\\])*"/g, '""');
+  const hasRealRedirect = /(?:^|[^-=!<>])(?:[12*&]?)>{1,2}(?!\s*&)/.test(unquotedForRedirect);
+  const redirectNote = hasRealRedirect && !/\$LASTEXITCODE\s*-eq/.test(command) ? '（含输出重定向写入）' : '';
   const pipeNote = parts.length > 1 && command.includes('|') ? '（管道传递处理）' : '';
   const summaryPrefix = declaredSummary ? `【任务目标：${declaredSummary}】` : '';
   const meaning =
@@ -914,14 +927,53 @@ const PWSH_READ_ONLY_ANALYSIS_CMDLET_RE =
 const DANGEROUS_SCRIPT_API_RE =
   /\b(?:invoke-expression|iex|invoke-webrequest|iwr|invoke-restmethod|irm|invoke-command|icm|start-process|saps|remove-item|set-content|add-content|out-file|new-item|move-item|copy-item|clear-content|stop-process|set-acl|set-executionpolicy|add-type|register-scheduledtask|start-bitstransfer|downloadstring|downloadfile|webclient|httpclient|net\.sockets|process\]::start|file\]::write|file\]::delete|file\]::move|file\]::copy|directory\]::delete)\b/i;
 
+const DANGEROUS_INLINE_INTERPRETER_API_RE =
+  /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|createWriteStream|unlink(?:Sync)?|rmSync|rmdir(?:Sync)?|rename(?:Sync)?|truncate(?:Sync)?|copyFile(?:Sync)?|cpSync|mkdir(?:Sync)?|chmod(?:Sync)?|chown(?:Sync)?|child_process|execSync|execFile(?:Sync)?|spawn(?:Sync)?|fork\s*\(|subprocess|os\.(?:system|popen|exec\w*|spawn\w*|remove|unlink|rmdir|rename|replace|chmod|chown|environ)|shutil\.(?:rmtree|move|copy\w*)|\.write_text\b|\.write_bytes\b|process\.env|process\.kill|\beval\s*\(|\bnew\s+Function\b|\bvm\.|\bexec\s*\(|__import__|ctypes|pickle\.loads|\bfetch\s*\(|\b(?:require\s*\(\s*['"](?:https?|net|tls|dgram|dns|child_process|vm)['"]\s*\))|\bimport\s+(?:urllib|requests|httpx|http\.client|socket|ftplib|smtplib|subprocess|ctypes)\b|\bfrom\s+(?:urllib|requests|httpx|http|socket|subprocess)\b|WebSocket|XMLHttpRequest|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|DROP\s+TABLE|ALTER\s+TABLE|VACUUM)\b|open\s*\([^)]*,\s*['"][^'"]*[wax+]/i;
+
+const CATASTROPHIC_SYSTEM_WIPE_RE =
+  /(?:^|[\s;|&(])(?:format-volume|diskpart|bcdedit|mkfs(?:\.[a-z0-9]+)?|shutdown|reboot|restart-computer|stop-computer)\b|(?:^|[\s;|&(])rm\s+(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|--recursive\s+--force|--force\s+--recursive)\s+(?:\/(?:\s|$|\*)|~(?:\/|\s|$)|C:\\(?:Windows|Users)?(?:\s|$|"|'))|(?:^|[\s;|&(])dd\s+[^\r\n]*\bof=\/dev\/(?:sd|nvme|disk|hd)/i;
+
+/** 检测极端不可逆的系统级毁灭命令（Stage 1A 硬拒绝，不送审也不执行）。 */
+export function isCatastrophicSystemCommand(command: string): boolean {
+  if (!command) return false;
+  return CATASTROPHIC_SYSTEM_WIPE_RE.test(command);
+}
+
 /**
- * 判断一段包含 PowerShell 变量/脚本块的命令是否属于「纯只读内存分析脚本候选」，
- * 仅在用户显式启用了外部 AI 复核模型且处于 `hybrid` 模式时允许送交外部模型复审；
- * 严格排除一切写入、重定向、反引号、POSIX 命令替换 `$(cmd)`、高危可执行命令、目录穿越与敏感目标。
+ * 判断一段内联 `node -e` / `python -c` 脚本是否属于纯只读统计/分析脚本（零写入、零删除、零子进程、零网络、零环境变量读取）。
+ */
+export function isReadOnlyInlineInterpreterScript(command: string): boolean {
+  if (!command || !command.trim() || command.length > 32_768) return false;
+  if (isMutatingShellCommand(command) || sensitiveTarget(command)) return false;
+
+  const trimmed = command.trim();
+  // 允许前面仅带 `cd <dir> &&` 或 `Set-Location <dir> ;`，主体为单个 node -e / python -c 调用
+  const unwrapped = trimmed.replace(
+    /^(?:(?:cd|set-location|sl)\s+(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;&|]+)\s*(?:&&|;)\s*)+/i,
+    ''
+  );
+  if (!/^(?:node|python|python3|py)(?:\.exe)?\s+(?:-e|--eval|-c)\s+/i.test(unwrapped)) {
+    return false;
+  }
+
+  const unquoted = unwrapped.replace(/'[^']*'/g, "''").replace(/"(?:\\.|[^"\\])*"/g, '""');
+  // 排除命令串接、管道、真实重定向、反引号、POSIX 命令替换与路径穿越
+  if (/[|;&`]|(?:^|[^-=!<>])(?:[12*&]?)>{1,2}(?!\s*&)|(?:^|[^-=!<>])<(?![=<])|\$\(/.test(unquoted)) {
+    return false;
+  }
+  if (/(?:^|[\\/\s"'])\.\.(?:[\\/\s"']|$)|hk(?:lm|cu|cr|u|cc):/i.test(command)) return false;
+  if (DANGEROUS_INLINE_INTERPRETER_API_RE.test(unwrapped)) return false;
+  return true;
+}
+
+/**
+ * 判断一段脚本命令是否属于「纯只读内存分析脚本候选」（覆盖 PowerShell 分析脚本及 `node -e` / `python -c` 只读脚本）：
+ * 严格排除一切写入、重定向、反引号、POSIX 命令替换 `$(cmd)`、高危 API、目录穿越与敏感目标。
  */
 export function isReadOnlyScriptReviewCandidate(command: string): boolean {
-  if (!command || !command.trim() || command.length > 16_384) return false;
+  if (!command || !command.trim() || command.length > 32_768) return false;
   if (isMutatingShellCommand(command) || sensitiveTarget(command)) return false;
+  if (isReadOnlyInlineInterpreterScript(command)) return true;
 
   const unquoted = command.replace(/'[^']*'/g, "''").replace(/"(?:\\.|[^"\\])*"/g, '""');
   // 排除反引号、文件输入/输出重定向、PowerShell `&` 动态调用运算符、跨级 `..` 及注册表驱动器
@@ -949,6 +1001,107 @@ export function isReadOnlyScriptReviewCandidate(command: string): boolean {
   }
 
   return true;
+}
+
+const PRIVILEGE_OR_SYSTEM_EXECS = new Set([
+  'sudo', 'su', 'runas', 'gsudo', 'chmod', 'chown', 'chflags', 'icacls', 'takeown',
+  'set-acl', 'set-executionpolicy', 'reg', 'regedit', 'launchctl', 'format', 'mkfs',
+  'diskpart', 'bcdedit', 'mountvol', 'shutdown', 'reboot', 'restart-computer', 'stop-computer',
+]);
+
+const PIPE_INJECTION_SINKS = new Set([
+  'sh', 'bash', 'zsh', 'cmd', 'powershell', 'pwsh', 'iex', 'invoke-expression',
+  'node', 'python', 'python3', 'py', 'perl', 'ruby', 'php', 'xargs', 'eval',
+]);
+
+/**
+ * 评估一条 Shell 命令是否触及「不可由外部 AI 静默放行的本地安全底线（Hard Human Floor）」：
+ * - 在 Codex 风格三段审批中，这类命令在 Stage 2 仍会送交外部 AI 获取风险分析与中文建议，
+ *   但即便外部模型误判 approve，也严禁自动放行，必须进入 Stage 3 由人工最终确认。
+ */
+export function assessShellHighRiskFloor(
+  command: string,
+  parsed: ShellAnalysis
+): { hardFloor: boolean; reason?: string } {
+  if (!command || !command.trim() || command.length > 32_768 || parsed.malformed) {
+    return { hardFloor: true, reason: '命令为空、超长或引号未闭合，必须由人工核对完整代码' };
+  }
+
+  const unquoted = command.replace(/'[^']*'/g, "''").replace(/"(?:\\.|[^"\\])*"/g, '""');
+
+  // 1. 跨级路径穿越或系统注册表路径
+  if (/(?:^|[\\/\s"'])\.\.(?:[\\/\s"']|$)|hk(?:lm|cu|cr|u|cc):/i.test(command)) {
+    return { hardFloor: true, reason: '包含跨级相对路径 `..` 或系统注册表路径，必须人工确认' };
+  }
+
+  // 2. 反引号或 POSIX 命令替换 `$(cmd)`（放过纯 PowerShell 变量插值 `$($var...)`）
+  if (/`/.test(unquoted)) {
+    return { hardFloor: true, reason: '包含反引号动态命令替换，必须人工确认' };
+  }
+  for (const m of unquoted.matchAll(/\$\(/g)) {
+    const after = unquoted.slice((m.index || 0) + 2).trimStart();
+    if (!after.startsWith('$')) {
+      return { hardFloor: true, reason: '包含动态命令替换 `$(...)`，必须人工确认' };
+    }
+  }
+
+  // 3. 逐段检查管道注入解释器、提权、递归/强制删除、危险 Git 重写、内网 SSRF
+  const segTokens = parsed.segmentTokens || [];
+  for (let idx = 0; idx < segTokens.length; idx++) {
+    const toks = segTokens[idx];
+    if (!toks.length) continue;
+    const exec = toks[0].toLowerCase().replace(/\.exe$/i, '');
+    const args = toks.slice(1);
+    const isPipeSink = idx > 0 && parsed.operators?.[idx - 1] === '|';
+
+    if (isPipeSink && PIPE_INJECTION_SINKS.has(exec)) {
+      return { hardFloor: true, reason: `管道下游直接接入解释器或 Shell（${exec}），必须人工确认` };
+    }
+    if (PRIVILEGE_OR_SYSTEM_EXECS.has(exec)) {
+      return { hardFloor: true, reason: `涉及提权或系统安全配置变更（${exec}），必须人工确认` };
+    }
+    if (/^(?:iex|invoke-expression|mshta|rundll32|certutil|bitsadmin)$/i.test(exec)) {
+      return { hardFloor: true, reason: `涉及动态代码求值或系统下载执行器（${exec}），必须人工确认` };
+    }
+    if (/^(?:rm|remove-item|ri|del|erase|rmdir|rd|shred)$/i.test(exec)) {
+      const recursiveOrForce = args.some((a) => /^-(?:[a-z]*[rf][a-z]*|recurse|force)$|^\/[sqf]$/i.test(a));
+      if (recursiveOrForce || exec === 'shred') {
+        return { hardFloor: true, reason: `涉及递归或强制删除本地文件/目录（${exec}），必须人工确认` };
+      }
+    }
+    if (exec === 'git') {
+      const sub = (args[0] || '').toLowerCase();
+      if (
+        /^(?:push|reset|clean|filter-branch)$/.test(sub) &&
+        args.some((a) => /^(?:--force|-f|--hard|--force-with-lease|-D|-fd|-df|-fdx)$/.test(a))
+      ) {
+        return { hardFloor: true, reason: '涉及 Git 强制推送、历史硬重置或强制清理，必须人工确认' };
+      }
+    }
+    if (/^(?:curl|wget|invoke-webrequest|invoke-restmethod|iwr|irm)$/i.test(exec)) {
+      if (/(?:169\.254\.169\.254|127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\]|file:\/\/)/i.test(command)) {
+        return { hardFloor: true, reason: '网络请求指向本机或云元数据内网地址（防 SSRF），必须人工确认' };
+      }
+    }
+  }
+
+  // 4. 内联脚本（node -e / python -c）若包含文件写删、子进程、环境变量或网络外发 API，则不可静默放行
+  if (
+    /^(?:(?:cd|set-location|sl)\s+(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;&|]+)\s*(?:&&|;)\s*)*(?:node|python|python3|py)(?:\.exe)?\s+(?:-e|--eval|-c)\b/i.test(
+      command.trim()
+    )
+  ) {
+    if (DANGEROUS_INLINE_INTERPRETER_API_RE.test(command)) {
+      return { hardFloor: true, reason: '内联脚本包含文件写入/删除、子进程、网络请求或环境变量访问，必须人工确认' };
+    }
+  }
+
+  // 5. PowerShell 危险执行 / 写删 / 下载 API
+  if (DANGEROUS_SCRIPT_API_RE.test(unquoted)) {
+    return { hardFloor: true, reason: '脚本包含高危系统/写入/网络执行 API，必须人工确认' };
+  }
+
+  return { hardFloor: false };
 }
 
 /** 对一个已分词的片段判定风险。输入是否来自管道会影响允许的类型，结论与可记忆前缀一并返回。 */
@@ -1155,15 +1308,24 @@ export function screenCommand(
   const geminiPolicy = inspectGeminiPathPolicy(sliced, (parsed.segmentTokens || []).flat(), cwd);
   const mutatingShell = isMutatingShellCommand(sliced);
 
-  if (sensitiveTarget(sliced) || sensitiveTarget(cwd) || anyTokenSensitive || geminiPolicy.tier === 'forbidden' || deny) {
+  if (
+    sensitiveTarget(sliced) ||
+    sensitiveTarget(cwd) ||
+    anyTokenSensitive ||
+    geminiPolicy.tier === 'forbidden' ||
+    isCatastrophicSystemCommand(sliced) ||
+    deny
+  ) {
     result.verdict = 'deny';
     result.riskLevel = 'critical';
     result.matchedRule = deny;
     result.explanation.risk = deny
       ? '命中用户拒绝规则'
-      : geminiPolicy.tier === 'forbidden' && geminiPolicy.reason
-        ? geminiPolicy.reason
-        : '涉及凭据、密钥或私有认证状态，客户端拒绝自动授权';
+      : isCatastrophicSystemCommand(sliced)
+        ? '命中系统级不可逆毁灭操作红线（格式化/清盘/根目录递归删除/关机），客户端硬性拒绝'
+        : geminiPolicy.tier === 'forbidden' && geminiPolicy.reason
+          ? geminiPolicy.reason
+          : '涉及凭据、密钥或私有认证状态，客户端拒绝自动授权';
     return finish();
   }
 

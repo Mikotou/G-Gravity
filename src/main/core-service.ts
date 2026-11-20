@@ -135,6 +135,19 @@ function sanitizeStoredApprovalConfig(raw: unknown, restoredApiKey?: string): Ap
   return base;
 }
 
+/** 脱敏将发往外部 AI 复核模型的会话上下文，防止用户消息里的 API Key / Token / 私钥外泄。 */
+export function redactSecretsForReviewer(raw: string): string {
+  return raw
+    .replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]')
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[REDACTED_API_KEY]')
+    .replace(/\bsk-(?:proj-|ant-|live-|test-)?[0-9A-Za-z_-]{16,}\b/g, '[REDACTED_API_KEY]')
+    .replace(/\b(?:gh[pousr]_[0-9A-Za-z_]{20,}|github_pat_[0-9A-Za-z_]{20,})\b/g, '[REDACTED_TOKEN]')
+    .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY]')
+    .replace(/\bxox[baprs]-[0-9A-Za-z-]{12,}\b/g, '[REDACTED_TOKEN]')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi, '$1 [REDACTED]')
+    .replace(/(\b(?:api[_-]?key|secret|token|password|passwd|pwd|access[_-]?key|client[_-]?secret|refresh[_-]?token)\s*[:=]\s*["']?)([^\s"'`,;]{6,})(["']?)/gi, '$1[REDACTED]$3');
+}
+
 export const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'gravity-claude-dark', defaultThoughtTrack: 'zh', translationEngine: 'local', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [], autoCheckUpdates: true };
 export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context', splitRatio: 0.5 };
 export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; modelDiscoveryFetcher?: typeof fetch; secretCipher?: SecretCipher; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; now?: () => number; appVersion?: string; enableAutoUpdateCheck?: boolean; updaterOptions?: Partial<GitHubUpdaterOptions>; windowChrome?: 'win-overlay' | 'mac-inset' | 'standard'; setIcon?: (iconId: GravityIconId) => void | Promise<void>; setZoom?: (factor: number) => void; onThemeChanged?: (preferences: ClientPreferences) => void; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
@@ -290,7 +303,11 @@ export class CoreService extends EventEmitter {
     this.client.registerRequestHandler('session/request_permission', (raw) => {
       const params = raw as AcpRequestPermissionParams;
       if (!params?.sessionId || !this.sessions.isActive(params.sessionId)) return { outcome: { outcome: 'cancelled' } };
-      return this.approval.requestPermission(params, this.sessions.get(params.sessionId).cwd);
+      return this.approval.requestPermission(
+        params,
+        this.sessions.get(params.sessionId).cwd,
+        this.buildApprovalConversationContext(params.sessionId),
+      );
     });
     this.client.on('disconnected', () => { this.questions.cancel(); this.customAnswers.clear(); this.approval.dispose(); });
     this.client.on('rateLimited', (warning: string) => {
@@ -1859,6 +1876,37 @@ export class CoreService extends EventEmitter {
   async runMcpAction(input: McpActionInput) { return this.plugins.runMcpAction(input); }
   async toggleSkillEnabled(skillId: string, enabled: boolean) { return this.plugins.toggleSkillEnabled(skillId, enabled); }
   async getSwarmState(sessionId: string) { return this.swarm.getState(sessionId); }
+  /** 组装供外部 AI 代审（Codex Guardian 风格）做意图一致性核验的脱敏近期对话摘要。 */
+  private buildApprovalConversationContext(sessionId: string): string | undefined {
+    const list = this.messages.get(sessionId);
+    if (!list?.length) return undefined;
+    const dialog = list.filter((m) => (m.role === 'user' || m.role === 'assistant') && Boolean(m.content?.trim()));
+    if (!dialog.length) return undefined;
+    const recent = dialog.slice(-4);
+    const hasUserInRecent = recent.some((m) => m.role === 'user');
+    if (!hasUserInRecent) {
+      const latestUser = [...dialog].reverse().find((m) => m.role === 'user');
+      if (latestUser) recent.unshift(latestUser);
+    }
+    const lines: string[] = [];
+    let total = 0;
+    for (const msg of recent) {
+      const label = msg.role === 'user' ? '[User]' : '[Assistant]';
+      const cleaned = redactSecretsForReviewer(msg.content).replace(/\s+/g, ' ').trim();
+      if (!cleaned) continue;
+      const snippet = cleaned.length > 320 ? `${cleaned.slice(0, 317)}...` : cleaned;
+      const line = `${label} ${snippet}`;
+      if (total + line.length > 1200) {
+        const remaining = 1200 - total;
+        if (remaining > 32) lines.push(`${line.slice(0, remaining - 3)}...`);
+        break;
+      }
+      lines.push(line);
+      total += line.length + 1;
+    }
+    return lines.length ? lines.join('\n') : undefined;
+  }
+
   /** 退出时先终止定时器与事件来源，再刷新用量账本。即便写盘抛错，finally 也会关闭 ACP 连接。 */
   async dispose(): Promise<void> {
     this.disposed = true;
