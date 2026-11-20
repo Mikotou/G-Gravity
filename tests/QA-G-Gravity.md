@@ -1,8 +1,8 @@
 # G-Gravity 整体验收记录
 
-## 本机 Windows 版 v0.2.2（本地构建，未推送）
+## 已发布的 Windows / macOS 版 v0.2.2
 
-2026-11-20，Windows x64。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.2/Gravity.exe`，大小为 121,573,222 字节；目录版位于 `release/v0.2.2/win-unpacked/Gravity.exe`；源码压缩包位于 `release/v0.2.2/G-Gravity-v0.2.2-source.zip`（仅本地提交，未推送至 GitHub）。
+2026-11-20，Windows x64 & macOS (Apple Silicon `arm64` / Intel `x64`)。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.2/Gravity.exe`，大小为 121,573,222 字节；目录版位于 `release/v0.2.2/win-unpacked/Gravity.exe`；源码压缩包位于 `release/v0.2.2/G-Gravity-v0.2.2-source.zip`（对应 `main` 分支与 `v0.2.2` 标签，由 GitHub Actions `.github/workflows/release.yml` 自动产出 Windows + macOS `arm64`/`x64` `.dmg`/`.zip` Release）。
 
 | 项目 | 验证结果 |
 | --- | --- |
