@@ -48,6 +48,7 @@ import { ActivityRail } from './components/ActivityRail';
 import { NewSessionModal } from './components/NewSessionModal';
 import { ComposerDrafts } from './lib/composer-draft';
 import { clearAnnotationDraft } from './lib/annotation-drafts';
+import { clearDismissedQuestionsForSession } from './lib/dismissed-questions';
 import type { SessionAction } from '../shared/session-contract';
 import { ProjectSidebar } from './components/ProjectSidebar';
 import { ImportedHistoryPane } from './components/ReadOnlyHistoryView';
@@ -630,6 +631,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     if (action === 'delete') {
       composerDrafts.delete(id);
       clearAnnotationDraft(accounts.activeProfileId, id);
+      clearDismissedQuestionsForSession(accounts.activeProfileId, id);
       try { localStorage.removeItem('gravity.terminal.read.' + accounts.activeProfileId + '.' + id); } catch { /* optional storage */ }
       setMessagesBySession(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => remainingIds.has(k))));
       setInspectorBySession(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => remainingIds.has(k))));

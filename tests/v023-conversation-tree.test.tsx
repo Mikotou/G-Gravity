@@ -15,6 +15,7 @@ import {
 } from '../src/shared';
 import { prepareMockAcp } from './helpers/stdio-rpc';
 import { createCoreBridge } from './helpers/core-bridge';
+import { resetDismissedQuestionsCacheForTests } from '../src/renderer/lib/dismissed-questions';
 
 describe('v0.2.3 Codex 风格原地对话分支树（左侧单主对话 + 多级嵌套分叉 + 右侧分支树 + Context 联动）', () => {
   let fixture: Awaited<ReturnType<typeof prepareMockAcp>>;
@@ -31,6 +32,8 @@ describe('v0.2.3 Codex 风格原地对话分支树（左侧单主对话 + 多级
 
   afterEach(async () => {
     cleanup();
+    resetDismissedQuestionsCacheForTests();
+    try { window.localStorage.clear(); } catch { /* noop */ }
     delete window.agyDesktop;
     delete window.gravityDesktop;
     await core?.dispose();
@@ -447,5 +450,59 @@ describe('v0.2.3 Codex 风格原地对话分支树（左侧单主对话 + 多级
     fireEvent.click(screen.getByTestId(`sidebar-session-${root.sessionId}`));
     await screen.findByTestId(`session-pane-${branch1Id}`);
     expect(svc.sessions.activeSessionCount).toBe(4);
+  }, 25000);
+
+  it('7) 跳过或发送模型提问后，从同层级分支来回切换不再重新显示旧提问', async () => {
+    const { core: svc, root } = await setupApp('跳过提问持久化验证');
+
+    // 1. 根分支收到带选项的正文提问，弹出 QuestionBar
+    await act(async () => {
+      await svc.sendPrompt({ sessionId: root.sessionId, text: '[prose-question] 请问优先执行哪一项？\nA. 方案甲\nB. 方案乙' });
+    });
+    await waitIdle(svc, root.sessionId);
+    const bar1 = await screen.findByTestId('question-bar');
+    expect(bar1.textContent).toContain('方案甲');
+
+    // 2. 用户点击「跳过」，QuestionBar 立即消失
+    fireEvent.click(within(bar1).getByRole('button', { name: '跳过' }));
+    await waitFor(() => expect(screen.queryByTestId('question-bar')).toBeNull());
+
+    // 3. 修改首条用户消息创建同层级兄弟分支（同样返回提问），再从兄弟分支切换回根分支
+    const firstUser = (await svc.getSessionMessages(root.sessionId)).find((m) => m.role === 'user')!;
+    fireEvent.click(screen.getByTestId(`edit-msg-${firstUser.id}`));
+    fireEvent.change(screen.getByRole('textbox', { name: '编辑原消息' }), {
+      target: { value: '[prose-question] 请选择颜色？\nA. 靛蓝\nB. 琥珀' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '重新发送' }));
+
+    let siblingBranchId = '';
+    await waitFor(async () => {
+      const tree = await svc.getConversationTree(root.sessionId);
+      expect(tree.totalBranches).toBe(2);
+      siblingBranchId = tree.activeBranchId;
+      expect(siblingBranchId).not.toBe(root.sessionId);
+    });
+    await waitIdle(svc, siblingBranchId);
+    await screen.findByTestId(`session-pane-${siblingBranchId}`);
+
+    // 兄弟分支自己的新提问正常可见；用户通过「发送回答」回复后消失
+    const bar2 = await screen.findByTestId('question-bar');
+    expect(bar2.textContent).toContain('靛蓝');
+    fireEvent.click(within(bar2).getByRole('button', { name: '靛蓝' }));
+    await act(async () => {
+      fireEvent.click(within(bar2).getByRole('button', { name: '发送回答' }));
+    });
+    await waitIdle(svc, siblingBranchId);
+    await waitFor(() => expect(screen.queryByTestId('question-bar')).toBeNull());
+
+    // 4. 从兄弟分支切回根分支：此前在根分支跳过过的模型提问必须保持隐藏，绝不再现
+    fireEvent.click(screen.getByTestId(`tree-node-${root.sessionId}`));
+    await screen.findByTestId(`session-pane-${root.sessionId}`);
+    expect(screen.queryByTestId('question-bar')).toBeNull();
+
+    // 再切回兄弟分支：此前已发送回答的提问同样不再出现
+    fireEvent.click(screen.getByTestId(`tree-node-${siblingBranchId}`));
+    await screen.findByTestId(`session-pane-${siblingBranchId}`);
+    expect(screen.queryByTestId('question-bar')).toBeNull();
   }, 25000);
 });

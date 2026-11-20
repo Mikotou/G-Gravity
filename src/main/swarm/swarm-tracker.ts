@@ -116,10 +116,37 @@ export class SwarmTracker extends EventEmitter {
     if (this.store) {
       const saved = this.store.readSessionRecords<SwarmTopologyState>(this.filename, 'swarm-states.json', owned);
       if (saved && typeof saved === 'object') {
+        let purgedLegacyGuard = false;
         for (const [sid, st] of Object.entries(saved)) {
           if (st && typeof st === 'object' && Array.isArray(st.workers)) {
             if (st.swarmTitle === '演示蜂群（模拟数据）' && st.workers.every(w => ['demo-research', 'demo-ui'].includes(w.name))) continue;
             const copy = structuredClone(st);
+            // 清理旧版误注入蜂群拓扑的合成 @approval-guard 假子个体及消息，避免与真实外部 API 代审混淆
+            const origWorkers = copy.workers.length;
+            const origMsgs = Array.isArray(copy.boardMessages) ? copy.boardMessages.length : 0;
+            const origTimeline = Array.isArray(copy.actionTimeline) ? copy.actionTimeline.length : 0;
+            copy.workers = copy.workers.filter((w) => w.name !== 'approval-guard');
+            copy.boardMessages = (copy.boardMessages || []).filter((m) => m.sender !== 'approval-guard');
+            copy.actionTimeline = (copy.actionTimeline || []).filter(
+              (e) => e.actorName !== 'approval-guard' && e.targetName !== 'approval-guard'
+            );
+            if (
+              copy.workers.length !== origWorkers ||
+              copy.boardMessages.length !== origMsgs ||
+              copy.actionTimeline.length !== origTimeline
+            ) {
+              purgedLegacyGuard = true;
+              if (!copy.boardMessages.some((m) => m.channel === 'approval')) {
+                copy.channels = (copy.channels || []).filter((c) => c !== 'approval');
+              }
+              if (
+                copy.workers.length === 0 &&
+                copy.boardMessages.length === 0 &&
+                copy.actionTimeline.length === 0
+              ) {
+                continue;
+              }
+            }
             // 冷启动恢复时清理上一次进程退出前遗留的僵尸 working 状态
             for (const w of copy.workers) {
               if (w.status === 'working') {
@@ -128,6 +155,7 @@ export class SwarmTracker extends EventEmitter {
                 if (!w.resultSummary) w.resultSummary = '已完成（上次会话归档）';
               }
             }
+            copy.isActive = copy.workers.length > 0 || copy.boardMessages.length > 0;
             copy.stats = {
               total: copy.workers.length,
               working: 0,
@@ -137,6 +165,9 @@ export class SwarmTracker extends EventEmitter {
             };
             this.states.set(sid, copy);
           }
+        }
+        if (purgedLegacyGuard) {
+          this.store.write(this.filename, Object.fromEntries(this.states));
         }
       }
     }

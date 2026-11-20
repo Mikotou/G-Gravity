@@ -105,6 +105,12 @@ function receive(message: Rpc) {
             sessionId, toolCall: { toolCallId: `command-${sessionId}`, title: 'run_command', kind: 'execute', rawInput: { command: text.split('[permission]')[1]?.trim() || 'git status' } },
             options: [ { optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }, { optionId: 'allow-always', name: '始终允许', kind: 'allow_always' }, { optionId: 'reject-once', name: '拒绝', kind: 'reject_once' } ],
           } });
+        } else if (text.includes('[prose-question]')) {
+          const body = text.split('[prose-question]')[1]?.trim() || '请问优先执行哪一项？\nA. 方案甲\nB. 方案乙';
+          update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `\n${body}` } });
+          update(sessionId, { sessionUpdate: 'usage_update', usage: { inputTokens: 12, outputTokens: 8, thoughtTokens: 4, totalTokens: 24 } });
+          active.delete(sessionId);
+          reply(id, { stopReason: 'end_turn', usage: { inputTokens: 12, outputTokens: 8, totalTokens: 24 } });
         } else complete(sessionId, id);
       }, text.includes('[stream-during-drag]') ? 850 : text.includes('[slow]') ? 250 : 15);
       return;

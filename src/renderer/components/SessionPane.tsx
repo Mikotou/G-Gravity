@@ -30,6 +30,7 @@ import { Composer } from './Composer';
 import { InlineRequestView } from './InlineRequestView';
 import type { ReviseMessageInput } from '@shared';
 import { useAnnotationDraft, showAnnotationRanges } from '../lib/annotation-drafts';
+import { isQuestionDismissed, markQuestionDismissed } from '../lib/dismissed-questions';
 import { EditUserMessage } from './EditUserMessage';
 import { ImageSessionContext, ImageWorkspace } from './MessageImage';
 import { Markdown } from './Markdown';
@@ -430,7 +431,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
   } | null>(null);
   const [composerFocusSeq, setComposerFocusSeq] = useState(0);
   const [openTargetError, setOpenTargetError] = useState<string | null>(null);
-  const [dismissedQuestion, setDismissedQuestion] = useState<string>();
+  const [, setDismissedQuestionSeq] = useState(0);
   const [awayFromBottom, setAwayFromBottom] = useState(false);
   const [hasUnseen, setHasUnseen] = useState(false);
 
@@ -620,8 +621,15 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
   const last = messages[messages.length - 1];
   const nativeQuestion = messages.find(m => m.question?.state === 'open');
   const questionSource = nativeQuestion || (last?.role === 'assistant' && !last.question && !last.isStreaming &&
-    session.status === 'idle' && !last.revisionHistory && last.id !== dismissedQuestion ? last : undefined);
+    session.status === 'idle' && !last.revisionHistory &&
+    !isQuestionDismissed(session.profileId, session.sessionId, last.id) ? last : undefined);
   const question = questionSource?.question || (questionSource ? writtenQuestion(questionSource.content) : undefined);
+  const dismissActiveProseQuestion = (targetId?: string) => {
+    const idToDismiss = targetId || (!nativeQuestion && questionSource ? questionSource.id : undefined);
+    if (!idToDismiss) return;
+    markQuestionDismissed(session.profileId, session.sessionId, idToDismiss);
+    setDismissedQuestionSeq((v) => v + 1);
+  };
   const showWorking =
     session.status === 'streaming' && !(last && last.role === 'assistant' && last.isStreaming);
 
@@ -864,8 +872,8 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
           if (nativeQuestion) {
             await getDesktopBridge().answerQuestion({ sessionId: session.sessionId, messageId: nativeQuestion.id, ...reply });
           } else {
+            dismissActiveProseQuestion(questionSource.id);
             if (reply.action === 'accept') await props.onSendPrompt({ sessionId: session.sessionId, text: reply.customReply! });
-            setDismissedQuestion(questionSource.id);
           }
         }} />}
       {session.readOnly ? <div className="composer-dock">
@@ -895,7 +903,10 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
         onRemoveQuote={id => updateDraft(d => ({ ...d, quotes: d.quotes.filter(q => q.id !== id) }))}
         onRemoveNotation={id => updateDraft(d => ({ ...d, notes: d.notes.filter(n => n.id !== id) }))}
         onSubmitAnnotations={takeSubmitted}
-        onSendPrompt={props.onSendPrompt}
+        onSendPrompt={async (input) => {
+          if (!nativeQuestion && questionSource) dismissActiveProseQuestion(questionSource.id);
+          return props.onSendPrompt(input);
+        }}
         onCancelPrompt={props.onCancelPrompt}
         onCompactContext={props.onCompactContext}
         onSetSessionMode={props.onSetSessionMode}

@@ -13,6 +13,7 @@ import {
 } from '../src/main/approval/shell-screening';
 import type { Reviewer } from '../src/main/approval/external-reviewer';
 import { CoreService, redactSecretsForReviewer } from '../src/main/core-service';
+import { SwarmTracker } from '../src/main/swarm/swarm-tracker';
 import { ClientStore } from '../src/main/storage/client-store';
 import type { AcpRequestPermissionParams, ApproveForMeConfig, PendingApprovalRequest } from '../src/shared';
 
@@ -459,5 +460,154 @@ console.log("Total AI calls:", aiCalls, avg([10, 20]));
     expect(ctx).toContain('统计 audit.jsonl');
     expect(ctx).not.toContain('AIzaSyShouldNeverLeakToExternalReviewer999');
     expect(ctx).toContain('[REDACTED_API_KEY]');
+  });
+
+  it('5) AI 代审严禁向蜂群拓扑伪造 @approval-guard 子个体，且冷启动自动清理历史残留假子个体', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'gravity-no-fake-swarm-'));
+    tempDirs.push(dir);
+    const acp = new StubAcpClient();
+    const reviewer = vi.fn().mockResolvedValue({
+      recommended: 'approve',
+      riskLevel: 'low',
+      reason: '低风险分析操作',
+      latencyMs: 60,
+    });
+    const service = new CoreService({
+      dataDir: dir,
+      acp: acp as never,
+      reviewer,
+      enableAutoUpdateCheck: false,
+    });
+    services.push(service);
+    await service.updateApprovalConfig({
+      mode: 'hybrid',
+      externalReviewer: connectedGeminiReviewer,
+    });
+    const session = await service.createSession({ cwd: dir, title: 'No Fake Subagent Test' });
+
+    // 连续触发多条本地快筛与外部 API 代审（旧版这里会合成 @approval-guard 假子个体）
+    for (let i = 0; i < 6; i++) {
+      await acp.triggerPermissionRequest({
+        sessionId: session.sessionId,
+        toolCall: { toolCallId: `tc-local-${i}`, kind: 'execute', title: 'run_command', rawInput: { CommandLine: 'pwd' } },
+        options: [
+          { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+          { optionId: 'reject-once', name: 'No', kind: 'reject_once' },
+        ],
+      });
+    }
+    await acp.triggerPermissionRequest({
+      sessionId: session.sessionId,
+      toolCall: { toolCallId: 'tc-ext-1', kind: 'execute', title: 'run_command', rawInput: { CommandLine: 'git status' } },
+      options: [
+        { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+        { optionId: 'reject-once', name: 'No', kind: 'reject_once' },
+      ],
+    });
+
+    const swarmState = await service.getSwarmState(session.sessionId);
+    expect(swarmState.workers).toEqual([]);
+    expect(swarmState.boardMessages).toEqual([]);
+    expect(swarmState.actionTimeline).toEqual([]);
+    expect(swarmState.stats.total).toBe(0);
+
+    // 验证历史磁盘残留的合成 @approval-guard 在冷启动时被自动净化，真实子个体不受影响
+    const legacyDir = mkdtempSync(path.join(tmpdir(), 'gravity-legacy-swarm-'));
+    tempDirs.push(legacyDir);
+    const store = new ClientStore(legacyDir);
+    store.write('swarm-states-default.json', {
+      'sess-only-guard': {
+        sessionId: 'sess-only-guard',
+        isActive: true,
+        swarmTitle: '',
+        channels: ['approval'],
+        workers: [
+          {
+            id: 'w-guard',
+            name: 'approval-guard',
+            role: 'Approve for me 安全代审守卫',
+            kind: 'subagent',
+            model: 'local-ast-guard',
+            status: 'completed',
+            workspaceMode: 'inherit',
+            channels: ['approval'],
+            brief: 'legacy fake guard',
+            startedAt: '2026-11-20T00:00:00Z',
+            updatedAt: '2026-11-20T00:01:00Z',
+          },
+        ],
+        boardMessages: [
+          {
+            seq: 1,
+            sender: 'approval-guard',
+            mentions: [],
+            channel: 'approval',
+            content: '[done] 本轮已实时审查并自动放行 5 项低风险操作',
+            isDoneReport: true,
+            isStallAlert: false,
+            timestamp: '2026-11-20T00:01:00Z',
+          },
+        ],
+        actionTimeline: [
+          {
+            id: 'ev-1',
+            sessionId: 'sess-only-guard',
+            actorName: 'approval-guard',
+            eventType: 'board_posted',
+            summaryZh: 'legacy',
+            summaryEn: 'legacy',
+            timestamp: '2026-11-20T00:01:00Z',
+          },
+        ],
+        stats: { total: 1, working: 0, waiting: 0, completed: 1, killed: 0 },
+        updatedAt: '2026-11-20T00:01:00Z',
+      },
+      'sess-mixed': {
+        sessionId: 'sess-mixed',
+        isActive: true,
+        swarmTitle: 'Real Swarm',
+        channels: ['general', 'approval'],
+        workers: [
+          {
+            id: 'w-guard-2',
+            name: 'approval-guard',
+            role: 'Approve for me 安全代审守卫',
+            kind: 'subagent',
+            model: 'local-ast-guard',
+            status: 'completed',
+            workspaceMode: 'inherit',
+            channels: ['approval'],
+            brief: 'legacy',
+            startedAt: '2026-11-20T00:00:00Z',
+            updatedAt: '2026-11-20T00:01:00Z',
+          },
+          {
+            id: 'w-real',
+            name: 'code-reviewer',
+            role: 'Code Reviewer',
+            kind: 'subagent',
+            model: 'gemini-4-neon',
+            status: 'completed',
+            workspaceMode: 'inherit',
+            channels: ['general'],
+            brief: 'Review PR',
+            startedAt: '2026-11-20T00:00:00Z',
+            updatedAt: '2026-11-20T00:02:00Z',
+          },
+        ],
+        boardMessages: [],
+        actionTimeline: [],
+        stats: { total: 2, working: 0, waiting: 0, completed: 2, killed: 0 },
+        updatedAt: '2026-11-20T00:02:00Z',
+      },
+    });
+    const tracker = new SwarmTracker(store);
+    tracker.setProfile('default');
+    expect(tracker.getState('sess-only-guard').workers).toEqual([]);
+    expect(tracker.getState('sess-only-guard').boardMessages).toEqual([]);
+    expect(tracker.getState('sess-only-guard').stats.total).toBe(0);
+    expect(tracker.getState('sess-mixed').workers.map((w) => w.name)).toEqual(['code-reviewer']);
+    expect(tracker.getState('sess-mixed').channels).toEqual(['general']);
+    expect(tracker.getState('sess-mixed').stats.total).toBe(1);
   });
 });

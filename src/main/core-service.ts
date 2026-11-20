@@ -17,7 +17,7 @@ import type { ModelRateCard } from '../shared/telemetry-contract';
 import type { CreateAccountProfileInput, ContinueHistoryInGravityInput } from '../shared/accounts-history-contract';
 import type { PluginActionInput, McpActionInput } from '../shared/plugins-contract';
 import { AcpClient, type AcpClientOptions } from './acp/acp-client';
-import { ApprovalEngine, DEFAULT_APPROVAL_CONFIG, type ApprovalGuardActivityEvent } from './approval/approval-engine';
+import { ApprovalEngine, DEFAULT_APPROVAL_CONFIG } from './approval/approval-engine';
 import { discoverExternalModels, validateExternalEndpoint, type Reviewer } from './approval/external-reviewer';
 import { compileSafePattern } from './approval/shell-screening';
 import { ClientStore } from './storage/client-store';
@@ -166,6 +166,7 @@ export class CoreService extends EventEmitter {
   private questions = new AgentQuestions(m => {
     if (m.question?.state === 'open') this.finishAssistantMessage(m.sessionId);
     this.upsert(m);
+    if (m.question?.state !== 'open') this.saveMessages();
   }, id => this.sessions.isActive(id), (id, text) => {
     this.customAnswers.set(id, [...this.customAnswers.get(id) || [], text]);
   });
@@ -183,7 +184,6 @@ export class CoreService extends EventEmitter {
   private titleOrganizeTimestamps: number[] = [];
   private organizingTitles = false;
   private localTranslator = new LocalTranslator();
-  private guardActiveSessions = new Map<string, { count: number; modelLabel: string }>();
   private checkpointSyncAt = new Map<string, number>();
   private checkpointResolvedModel = new Map<string, string>();
   private turnUserCancelled = new Set<string>();
@@ -279,7 +279,6 @@ export class CoreService extends EventEmitter {
       afterSwitch: profileId => {
         this.thoughts.dispose();
         for (const id of this.reactiveTurnTimers.keys()) this.clearReactiveTurnTimer(id);
-        this.guardActiveSessions.clear();
         this.checkpointSyncAt.clear();
         this.checkpointResolvedModel.clear();
         this.turnUserCancelled.clear();
@@ -351,16 +350,7 @@ export class CoreService extends EventEmitter {
     this.approval.on('config-updated', (cfg: ApproveForMeConfig) => {
       this.persistApprovalConfig(cfg);
     });
-    this.approval.on('guard-activity', (ev: ApprovalGuardActivityEvent) => {
-      this.guardActiveSessions.set(ev.sessionId, { count: ev.autoApprovedCount, modelLabel: ev.modelLabel });
-      this.swarm.ingest(ev.sessionId, 'invoke_subagent', {
-        name: 'approval-guard',
-        role: 'Approve for me 安全代审守卫',
-        model: ev.modelLabel,
-        brief: '多命令密集运行实时审查（本地多段 AST 语义快筛 / 独立模型复核，零订阅额度消耗）',
-        status: 'working',
-      });
-    });
+    // Approve for me 仅通过本地规则与用户配置的外部 API 复核，严禁向蜂群拓扑伪造 @approval-guard 子个体节点。
     this.approval.on('external-review-usage', (ev: ExternalReviewerUsageRecordInput) => {
       this.telemetry.recordExternalReviewUsage(ev);
     });
@@ -678,15 +668,6 @@ export class CoreService extends EventEmitter {
   }
   private finishMessage(sessionId: string): void {
     this.finishAssistantMessage(sessionId);
-    const guardInfo = this.guardActiveSessions.get(sessionId);
-    if (guardInfo) {
-      this.guardActiveSessions.delete(sessionId);
-      this.swarm.ingest(sessionId, 'post_message', {
-        sender: 'approval-guard',
-        channel: 'approval',
-        content: `[done] 本轮已实时审查并自动放行 ${guardInfo.count} 项低风险操作（${guardInfo.modelLabel}）`,
-      });
-    }
     this.approval.resetTurnBurstCounter(sessionId);
     for (const item of this.messages.get(sessionId) || []) item.isStreaming = false;
     this.saveMessages();
@@ -897,7 +878,7 @@ export class CoreService extends EventEmitter {
       this.thoughts.clear(key);
     }
     this.clearReactiveTurnTimer(id);
-    this.feedback.delete(id); this.compactAvailable.delete(id); this.guardActiveSessions.delete(id);
+    this.feedback.delete(id); this.compactAvailable.delete(id);
     this.checkpointSyncAt.delete(id); this.checkpointResolvedModel.delete(id);
     this.turnUserCancelled.delete(id); this.turnStreamInterrupted.delete(id); this.turnAutoDenied.delete(id);
     for (const key of this.autoDeniedByToolCall.keys()) if (key.startsWith(`${id}\0`)) this.autoDeniedByToolCall.delete(key);
@@ -1242,6 +1223,7 @@ export class CoreService extends EventEmitter {
         this.emit('session-updated', this.enrichSession(session));
       }
     }
+    this.questions.cancel(input.sessionId);
     const submitted = this.userMessage(input);
     this.upsert(submitted);
     this.clearReactiveTurnTimer(input.sessionId);
