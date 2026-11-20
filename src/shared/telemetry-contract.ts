@@ -149,6 +149,70 @@ export const DEFAULT_MODEL_RATE_CARDS: readonly ModelRateCard[] = [
     outputPerMillionUsd: 0.4,
     thinkingPerMillionUsd: 0.4,
   },
+  {
+    modelId: 'gemini-3.5-flash-lite',
+    displayName: 'Gemini 3.5 Flash-Lite',
+    inputPerMillionUsd: 0.1,
+    cachedInputPerMillionUsd: 0.025,
+    outputPerMillionUsd: 0.4,
+    thinkingPerMillionUsd: 0.4,
+  },
+  {
+    modelId: 'gemini-3-flash',
+    displayName: 'Gemini 3 Flash',
+    inputPerMillionUsd: 0.3,
+    cachedInputPerMillionUsd: 0.075,
+    outputPerMillionUsd: 2.5,
+    thinkingPerMillionUsd: 2.5,
+  },
+  {
+    modelId: 'gpt-4o-mini',
+    displayName: 'GPT-4o mini',
+    inputPerMillionUsd: 0.15,
+    cachedInputPerMillionUsd: 0.075,
+    outputPerMillionUsd: 0.6,
+    thinkingPerMillionUsd: 0.6,
+  },
+  {
+    modelId: 'gpt-4o',
+    displayName: 'GPT-4o',
+    inputPerMillionUsd: 2.5,
+    cachedInputPerMillionUsd: 1.25,
+    outputPerMillionUsd: 10.0,
+    thinkingPerMillionUsd: 10.0,
+  },
+  {
+    modelId: 'gpt-4.1-mini',
+    displayName: 'GPT-4.1 mini',
+    inputPerMillionUsd: 0.4,
+    cachedInputPerMillionUsd: 0.1,
+    outputPerMillionUsd: 1.6,
+    thinkingPerMillionUsd: 1.6,
+  },
+  {
+    modelId: 'gpt-4.1-nano',
+    displayName: 'GPT-4.1 nano',
+    inputPerMillionUsd: 0.1,
+    cachedInputPerMillionUsd: 0.025,
+    outputPerMillionUsd: 0.4,
+    thinkingPerMillionUsd: 0.4,
+  },
+  {
+    modelId: 'gpt-5-mini',
+    displayName: 'GPT-5 mini',
+    inputPerMillionUsd: 0.25,
+    cachedInputPerMillionUsd: 0.025,
+    outputPerMillionUsd: 2.0,
+    thinkingPerMillionUsd: 2.0,
+  },
+  {
+    modelId: 'o4-mini',
+    displayName: 'o4-mini',
+    inputPerMillionUsd: 1.1,
+    cachedInputPerMillionUsd: 0.275,
+    outputPerMillionUsd: 4.4,
+    thinkingPerMillionUsd: 4.4,
+  },
 ] as const;
 
 /** 这四类用量互斥。计费前已从普通输入中扣除缓存输入、从普通输出中扣除思考，四项可以直接相加。 */
@@ -331,6 +395,93 @@ export interface ModelCostBreakdownItem extends TokenCostSummary {
   shareRatio: number;
 }
 
+export type ExternalReviewerProviderId = 'gemini-api-key' | 'openai-compatible' | 'local-ollama';
+
+export type ExternalReviewerCostScope = 'session' | 'today' | '7d' | '30d' | 'all';
+
+export function formatExternalReviewerProviderLabel(
+  provider: ExternalReviewerProviderId,
+  locale: 'zh-CN' | 'en-US' = 'zh-CN'
+): string {
+  if (provider === 'gemini-api-key') return 'Google AI Studio';
+  if (provider === 'openai-compatible') return 'OpenAI API';
+  return locale === 'zh-CN' ? '本地 Ollama' : 'Local Ollama';
+}
+
+export interface ExternalReviewerUsageRecordInput {
+  sessionId: string;
+  provider: ExternalReviewerProviderId;
+  endpoint: string;
+  modelId: string;
+  outcome: 'approve' | 'ask' | 'deny' | 'error';
+  latencyMs: number;
+  usage?: FourDimTokenCounts & { totalTokens?: number; providerReported?: boolean; directCostUsd?: number };
+  timestamp?: number;
+}
+
+/**
+ * 外部复核多 API Provider × 模型维度汇总项（支持历史多个服务商共同汇总计算）
+ */
+export interface ExternalReviewerProviderBreakdownItem extends TokenCostSummary {
+  /** 唯一键：`${provider}:${endpointHost}:${modelId}` */
+  key: string;
+  provider: ExternalReviewerProviderId;
+  endpointHost: string;
+  modelId: string;
+  displayName: string;
+  callCount: number;
+  approvedCount: number;
+  askCount: number;
+  denyCount: number;
+  errorCount: number;
+  /** 占当前范围总费用（若总费用为 0 则按总 Token）的比例 0 ~ 1 */
+  shareRatio: number;
+}
+
+export interface ExternalReviewerSessionSummary extends TokenCostSummary {
+  sessionId: string;
+  callCount: number;
+  approvedCount: number;
+  askCount: number;
+  denyCount: number;
+  errorCount: number;
+  avgLatencyMs: number;
+  providers: ExternalReviewerProviderBreakdownItem[];
+  updatedAt: string;
+}
+
+export interface ExternalReviewerCumulativeTotals extends TokenCostSummary {
+  callCount: number;
+  approvedCount: number;
+  askCount: number;
+  denyCount: number;
+  errorCount: number;
+  providerCount: number;
+}
+
+/**
+ * 外部复核（AI 代审）独立用量与花费遥测快照（多 API Provider 联合统计，含客户端累计、当前会话与 24h/7d/30d 分布）
+ */
+export interface ExternalReviewerTelemetrySnapshot {
+  /** 本客户端历史全部 API Provider 累计总消耗（永久累计，不随 30 天窗口裁剪丢失） */
+  cumulativeAllTime: ExternalReviewerCumulativeTotals;
+  /** 本客户端历史全部 API Provider × 模型联合明细 */
+  cumulativeProviders: ExternalReviewerProviderBreakdownItem[];
+  /** 按会话统计的外部复核消耗（当前会话视图） */
+  bySession: Record<string, ExternalReviewerSessionSummary>;
+  /** 24h 按小时柱状序列（长度 24） */
+  hourly24h: HourlyTokenBarBucket[];
+  /** 7d 7×24 天×小时热力矩阵（长度 168） */
+  matrix7d: DayHourHeatmapCell[];
+  /** 30d 按日历天热力序列（长度 30） */
+  calendar30d: DailyCalendarHeatmapCell[];
+  /** 今日 / 7d / 30d 总计消耗与花费 */
+  costByRange: Record<'today' | '7d' | '30d', TokenCostSummary & { callCount: number }>;
+  /** 今日 / 7d / 30d 多 API Provider × 模型费用构成 */
+  providerBreakdownByRange: Record<'today' | '7d' | '30d', ExternalReviewerProviderBreakdownItem[]>;
+  updatedAt: string;
+}
+
 /**
  * Context & Cost 看板全量快照
  */
@@ -349,6 +500,8 @@ export interface TelemetryDashboardSnapshot {
   modelBreakdownByRange: Record<'today' | '7d' | '30d', ModelCostBreakdownItem[]>;
   /** 各会话内分模型费用构成 */
   sessionModelBreakdowns: Record<string, ModelCostBreakdownItem[]>;
+  /** 外部复核（AI 代审）API 累计与分时段用量统计（多服务商联合计算） */
+  externalReviewer?: ExternalReviewerTelemetrySnapshot;
   /** 当前生效的模型单价表 */
   rateCards: ModelRateCard[];
   pricingSource: TelemetryPricingSource;

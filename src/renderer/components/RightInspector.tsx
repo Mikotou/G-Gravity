@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Circle,
   CircleDot,
   FileCode2,
@@ -24,7 +26,7 @@ import type {
   TelemetryDashboardSnapshot,
 } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
-import { ContextCostInspectorView } from './ContextCostInspectorView';
+import { ContextCostInspectorView, type ContextInspectorViewMode } from './ContextCostInspectorView';
 import { ResizeHandle } from './ResizeHandle';
 import { SwarmPanel } from './SwarmPanel';
 import { UnifiedDiffBlock } from './UnifiedDiffBlock';
@@ -36,6 +38,10 @@ export interface RightInspectorProps {
   width: number;
   floating?: boolean;
   activeTab: RightInspectorTab;
+  contextViewMode?: ContextInspectorViewMode;
+  onChangeContextViewMode?: (mode: ContextInspectorViewMode) => void;
+  reviewerConnected?: boolean;
+  onOpenExternalReviewerSettings?: () => void;
   focusedDiffFile: string | null;
   sessionId: string | null;
   profileId?: string;
@@ -89,6 +95,10 @@ export function RightInspector({
   width,
   floating: floatingProp,
   activeTab,
+  contextViewMode,
+  onChangeContextViewMode,
+  reviewerConnected,
+  onOpenExternalReviewerSettings,
   focusedDiffFile,
   sessionId,
   profileId = 'default',
@@ -104,12 +114,76 @@ export function RightInspector({
   onLaunchSwarmTask,
   onOpenRateCardsSettings,
 }: RightInspectorProps): React.ReactElement {
-  const { dict } = useI18n();
+  const { locale, dict } = useI18n();
   const ui = dict.ui;
   const [liveWidth, setLiveWidth] = useState<number>(width || DEFAULT_WIDTH);
   const [floating, setFloating] = useState<boolean>(() =>
     floatingProp !== undefined ? floatingProp : readInspectorFloating()
   );
+  const tabsRef = useRef<HTMLDivElement | null>(null);
+  const [tabScroll, setTabScroll] = useState({ overflow: false, canLeft: false, canRight: false });
+
+  const syncTabScroll = useCallback(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    const overflow = el.scrollWidth > el.clientWidth + 2;
+    const canLeft = overflow && el.scrollLeft > 1;
+    const canRight = overflow && el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    setTabScroll((prev) =>
+      prev.overflow === overflow && prev.canLeft === canLeft && prev.canRight === canRight
+        ? prev
+        : { overflow, canLeft, canRight }
+    );
+  }, []);
+
+  const scrollTabsBy = useCallback(
+    (delta: number) => {
+      const el = tabsRef.current;
+      if (!el) return;
+      el.scrollLeft = Math.max(0, Math.min(el.scrollWidth - el.clientWidth, el.scrollLeft + delta));
+      syncTabScroll();
+    },
+    [syncTabScroll]
+  );
+
+  const handleTabsWheel = useCallback(
+    (e: React.WheelEvent<HTMLDivElement>) => {
+      const el = tabsRef.current;
+      if (!el || el.scrollWidth <= el.clientWidth + 2) return;
+      const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (delta === 0) return;
+      e.preventDefault();
+      el.scrollLeft += delta;
+      syncTabScroll();
+    },
+    [syncTabScroll]
+  );
+
+  useEffect(() => {
+    syncTabScroll();
+    const el = tabsRef.current;
+    if (!el) return;
+    let ro: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => syncTabScroll());
+      ro.observe(el);
+    }
+    window.addEventListener('resize', syncTabScroll);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', syncTabScroll);
+    };
+  }, [liveWidth, floating, collapsed, syncTabScroll]);
+
+  useEffect(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    const activeEl = el.querySelector<HTMLElement>('.inspector-tab.is-active');
+    if (activeEl && typeof activeEl.scrollIntoView === 'function') {
+      activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    syncTabScroll();
+  }, [activeTab, syncTabScroll]);
 
   useEffect(() => {
     if (width) setLiveWidth(width);
@@ -299,30 +373,65 @@ export function RightInspector({
       )}
       <div className="inspector-inner">
         <div className="inspector-bar">
-          <div className="inspector-head" role="tablist">
-            {TABS.map(({ id, Icon }) => {
-              const selected = id === 'diff' ? isChanges : activeTab === id;
-              const label = id === 'diff' ? ui.changesTab : dict.inspectorTabs[id];
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  className={`inspector-tab ${selected ? 'is-active' : ''}`}
-                  onClick={() => onSelectTab(id === 'diff' && isChanges ? activeTab : id)}
-                  aria-label={label}
-                  title={label}
-                  data-testid={`inspector-tab-${id}`}
-                >
-                  <Icon size={13} />
-                  <span className="inspector-tab-label">{label}</span>
-                  {counts[id] ? (
-                    <span className={`tab-count tone-${countTone[id] ?? 'muted'}`}>{counts[id]}</span>
-                  ) : null}
-                </button>
-              );
-            })}
+          <div
+            className={`inspector-tabs-viewport ${tabScroll.overflow ? 'is-overflowing' : ''}`}
+            data-testid="inspector-tabs-viewport"
+          >
+            {tabScroll.canLeft && (
+              <button
+                type="button"
+                className="inspector-scroll-btn is-left"
+                onClick={() => scrollTabsBy(-96)}
+                aria-label={locale === 'zh-CN' ? '向左滑动页签' : 'Scroll tabs left'}
+                title={locale === 'zh-CN' ? '向左滑动页签' : 'Scroll tabs left'}
+                data-testid="inspector-tabs-scroll-left"
+              >
+                <ChevronLeft size={12} />
+              </button>
+            )}
+            <div
+              ref={tabsRef}
+              className="inspector-head"
+              role="tablist"
+              onScroll={syncTabScroll}
+              onWheel={handleTabsWheel}
+            >
+              {TABS.map(({ id, Icon }) => {
+                const selected = id === 'diff' ? isChanges : activeTab === id;
+                const label = id === 'diff' ? ui.changesTab : dict.inspectorTabs[id];
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    className={`inspector-tab ${selected ? 'is-active' : ''}`}
+                    onClick={() => onSelectTab(id === 'diff' && isChanges ? activeTab : id)}
+                    aria-label={label}
+                    title={label}
+                    data-testid={`inspector-tab-${id}`}
+                  >
+                    <Icon size={13} />
+                    <span className="inspector-tab-label">{label}</span>
+                    {counts[id] ? (
+                      <span className={`tab-count tone-${countTone[id] ?? 'muted'}`}>{counts[id]}</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+            {tabScroll.canRight && (
+              <button
+                type="button"
+                className="inspector-scroll-btn is-right"
+                onClick={() => scrollTabsBy(96)}
+                aria-label={locale === 'zh-CN' ? '向右滑动页签' : 'Scroll tabs right'}
+                title={locale === 'zh-CN' ? '向右滑动页签' : 'Scroll tabs right'}
+                data-testid="inspector-tabs-scroll-right"
+              >
+                <ChevronRight size={12} />
+              </button>
+            )}
           </div>
           <div className="inspector-head-actions">
             <button
@@ -444,6 +553,10 @@ export function RightInspector({
             <ContextCostInspectorView
               sessionId={sessionId}
               dashboard={telemetry}
+              viewMode={contextViewMode}
+              onChangeViewMode={onChangeContextViewMode}
+              reviewerConnected={reviewerConnected}
+              onOpenExternalReviewerSettings={onOpenExternalReviewerSettings}
               onOpenRateCardsSettings={onOpenRateCardsSettings}
             />
           )}

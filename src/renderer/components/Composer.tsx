@@ -3,6 +3,7 @@ import {
   APPROVAL_MODE_ORDER,
   BUILTIN_SLASH_COMMANDS,
   EXECUTION_MODE_ORDER,
+  isExternalReviewerConnected,
   REASONING_EFFORT_ORDER,
   type AcpModelOption,
   type AgentExecutionMode,
@@ -10,6 +11,7 @@ import {
   type ApprovalAuditEntry,
   type ApprovalMode,
   type ApproveForMeConfig,
+  type ExternalReviewerTelemetrySnapshot,
   type ManagedSessionSummary,
   type SendPromptInput,
   type SessionContextTelemetry,
@@ -33,7 +35,7 @@ import { useI18n } from '../i18n/I18nContext';
 import { formatActionError } from '../i18n/locales';
 import { getDesktopBridge, isUsingNativeDesktopBridge } from '../services/desktop-bridge';
 import { MessageImage } from './MessageImage';
-import { ContextStatusBar } from './ContextStatusBar';
+import { ContextStatusBar, formatTokenShort, formatUsd } from './ContextStatusBar';
 import { AccountQuotaFooter } from './AccountQuotaView';
 import { ResizeHandle } from './ResizeHandle';
 import {
@@ -57,6 +59,7 @@ export interface ComposerProps {
   approvalConfig: ApproveForMeConfig;
   latestAudit?: ApprovalAuditEntry;
   sessionTelemetry?: SessionContextTelemetry;
+  externalReviewerTelemetry?: ExternalReviewerTelemetrySnapshot;
   canTriggerDemoApproval: boolean;
   autoFocus?: boolean;
   quotes?: TextQuoteItem[];
@@ -75,6 +78,8 @@ export interface ComposerProps {
   onQueryWorkspaceFiles: (cwd: string, query?: string) => Promise<string[]>;
   onCycleApprovalMode: (nextMode: ApprovalMode) => Promise<void>;
   onOpenApprovalSettings: () => void;
+  onOpenExternalReviewerSettings?: () => void;
+  onOpenReviewerStats?: () => void;
   onOpenContextInspector: () => void;
   onTriggerDemoApproval: (sessionId: string) => void;
 }
@@ -216,6 +221,7 @@ export function Composer({
   approvalConfig,
   latestAudit,
   sessionTelemetry,
+  externalReviewerTelemetry,
   canTriggerDemoApproval,
   autoFocus,
   quotes = [],
@@ -234,6 +240,8 @@ export function Composer({
   onQueryWorkspaceFiles,
   onCycleApprovalMode,
   onOpenApprovalSettings,
+  onOpenExternalReviewerSettings,
+  onOpenReviewerStats,
   onOpenContextInspector,
   onTriggerDemoApproval,
 }: ComposerProps): React.ReactElement {
@@ -243,7 +251,11 @@ export function Composer({
   const [menuIndex, setMenuIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [approvalMenuOpen, setApprovalMenuOpen] = useState(false);
+  const [showConnectPrompt, setShowConnectPrompt] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const reviewerConnected = isExternalReviewerConnected(approvalConfig.externalReviewer);
+  const extCum = externalReviewerTelemetry?.cumulativeAllTime;
+  const extSess = externalReviewerTelemetry?.bySession?.[session.sessionId];
   const [inputMinHeight, setInputMinHeight] = useState(readComposerMinHeight);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const anyFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -739,7 +751,12 @@ export function Composer({
               <button
                 type="button"
                 className="mode-pill"
-                onClick={() => setApprovalMenuOpen((open) => !open)}
+                onClick={() => {
+                  setApprovalMenuOpen((open) => {
+                    if (open) setShowConnectPrompt(false);
+                    return !open;
+                  });
+                }}
                 title={dict.approvalModes[approvalConfig.mode].shortDesc}
                 data-testid={`approval-mode-pill-${session.sessionId}`}
               >
@@ -747,23 +764,134 @@ export function Composer({
                 <span className="approval-label">{dict.approvalModes[approvalConfig.mode].label}</span>
               </button>
               {approvalMenuOpen && (
-                <div className="popover menu-up" style={{ width: 230 }} data-testid={`approval-menu-${session.sessionId}`}>
+                <div className="popover menu-up" style={{ width: 274 }} data-testid={`approval-menu-${session.sessionId}`}>
                   <div className="menu-label">{dict.approvalMenuTitle}</div>
-                  {APPROVAL_MODE_ORDER.map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      className={`menu-item ${approvalConfig.mode === mode ? 'is-checked' : ''}`}
-                      title={dict.approvalModes[mode].shortDesc}
-                      onClick={() => {
-                        setApprovalMenuOpen(false);
-                        void onCycleApprovalMode(mode).catch(reportError);
-                      }}
+                  {APPROVAL_MODE_ORDER.map((mode) => {
+                    const lockedHybrid = mode === 'hybrid' && !reviewerConnected;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`menu-item ${approvalConfig.mode === mode ? 'is-checked' : ''}`}
+                        title={
+                          lockedHybrid
+                            ? locale === 'zh-CN'
+                              ? '需先连接外部复核模型方可开启 AI 代审'
+                              : 'Connect an external reviewer first to enable AI review'
+                            : dict.approvalModes[mode].shortDesc
+                        }
+                        data-testid={`approval-menu-mode-${mode}-${session.sessionId}`}
+                        onClick={() => {
+                          if (lockedHybrid) {
+                            setShowConnectPrompt(true);
+                            return;
+                          }
+                          setShowConnectPrompt(false);
+                          setApprovalMenuOpen(false);
+                          void onCycleApprovalMode(mode).catch(reportError);
+                        }}
+                      >
+                        <span className="menu-check">{approvalConfig.mode === mode ? <Check size={13} /> : null}</span>
+                        <span style={{ fontWeight: 550 }}>{dict.approvalModes[mode].label}</span>
+                        {lockedHybrid && (
+                          <span
+                            className="muted"
+                            style={{ marginLeft: 'auto', fontSize: 10.5 }}
+                            data-testid={`approval-hybrid-unconnected-tag-${session.sessionId}`}
+                          >
+                            {locale === 'zh-CN' ? '未连接外部复核' : 'Not connected'}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+
+                  {showConnectPrompt && !reviewerConnected && (
+                    <div
+                      className="approval-connect-prompt"
+                      data-testid={`approval-connect-reviewer-prompt-${session.sessionId}`}
                     >
-                      <span className="menu-check">{approvalConfig.mode === mode ? <Check size={13} /> : null}</span>
-                      <span style={{ fontWeight: 550 }}>{dict.approvalModes[mode].label}</span>
-                    </button>
-                  ))}
+                      <span>
+                        {locale === 'zh-CN'
+                          ? '尚未连接外部复核模型，无法开启「AI 代审」；当前仅可使用基础规则机制（仅规则 / 人工审批）。'
+                          : 'Connect an external reviewer API first to enable AI review; only basic rules or manual mode are available.'}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ alignSelf: 'flex-start' }}
+                        onClick={() => {
+                          setShowConnectPrompt(false);
+                          setApprovalMenuOpen(false);
+                          if (onOpenExternalReviewerSettings) onOpenExternalReviewerSettings();
+                          else onOpenApprovalSettings();
+                        }}
+                        data-testid={`approval-goto-connect-btn-${session.sessionId}`}
+                      >
+                        {locale === 'zh-CN' ? '前往连接外部复核 →' : 'Connect External Reviewer →'}
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="menu-sep" />
+                  <div
+                    className="approval-usage-box"
+                    data-testid={`approval-menu-reviewer-usage-${session.sessionId}`}
+                  >
+                    <div className="approval-usage-row">
+                      <span style={{ fontWeight: 600 }}>
+                        {locale === 'zh-CN' ? '外部复核 API 用量' : 'Reviewer API Usage'}
+                      </span>
+                      <span className={`badge ${reviewerConnected ? 'badge-success' : ''}`} style={{ fontSize: 10, padding: '0 5px' }}>
+                        {reviewerConnected
+                          ? locale === 'zh-CN' ? '已连接' : 'Live'
+                          : locale === 'zh-CN' ? '未连接' : 'Off'}
+                      </span>
+                    </div>
+                    <div className="approval-usage-row">
+                      <span className="muted">{locale === 'zh-CN' ? '本会话' : 'Session'}</span>
+                      <span className="mono">
+                        {extSess ? `${extSess.callCount}× · ${formatTokenShort(extSess.totalTokens)} · ${formatUsd(extSess.totalCostUsd)}` : '0× · $0.00'}
+                      </span>
+                    </div>
+                    <div
+                      className="approval-usage-row"
+                      title={
+                        extCum && extCum.providerCount > 1
+                          ? locale === 'zh-CN'
+                            ? `已联合统计 ${extCum.providerCount} 个历史 API 服务商`
+                            : `Combined across ${extCum.providerCount} API providers`
+                          : undefined
+                      }
+                    >
+                      <span className="muted">
+                        {locale === 'zh-CN'
+                          ? `客户端累计${extCum && extCum.providerCount > 1 ? ` (${extCum.providerCount}商)` : ''}`
+                          : 'All-time'}
+                      </span>
+                      <span className="mono" style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>
+                        {extCum && extCum.callCount > 0
+                          ? `${extCum.callCount}× · ${formatTokenShort(extCum.totalTokens)} · ${formatUsd(extCum.totalCostUsd)}`
+                          : '0× · $0.00'}
+                      </span>
+                    </div>
+                    {onOpenReviewerStats && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ justifyContent: 'flex-start', padding: '2px 4px', marginTop: 2, fontSize: 11 }}
+                        onClick={() => {
+                          setShowConnectPrompt(false);
+                          setApprovalMenuOpen(false);
+                          onOpenReviewerStats();
+                        }}
+                        data-testid={`approval-open-reviewer-stats-btn-${session.sessionId}`}
+                      >
+                        {locale === 'zh-CN' ? '查看 24h / 7d / 30d 分布与明细 →' : 'View 24h / 7d / 30d stats →'}
+                      </button>
+                    )}
+                  </div>
+
                   {latestAudit && (
                     <>
                       <div className="menu-sep" />
@@ -777,6 +905,7 @@ export function Composer({
                     type="button"
                     className="menu-item"
                     onClick={() => {
+                      setShowConnectPrompt(false);
                       setApprovalMenuOpen(false);
                       onOpenApprovalSettings();
                     }}

@@ -36,6 +36,7 @@ import {
   type ApprovalAuditEntry,
   type ApproveForMeConfig,
   type ClientPreferences,
+  type ExternalReviewerTelemetrySnapshot,
   type GravityIconId,
   type McpActionInput,
   type ModelRateCard,
@@ -48,7 +49,7 @@ import { formatActionError, type SettingsSection } from '../i18n/locales';
 import { getDesktopBridge } from '../services/desktop-bridge';
 import { resolveGravityIconVariant } from '../styles/theme';
 import { IconsPanel, ThemesPanel, TokensPanel } from './settings/AppearancePanels';
-import { AccountsPanel, ApprovalsPanel, PluginsPanel, RatesPanel } from './settings/WorkspacePanels';
+import { AccountsPanel, ApprovalsPanel, PluginsPanel, RatesPanel, type ApprovalTab } from './settings/WorkspacePanels';
 import { ResizeHandle } from './ResizeHandle';
 
 export type { SettingsSection };
@@ -59,6 +60,9 @@ export interface SettingsViewProps {
   connection: AcpConnectionStatus;
   accounts: AccountsStateSnapshot;
   approvalConfig: ApproveForMeConfig;
+  approvalInitialTab?: ApprovalTab;
+  externalReviewerTelemetry?: ExternalReviewerTelemetrySnapshot;
+  currentSessionId?: string | null;
   auditEntries: ApprovalAuditEntry[];
   plugins: PluginsManagerSnapshot;
   rateCards: ModelRateCard[];
@@ -888,6 +892,9 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
         <ApprovalsPanel
           config={props.approvalConfig}
           auditEntries={props.auditEntries}
+          initialTab={props.approvalInitialTab}
+          externalReviewerTelemetry={props.externalReviewerTelemetry}
+          currentSessionId={props.currentSessionId}
           onUpdateConfig={props.onUpdateApprovalConfig}
         />
       );

@@ -79,6 +79,8 @@ export interface SessionPaneProps {
   onSubmitApproval: (submission: ApprovalDecisionSubmission) => Promise<void>;
   onCycleApprovalMode: (nextMode: ApprovalMode) => Promise<void>;
   onOpenApprovalSettings: () => void;
+  onOpenExternalReviewerSettings?: () => void;
+  onOpenReviewerStats?: (sessionId: string) => void;
   onOpenSwarmInspector: (sessionId: string) => void;
   onOpenContextInspector: (sessionId: string) => void;
   onInspectDiffFile: (sessionId: string, filePath: string) => void;
@@ -779,6 +781,7 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
         approvalConfig={props.approvalConfig}
         latestAudit={props.latestAudit}
         sessionTelemetry={telemetryDashboard.activeSessions[session.sessionId]}
+        externalReviewerTelemetry={telemetryDashboard.externalReviewer}
         canTriggerDemoApproval={props.canTriggerDemoApproval}
         autoFocus={isFocused && sessionApprovals.length === 0}
         quotes={sessionQuotes}
@@ -797,6 +800,8 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
         onQueryWorkspaceFiles={props.onQueryWorkspaceFiles}
         onCycleApprovalMode={props.onCycleApprovalMode}
         onOpenApprovalSettings={props.onOpenApprovalSettings}
+        onOpenExternalReviewerSettings={props.onOpenExternalReviewerSettings}
+        onOpenReviewerStats={props.onOpenReviewerStats ? () => props.onOpenReviewerStats!(session.sessionId) : undefined}
         onOpenContextInspector={() => props.onOpenContextInspector(session.sessionId)}
         onTriggerDemoApproval={props.onTriggerDemoApproval}
       />}

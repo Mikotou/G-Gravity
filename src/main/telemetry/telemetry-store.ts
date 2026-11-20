@@ -12,6 +12,11 @@ import type {
   AttachmentAuditItem,
   ContextCompactionRecord,
   ContextTokenBreakdown,
+  ExternalReviewerProviderBreakdownItem,
+  ExternalReviewerProviderId,
+  ExternalReviewerSessionSummary,
+  ExternalReviewerTelemetrySnapshot,
+  ExternalReviewerUsageRecordInput,
   FourDimTokenCounts,
   ModelCostBreakdownItem,
   ModelRateCard,
@@ -47,6 +52,86 @@ interface HourRecord extends FourDimTokenCounts {
   sessions: string[];
 }
 
+interface ExternalReviewerBucket extends FourDimTokenCounts {
+  provider: ExternalReviewerProviderId;
+  endpointHost: string;
+  modelId: string;
+  callCount: number;
+  approvedCount: number;
+  askCount: number;
+  denyCount: number;
+  errorCount: number;
+  directCostUsd: number;
+  hasDirectCost: boolean;
+  totalLatencyMs: number;
+}
+
+interface ExternalReviewerHourRecord extends ExternalReviewerBucket {
+  hourKey: string;
+  sessions: string[];
+}
+
+interface ExternalReviewerSessionBucketStore {
+  buckets: Map<string, ExternalReviewerBucket>;
+  updatedAt: string;
+}
+
+function extractSafeEndpointHost(endpoint: string, provider: ExternalReviewerProviderId): string {
+  try {
+    const parsed = new URL(endpoint);
+    return parsed.host || parsed.hostname || provider;
+  } catch {
+    return provider;
+  }
+}
+
+function isValidExtProvider(val: unknown): val is ExternalReviewerProviderId {
+  return val === 'gemini-api-key' || val === 'openai-compatible' || val === 'local-ollama';
+}
+
+function sanitizeExternalBucket(raw: unknown): ExternalReviewerBucket | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (!isValidExtProvider(r.provider) || typeof r.modelId !== 'string' || !r.modelId.trim()) return null;
+  const safeInt = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);
+  const safeFloat = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+  return {
+    provider: r.provider,
+    endpointHost: typeof r.endpointHost === 'string' && r.endpointHost.trim() ? r.endpointHost.trim() : r.provider,
+    modelId: r.modelId.trim(),
+    inputTokens: safeInt(r.inputTokens),
+    cachedInputTokens: safeInt(r.cachedInputTokens),
+    outputTokens: safeInt(r.outputTokens),
+    thinkingTokens: safeInt(r.thinkingTokens),
+    callCount: safeInt(r.callCount),
+    approvedCount: safeInt(r.approvedCount),
+    askCount: safeInt(r.askCount),
+    denyCount: safeInt(r.denyCount),
+    errorCount: safeInt(r.errorCount),
+    directCostUsd: safeFloat(r.directCostUsd),
+    hasDirectCost: Boolean(r.hasDirectCost),
+    totalLatencyMs: safeInt(r.totalLatencyMs),
+  };
+}
+
+function mergeExternalBucket(target: ExternalReviewerBucket, src: ExternalReviewerBucket): ExternalReviewerBucket {
+  return {
+    ...target,
+    inputTokens: target.inputTokens + src.inputTokens,
+    cachedInputTokens: target.cachedInputTokens + src.cachedInputTokens,
+    outputTokens: target.outputTokens + src.outputTokens,
+    thinkingTokens: target.thinkingTokens + src.thinkingTokens,
+    callCount: target.callCount + src.callCount,
+    approvedCount: target.approvedCount + src.approvedCount,
+    askCount: target.askCount + src.askCount,
+    denyCount: target.denyCount + src.denyCount,
+    errorCount: target.errorCount + src.errorCount,
+    directCostUsd: target.directCostUsd + src.directCostUsd,
+    hasDirectCost: target.hasDirectCost || src.hasDirectCost,
+    totalLatencyMs: target.totalLatencyMs + src.totalLatencyMs,
+  };
+}
+
 interface Turn {
   counts: FourDimTokenCounts;
   modelId: string;
@@ -77,6 +162,10 @@ export class TelemetryStore extends EventEmitter {
   private learnedModelLimits = new Map<string, number>();
   private compactionsBySession = new Map<string, ContextCompactionRecord[]>();
   private pendingCompaction = new Map<string, number>();
+  private extLedger = new Map<string, ExternalReviewerHourRecord>();
+  private extCumulative = new Map<string, ExternalReviewerBucket>();
+  private extBySession = new Map<string, ExternalReviewerSessionBucketStore>();
+  private extUpdatedAt = '';
   private rateCards: ModelRateCard[];
   private customRates: boolean;
   private timer?: NodeJS.Timeout;
@@ -112,6 +201,55 @@ export class TelemetryStore extends EventEmitter {
       for (const [sid, list] of Object.entries(savedCompactions)) {
         if (Array.isArray(list)) this.compactionsBySession.set(sid, list.slice(-50));
       }
+    }
+
+    const savedExtHours = options.store.read<ExternalReviewerHourRecord[]>('external-reviewer-hours.json', []);
+    for (const rawRec of Array.isArray(savedExtHours) ? savedExtHours : []) {
+      if (!rawRec || typeof rawRec.hourKey !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(rawRec.hourKey)) continue;
+      const clean = sanitizeExternalBucket(rawRec);
+      if (!clean) continue;
+      const sessions = Array.isArray(rawRec.sessions)
+        ? rawRec.sessions.filter((s): s is string => typeof s === 'string' && s.length > 0)
+        : [];
+      const bKey = `${clean.provider}\0${clean.endpointHost}\0${clean.modelId}`;
+      this.extLedger.set(`${rawRec.hourKey}\0${bKey}`, { ...clean, hourKey: rawRec.hourKey, sessions });
+    }
+
+    const savedExtTotals = options.store.read<{
+      cumulative?: Record<string, ExternalReviewerBucket>;
+      sessions?: Record<string, { buckets?: Record<string, ExternalReviewerBucket>; updatedAt?: string }>;
+      updatedAt?: string;
+    }>('external-reviewer-totals.json', {});
+    if (savedExtTotals?.cumulative && typeof savedExtTotals.cumulative === 'object') {
+      for (const rawBucket of Object.values(savedExtTotals.cumulative)) {
+        const clean = sanitizeExternalBucket(rawBucket);
+        if (!clean) continue;
+        const bKey = `${clean.provider}\0${clean.endpointHost}\0${clean.modelId}`;
+        const prev = this.extCumulative.get(bKey);
+        this.extCumulative.set(bKey, prev ? mergeExternalBucket(prev, clean) : clean);
+      }
+    }
+    if (savedExtTotals?.sessions && typeof savedExtTotals.sessions === 'object') {
+      for (const [sid, sessData] of Object.entries(savedExtTotals.sessions)) {
+        if (!sessData || typeof sessData !== 'object' || !sessData.buckets) continue;
+        const inner = new Map<string, ExternalReviewerBucket>();
+        for (const rawBucket of Object.values(sessData.buckets)) {
+          const clean = sanitizeExternalBucket(rawBucket);
+          if (!clean) continue;
+          const bKey = `${clean.provider}\0${clean.endpointHost}\0${clean.modelId}`;
+          const prev = inner.get(bKey);
+          inner.set(bKey, prev ? mergeExternalBucket(prev, clean) : clean);
+        }
+        if (inner.size > 0) {
+          this.extBySession.set(sid, {
+            buckets: inner,
+            updatedAt: typeof sessData.updatedAt === 'string' ? sessData.updatedAt : new Date(this.now()).toISOString(),
+          });
+        }
+      }
+    }
+    if (typeof savedExtTotals?.updatedAt === 'string') {
+      this.extUpdatedAt = savedExtTotals.updatedAt;
     }
 
     const savedSessions = options.store.read<{
@@ -681,7 +819,86 @@ export class TelemetryStore extends EventEmitter {
     this.sessionSpeedStats.delete(sessionId);
     this.reportedUsed.delete(sessionId);
     this.pendingCompaction.delete(sessionId);
+    this.extBySession.delete(sessionId);
     this.scheduleFlush();
+  }
+
+  /**
+   * 记录一次外部复核（AI 代审）API 调用的真实用量与结果，同步累加到：
+   * 1) 本客户端历史永久累计（跨所有历史 API Provider）；
+   * 2) 当前会话明细；
+   * 3) 24h / 7d / 30d UTC 小时分布账本。
+   */
+  recordExternalReviewUsage(input: ExternalReviewerUsageRecordInput): void {
+    if (!input || !isValidExtProvider(input.provider) || !input.modelId?.trim()) return;
+    const ts = typeof input.timestamp === 'number' && Number.isFinite(input.timestamp) ? input.timestamp : this.now();
+    const hourKey = this.hourKey(ts);
+    const endpointHost = extractSafeEndpointHost(input.endpoint || '', input.provider);
+    const modelId = input.modelId.trim();
+    const bKey = `${input.provider}\0${endpointHost}\0${modelId}`;
+
+    const safePos = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+    const directCost =
+      input.provider === 'local-ollama'
+        ? 0
+        : typeof input.usage?.directCostUsd === 'number' && Number.isFinite(input.usage.directCostUsd) && input.usage.directCostUsd >= 0
+          ? input.usage.directCostUsd
+          : undefined;
+
+    const delta: ExternalReviewerBucket = {
+      provider: input.provider,
+      endpointHost,
+      modelId,
+      inputTokens: safePos(input.usage?.inputTokens),
+      cachedInputTokens: safePos(input.usage?.cachedInputTokens),
+      outputTokens: safePos(input.usage?.outputTokens),
+      thinkingTokens: safePos(input.usage?.thinkingTokens),
+      callCount: 1,
+      approvedCount: input.outcome === 'approve' ? 1 : 0,
+      askCount: input.outcome === 'ask' ? 1 : 0,
+      denyCount: input.outcome === 'deny' ? 1 : 0,
+      errorCount: input.outcome === 'error' ? 1 : 0,
+      directCostUsd: directCost ?? 0,
+      hasDirectCost: directCost !== undefined,
+      totalLatencyMs: safePos(input.latencyMs),
+    };
+
+    // 1. 永久客户端累计（不因 30 天滚动窗口裁剪丢失）
+    const prevCum = this.extCumulative.get(bKey);
+    this.extCumulative.set(bKey, prevCum ? mergeExternalBucket(prevCum, delta) : { ...delta });
+
+    // 2. 当前会话明细
+    if (input.sessionId) {
+      const sessStore = this.extBySession.get(input.sessionId) || {
+        buckets: new Map<string, ExternalReviewerBucket>(),
+        updatedAt: new Date(ts).toISOString(),
+      };
+      const prevSess = sessStore.buckets.get(bKey);
+      sessStore.buckets.set(bKey, prevSess ? mergeExternalBucket(prevSess, delta) : { ...delta });
+      sessStore.updatedAt = new Date(ts).toISOString();
+      this.extBySession.set(input.sessionId, sessStore);
+    }
+
+    // 3. 小时级分布账本（驱动 24h / 7d / 30d 热力图与时段费用）
+    const hKey = `${hourKey}\0${bKey}`;
+    const prevHour = this.extLedger.get(hKey);
+    if (prevHour) {
+      const merged = mergeExternalBucket(prevHour, delta);
+      const sessions = prevHour.sessions.includes(input.sessionId) || !input.sessionId
+        ? prevHour.sessions
+        : [...prevHour.sessions, input.sessionId];
+      this.extLedger.set(hKey, { ...merged, hourKey, sessions });
+    } else {
+      this.extLedger.set(hKey, {
+        ...delta,
+        hourKey,
+        sessions: input.sessionId ? [input.sessionId] : [],
+      });
+    }
+
+    this.extUpdatedAt = new Date(ts).toISOString();
+    this.scheduleFlush();
+    this.emit('updated', this.snapshot());
   }
 
   private hourKey(time = this.now()): string {
@@ -792,6 +1009,245 @@ export class TelemetryStore extends EventEmitter {
     return { total: this.sumCosts(models), models, sessions };
   }
 
+  private externalBucketCost(bucket: ExternalReviewerBucket): TokenCostSummary {
+    if (bucket.provider === 'local-ollama') {
+      return calculateTokenCost(bucket, {
+        inputPerMillionUsd: 0,
+        cachedInputPerMillionUsd: 0,
+        outputPerMillionUsd: 0,
+        thinkingPerMillionUsd: 0,
+      });
+    }
+    const rate = resolveModelRateCard(bucket.modelId, this.rateCards);
+    const computed = calculateTokenCost(bucket, rate);
+    if (bucket.hasDirectCost && bucket.directCostUsd > 0) {
+      // 当 API Provider 直接返回账单费用时，总费用严格采用 Provider 汇报值，并按估算占比拆入四维展示
+      const ratio = computed.totalCostUsd > 0 ? bucket.directCostUsd / computed.totalCostUsd : 0;
+      if (ratio > 0) {
+        return {
+          ...computed,
+          inputCostUsd: computed.inputCostUsd * ratio,
+          cachedInputCostUsd: computed.cachedInputCostUsd * ratio,
+          outputCostUsd: computed.outputCostUsd * ratio,
+          thinkingCostUsd: computed.thinkingCostUsd * ratio,
+          totalCostUsd: bucket.directCostUsd,
+        };
+      }
+      return {
+        ...computed,
+        inputCostUsd: bucket.directCostUsd,
+        totalCostUsd: bucket.directCostUsd,
+      };
+    }
+    return computed;
+  }
+
+  private externalBreakdowns(buckets: Iterable<ExternalReviewerBucket>): {
+    total: TokenCostSummary & {
+      callCount: number;
+      approvedCount: number;
+      askCount: number;
+      denyCount: number;
+      errorCount: number;
+      totalLatencyMs: number;
+    };
+    items: ExternalReviewerProviderBreakdownItem[];
+  } {
+    const merged = new Map<string, ExternalReviewerBucket>();
+    for (const b of buckets) {
+      const bKey = `${b.provider}\0${b.endpointHost}\0${b.modelId}`;
+      const prev = merged.get(bKey);
+      merged.set(bKey, prev ? mergeExternalBucket(prev, b) : { ...b });
+    }
+    const rawItems = [...merged.values()].map((b) => {
+      const rate = resolveModelRateCard(b.modelId, this.rateCards);
+      const cost = this.externalBucketCost(b);
+      return {
+        key: `${b.provider}:${b.endpointHost}:${b.modelId}`,
+        provider: b.provider,
+        endpointHost: b.endpointHost,
+        modelId: b.modelId,
+        displayName: rate.modelId === 'default' && b.modelId !== 'default' ? b.modelId : rate.displayName,
+        ...cost,
+        callCount: b.callCount,
+        approvedCount: b.approvedCount,
+        askCount: b.askCount,
+        denyCount: b.denyCount,
+        errorCount: b.errorCount,
+        shareRatio: 0,
+      };
+    });
+    const totalCost = this.sumCosts(rawItems);
+    let callCount = 0;
+    let approvedCount = 0;
+    let askCount = 0;
+    let denyCount = 0;
+    let errorCount = 0;
+    let totalLatencyMs = 0;
+    for (const b of merged.values()) {
+      callCount += b.callCount;
+      approvedCount += b.approvedCount;
+      askCount += b.askCount;
+      denyCount += b.denyCount;
+      errorCount += b.errorCount;
+      totalLatencyMs += b.totalLatencyMs;
+    }
+    const items = rawItems
+      .map((item) => ({
+        ...item,
+        shareRatio:
+          totalCost.totalCostUsd > 0
+            ? item.totalCostUsd / totalCost.totalCostUsd
+            : totalCost.totalTokens > 0
+              ? item.totalTokens / totalCost.totalTokens
+              : callCount > 0
+                ? item.callCount / callCount
+                : 0,
+      }))
+      .sort((a, b) => b.totalCostUsd - a.totalCostUsd || b.totalTokens - a.totalTokens || b.callCount - a.callCount);
+
+    return {
+      total: { ...totalCost, callCount, approvedCount, askCount, denyCount, errorCount, totalLatencyMs },
+      items,
+    };
+  }
+
+  private buildExternalReviewerSnapshot(today: string, todayMs: number, hourMs: number): ExternalReviewerTelemetrySnapshot {
+    const extRecords = [...this.extLedger.values()];
+    const daily = (offset: number) => new Date(todayMs - offset * 86400000).toISOString().slice(0, 10);
+
+    const hourly24h = Array.from({ length: 24 }, (_, index) => {
+      const hourKey = this.hourKey(hourMs - (23 - index) * 3600000);
+      const { total } = this.externalBreakdowns(extRecords.filter((r) => r.hourKey === hourKey));
+      return {
+        hourKey,
+        hourLabel: `${hourKey.slice(-2)}:00`,
+        inputTokens: total.inputTokens,
+        cachedInputTokens: total.cachedInputTokens,
+        outputTokens: total.outputTokens,
+        thinkingTokens: total.thinkingTokens,
+        totalTokens: total.totalTokens,
+        costUsd: total.totalCostUsd,
+      };
+    });
+
+    const matrix7d = Array.from({ length: 168 }, (_, index) => {
+      const date = daily(6 - Math.floor(index / 24));
+      const hour = index % 24;
+      const key = `${date}T${String(hour).padStart(2, '0')}`;
+      const { total } = this.externalBreakdowns(extRecords.filter((r) => r.hourKey === key));
+      return {
+        date,
+        hour,
+        totalTokens: total.totalTokens,
+        costUsd: total.totalCostUsd,
+        intensity: intensity(total.totalTokens),
+      };
+    });
+
+    const calendar30d = Array.from({ length: 30 }, (_, index) => {
+      const date = daily(29 - index);
+      const matched = extRecords.filter((r) => r.hourKey.startsWith(date));
+      const { total } = this.externalBreakdowns(matched);
+      const sessions = new Set<string>();
+      for (const r of matched) r.sessions.forEach((id) => sessions.add(id));
+      return {
+        date,
+        inputTokens: total.inputTokens,
+        cachedInputTokens: total.cachedInputTokens,
+        outputTokens: total.outputTokens,
+        thinkingTokens: total.thinkingTokens,
+        totalTokens: total.totalTokens,
+        costUsd: total.totalCostUsd,
+        sessionCount: sessions.size,
+        intensity: intensity(total.totalTokens),
+      };
+    });
+
+    const ranges = { today, '7d': daily(6), '30d': daily(29) };
+    const costByRange = {} as ExternalReviewerTelemetrySnapshot['costByRange'];
+    const providerBreakdownByRange = {} as ExternalReviewerTelemetrySnapshot['providerBreakdownByRange'];
+    for (const scope of ['today', '7d', '30d'] as const) {
+      const matched = extRecords.filter(
+        (r) => r.hourKey >= `${ranges[scope]}T00` && r.hourKey <= this.hourKey()
+      );
+      const { total, items } = this.externalBreakdowns(matched);
+      costByRange[scope] = {
+        inputTokens: total.inputTokens,
+        cachedInputTokens: total.cachedInputTokens,
+        outputTokens: total.outputTokens,
+        thinkingTokens: total.thinkingTokens,
+        totalTokens: total.totalTokens,
+        inputCostUsd: total.inputCostUsd,
+        cachedInputCostUsd: total.cachedInputCostUsd,
+        outputCostUsd: total.outputCostUsd,
+        thinkingCostUsd: total.thinkingCostUsd,
+        totalCostUsd: total.totalCostUsd,
+        callCount: total.callCount,
+      };
+      providerBreakdownByRange[scope] = items;
+    }
+
+    const cumResult = this.externalBreakdowns(this.extCumulative.values());
+    const distinctProviders = new Set<string>();
+    for (const item of cumResult.items) distinctProviders.add(`${item.provider}:${item.endpointHost}`);
+
+    const bySession: Record<string, ExternalReviewerSessionSummary> = {};
+    for (const [sid, sessStore] of this.extBySession) {
+      const sRes = this.externalBreakdowns(sessStore.buckets.values());
+      bySession[sid] = {
+        sessionId: sid,
+        inputTokens: sRes.total.inputTokens,
+        cachedInputTokens: sRes.total.cachedInputTokens,
+        outputTokens: sRes.total.outputTokens,
+        thinkingTokens: sRes.total.thinkingTokens,
+        totalTokens: sRes.total.totalTokens,
+        inputCostUsd: sRes.total.inputCostUsd,
+        cachedInputCostUsd: sRes.total.cachedInputCostUsd,
+        outputCostUsd: sRes.total.outputCostUsd,
+        thinkingCostUsd: sRes.total.thinkingCostUsd,
+        totalCostUsd: sRes.total.totalCostUsd,
+        callCount: sRes.total.callCount,
+        approvedCount: sRes.total.approvedCount,
+        askCount: sRes.total.askCount,
+        denyCount: sRes.total.denyCount,
+        errorCount: sRes.total.errorCount,
+        avgLatencyMs: sRes.total.callCount > 0 ? Math.round(sRes.total.totalLatencyMs / sRes.total.callCount) : 0,
+        providers: sRes.items,
+        updatedAt: sessStore.updatedAt,
+      };
+    }
+
+    return {
+      cumulativeAllTime: {
+        inputTokens: cumResult.total.inputTokens,
+        cachedInputTokens: cumResult.total.cachedInputTokens,
+        outputTokens: cumResult.total.outputTokens,
+        thinkingTokens: cumResult.total.thinkingTokens,
+        totalTokens: cumResult.total.totalTokens,
+        inputCostUsd: cumResult.total.inputCostUsd,
+        cachedInputCostUsd: cumResult.total.cachedInputCostUsd,
+        outputCostUsd: cumResult.total.outputCostUsd,
+        thinkingCostUsd: cumResult.total.thinkingCostUsd,
+        totalCostUsd: cumResult.total.totalCostUsd,
+        callCount: cumResult.total.callCount,
+        approvedCount: cumResult.total.approvedCount,
+        askCount: cumResult.total.askCount,
+        denyCount: cumResult.total.denyCount,
+        errorCount: cumResult.total.errorCount,
+        providerCount: distinctProviders.size,
+      },
+      cumulativeProviders: cumResult.items,
+      bySession,
+      hourly24h,
+      matrix7d,
+      calendar30d,
+      costByRange,
+      providerBreakdownByRange,
+      updatedAt: this.extUpdatedAt || new Date(this.now()).toISOString(),
+    };
+  }
+
   /** 以 UTC 的日界和小时键建立 24 小时、7 天和 30 天视图。无活动的时间段也会生成图表格子。 */
   snapshot(): TelemetryDashboardSnapshot {
     const today = new Date(this.now()).toISOString().slice(0, 10);
@@ -855,6 +1311,7 @@ export class TelemetryStore extends EventEmitter {
       sessionModelBreakdowns: Object.fromEntries(
         [...this.sessionCounts].map(([id, counts]) => [id, this.modelBreakdowns(counts)])
       ),
+      externalReviewer: this.buildExternalReviewerSnapshot(today, todayMs, hourMs),
       rateCards: structuredClone(this.rateCards),
       pricingSource: this.customRates ? 'user-custom-rate' : 'reference-api-estimate',
       generatedAt: new Date(this.now()).toISOString(),
@@ -868,6 +1325,24 @@ export class TelemetryStore extends EventEmitter {
       if (record.hourKey < cutoff) this.ledger.delete(key);
     }
     this.options.store.write('token-hours.json', [...this.ledger.values()]);
+
+    for (const [key, record] of this.extLedger) {
+      if (record.hourKey < cutoff) this.extLedger.delete(key);
+    }
+    this.options.store.write('external-reviewer-hours.json', [...this.extLedger.values()]);
+
+    const serializedExtSessions: Record<string, { buckets: Record<string, ExternalReviewerBucket>; updatedAt: string }> = {};
+    for (const [sid, sessStore] of [...this.extBySession.entries()].slice(-300)) {
+      serializedExtSessions[sid] = {
+        buckets: Object.fromEntries(sessStore.buckets),
+        updatedAt: sessStore.updatedAt,
+      };
+    }
+    this.options.store.write('external-reviewer-totals.json', {
+      cumulative: Object.fromEntries(this.extCumulative),
+      sessions: serializedExtSessions,
+      updatedAt: this.extUpdatedAt || new Date(this.now()).toISOString(),
+    });
 
     const serializedCounts: Record<string, Record<string, FourDimTokenCounts>> = {};
     for (const [sid, inner] of this.sessionCounts) {

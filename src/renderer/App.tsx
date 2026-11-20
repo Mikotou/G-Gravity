@@ -7,6 +7,7 @@ import {
   DEFAULT_MODEL_RATE_CARDS,
   EXECUTION_MODE_ORDER,
   GRAVITY_BUILTIN_CAPABILITIES,
+  isExternalReviewerConnected,
   MAX_PARALLEL_ACTIVE_SESSIONS, placeSession, workspaceSlots, withoutSession,
   TITLE_ORGANIZE_MODEL_LABEL,
   TITLE_ORGANIZE_RATE_LIMIT,
@@ -50,8 +51,10 @@ import type { SessionAction } from '../shared/session-contract';
 import { ProjectSidebar } from './components/ProjectSidebar';
 import { ImportedHistoryPane } from './components/ReadOnlyHistoryView';
 import { RightInspector } from './components/RightInspector';
+import type { ContextInspectorViewMode } from './components/ContextCostInspectorView';
 import { SessionWorkspaceGrid } from './components/SessionWorkspaceGrid';
 import { SettingsView, type SettingsSection } from './components/SettingsView';
+import type { ApprovalTab } from './components/settings/WorkspacePanels';
 import { TitleOrganizerModal } from './components/TitleOrganizerModal';
 import { TopBar } from './components/TopBar';
 import { I18nProvider } from './i18n/I18nContext';
@@ -137,7 +140,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     acpIdentity: { connected: false, authMethods: [], supportsLogout: false },
   });
   const [approvalConfig, setApprovalConfig] = useState<ApproveForMeConfig>({
-    mode: 'hybrid',
+    mode: 'rules-only',
     enableSafeDownloadAutoApprove: true,
     maxDownloadSizeMB: 20,
     cacheTtlHours: 24,
@@ -200,6 +203,8 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
   // 覆盖层
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(reopenAccounts ? 'accounts' : null);
+  const [approvalSettingsTab, setApprovalSettingsTab] = useState<ApprovalTab>('rules');
+  const [contextInspectorViewMode, setContextInspectorViewMode] = useState<ContextInspectorViewMode>('context');
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [organizeOpen, setOrganizeOpen] = useState(false);
   const [organizeResult, setOrganizeResult] = useState<TitleOrganizeResult | null>(null);
@@ -479,15 +484,30 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     [replaceSession]
   );
 
+  const openApprovalSettings = useCallback((initialTab: ApprovalTab = 'rules') => {
+    setApprovalSettingsTab(initialTab);
+    setSettingsSection('approvals');
+  }, []);
+
   const handleSetApprovalMode = useCallback(
     async (mode: ApprovalMode) => {
+      if (mode === 'hybrid' && !isExternalReviewerConnected(approvalConfig.externalReviewer)) {
+        showToast(
+          preferences.locale === 'zh-CN'
+            ? '尚未连接外部复核模型，无法开启「AI 代审」，请先前往「外部复核」完成连接'
+            : 'Connect an external reviewer API first to enable AI Review mode',
+          'error'
+        );
+        openApprovalSettings('reviewer');
+        return;
+      }
       try {
         setApprovalConfig(await getDesktopBridge().setApprovalMode(mode));
       } catch (err) {
         reportError(err);
       }
     },
-    [reportError]
+    [approvalConfig.externalReviewer, openApprovalSettings, preferences.locale, reportError, showToast]
   );
 
   const layoutRef = useRef(layout);
@@ -763,17 +783,30 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       // 先等待主进程接受决定，再同步托管模式和审计列表。待审卡片本身由审批结束事件移除。
       await bridge.submitApprovalDecision(submission);
       if (submission.decision === 'approve_for_me_ai') {
-        setApprovalConfig((prev) => (prev.mode === 'hybrid' ? prev : { ...prev, mode: 'hybrid' }));
+        const connected = isExternalReviewerConnected(approvalConfig.externalReviewer);
+        setApprovalConfig((prev) =>
+          connected
+            ? prev.mode === 'hybrid'
+              ? prev
+              : { ...prev, mode: 'hybrid' }
+            : prev.mode === 'rules-only'
+              ? prev
+              : { ...prev, mode: 'rules-only' }
+        );
         showToast(
-          preferences.locale === 'zh-CN'
-            ? '已放行本次操作，并开启本会话 Approve for me 智能批量代审'
-            : 'Approved and enabled Approve for me smart batch review',
-          'success'
+          connected
+            ? preferences.locale === 'zh-CN'
+              ? '已放行本次操作，并开启 AI 代审外部复核托管'
+              : 'Approved and enabled AI external review'
+            : preferences.locale === 'zh-CN'
+              ? '已放行本次操作并切换至基础「仅规则」模式；连接外部复核后可开启「AI 代审」'
+              : 'Approved and switched to basic rules-only mode; connect external reviewer for AI review',
+          connected ? 'success' : 'info'
         );
       }
       setAuditEntries(await bridge.listApprovalAudit(50));
     },
-    [preferences.locale, showToast]
+    [approvalConfig.externalReviewer, preferences.locale, showToast]
   );
   const handleUpdateApprovalConfig = useCallback(async (patch: Partial<ApproveForMeConfig>) => {
     setApprovalConfig(await getDesktopBridge().updateApprovalConfig(patch));
@@ -957,8 +990,11 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
             reportError
           );
         } else {
-          const idx = APPROVAL_MODE_ORDER.indexOf(approvalConfig.mode);
-          void handleSetApprovalMode(APPROVAL_MODE_ORDER[(idx + 1) % APPROVAL_MODE_ORDER.length]);
+          const allowedModes = isExternalReviewerConnected(approvalConfig.externalReviewer)
+            ? APPROVAL_MODE_ORDER
+            : APPROVAL_MODE_ORDER.filter((m) => m !== 'hybrid');
+          const idx = allowedModes.indexOf(approvalConfig.mode);
+          void handleSetApprovalMode(allowedModes[(idx + 1) % allowedModes.length]);
         }
       }
     }
@@ -1126,9 +1162,17 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
               onQueryWorkspaceFiles={handleQueryFiles}
               onSubmitApproval={handleSubmitApproval}
               onCycleApprovalMode={handleSetApprovalMode}
-              onOpenApprovalSettings={() => setSettingsSection('approvals')}
+              onOpenApprovalSettings={() => openApprovalSettings('rules')}
+              onOpenExternalReviewerSettings={() => openApprovalSettings('reviewer')}
+              onOpenReviewerStats={(id) => {
+                setContextInspectorViewMode('reviewer');
+                openInspectorAt(id, 'context');
+              }}
               onOpenSwarmInspector={(id) => openInspectorAt(id, 'swarm')}
-              onOpenContextInspector={(id) => openInspectorAt(id, 'context')}
+              onOpenContextInspector={(id) => {
+                setContextInspectorViewMode('context');
+                openInspectorAt(id, 'context');
+              }}
               onInspectDiffFile={(id, fp) => openInspectorAt(id, 'diff', fp)}
               onTriggerDemoApproval={handleTriggerDemoApproval}
             />
@@ -1141,6 +1185,10 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           width={layout.rightInspectorWidth}
           floating={layout.inspectorFloating}
           activeTab={layout.activeInspectorTab}
+          contextViewMode={contextInspectorViewMode}
+          onChangeContextViewMode={setContextInspectorViewMode}
+          reviewerConnected={isExternalReviewerConnected(approvalConfig.externalReviewer)}
+          onOpenExternalReviewerSettings={() => openApprovalSettings('reviewer')}
           focusedDiffFile={focusedDiffFile}
           sessionId={stageSessionId}
           inspectorData={stageSessionId ? inspectorBySession[stageSessionId] : undefined}
@@ -1163,6 +1211,9 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
             connection={connection}
             accounts={accounts}
             approvalConfig={approvalConfig}
+            approvalInitialTab={approvalSettingsTab}
+            externalReviewerTelemetry={telemetry.externalReviewer}
+            currentSessionId={stageSessionId}
             auditEntries={auditEntries}
             plugins={pluginsSnap}
             rateCards={telemetry.rateCards}

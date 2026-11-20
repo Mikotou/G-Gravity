@@ -1,9 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Info, Minimize2, Paperclip, Settings2 } from 'lucide-react';
+import { ArrowRight, Info, Minimize2, Paperclip, Settings2, ShieldCheck } from 'lucide-react';
 import {
   COST_DISCLAIMER,
+  formatExternalReviewerProviderLabel,
   resolveModelCompactionLimit,
   type CostTimeScope,
+  type ExternalReviewerCostScope,
+  type ExternalReviewerProviderBreakdownItem,
+  type ExternalReviewerTelemetrySnapshot,
   type ModelCostBreakdownItem,
   type SessionContextTelemetry,
   type TelemetryDashboardSnapshot,
@@ -13,9 +17,15 @@ import {
 import { useI18n } from '../i18n/I18nContext';
 import { formatTokenShort, formatUsd } from './ContextStatusBar';
 
+export type ContextInspectorViewMode = 'context' | 'reviewer';
+
 export interface ContextCostInspectorViewProps {
   sessionId: string | null;
   dashboard: TelemetryDashboardSnapshot;
+  viewMode?: ContextInspectorViewMode;
+  onChangeViewMode?: (mode: ContextInspectorViewMode) => void;
+  reviewerConnected?: boolean;
+  onOpenExternalReviewerSettings?: () => void;
   onOpenRateCardsSettings: () => void;
 }
 
@@ -105,18 +115,24 @@ function ContextUsageMiniRing({
   );
 }
 
-function Donut({ items }: { items: ModelCostBreakdownItem[] }): React.ReactElement {
+function Donut({
+  items,
+  testId = 'cost-donut-svg',
+}: {
+  items: Array<{ key?: string; modelId: string; shareRatio: number }>;
+  testId?: string;
+}): React.ReactElement {
   const r = 34;
   const c = 2 * Math.PI * r;
   let offset = 0;
   return (
-    <svg width="92" height="92" viewBox="0 0 92 92" data-testid="cost-donut-svg" style={{ flexShrink: 0 }}>
+    <svg width="92" height="92" viewBox="0 0 92 92" data-testid={testId} style={{ flexShrink: 0 }}>
       <circle cx="46" cy="46" r={r} fill="none" strokeWidth="11" style={{ stroke: 'var(--bg-code)' }} />
       {items.map((m, idx) => {
         const len = Math.max(0, m.shareRatio) * c;
         const el = (
           <circle
-            key={m.modelId}
+            key={m.key || m.modelId}
             cx="46"
             cy="46"
             r={r}
@@ -138,6 +154,483 @@ function Donut({ items }: { items: ModelCostBreakdownItem[] }): React.ReactEleme
   );
 }
 
+const EMPTY_EXT_REVIEWER: ExternalReviewerTelemetrySnapshot = {
+  cumulativeAllTime: {
+    ...ZERO,
+    callCount: 0,
+    approvedCount: 0,
+    askCount: 0,
+    denyCount: 0,
+    errorCount: 0,
+    providerCount: 0,
+  },
+  cumulativeProviders: [],
+  bySession: {},
+  hourly24h: [],
+  matrix7d: [],
+  calendar30d: [],
+  costByRange: {
+    today: { ...ZERO, callCount: 0 },
+    '7d': { ...ZERO, callCount: 0 },
+    '30d': { ...ZERO, callCount: 0 },
+  },
+  providerBreakdownByRange: {
+    today: [],
+    '7d': [],
+    '30d': [],
+  },
+  updatedAt: '',
+};
+
+function ExternalReviewerStatsView({
+  sessionId,
+  ext,
+  reviewerConnected,
+  onOpenExternalReviewerSettings,
+  onOpenRateCardsSettings,
+}: {
+  sessionId: string | null;
+  ext: ExternalReviewerTelemetrySnapshot;
+  reviewerConnected?: boolean;
+  onOpenExternalReviewerSettings?: () => void;
+  onOpenRateCardsSettings: () => void;
+}): React.ReactElement {
+  const { locale, dict } = useI18n();
+  const isZh = locale === 'zh-CN';
+  const [range, setRange] = useState<TokenHeatmapRange>('24h');
+  const [scope, setScope] = useState<ExternalReviewerCostScope>('all');
+  const [hover, setHover] = useState('');
+
+  const sessionStats = sessionId ? ext.bySession[sessionId] : undefined;
+  const cum = ext.cumulativeAllTime;
+
+  const cost: TokenCostSummary & { callCount: number } = useMemo(() => {
+    if (scope === 'session') {
+      return sessionStats
+        ? { ...sessionStats, callCount: sessionStats.callCount }
+        : { ...ZERO, callCount: 0 };
+    }
+    if (scope === 'all') {
+      return { ...cum, callCount: cum.callCount };
+    }
+    return ext.costByRange[scope] ?? { ...ZERO, callCount: 0 };
+  }, [cum, ext.costByRange, scope, sessionStats]);
+
+  const providers: ExternalReviewerProviderBreakdownItem[] = useMemo(() => {
+    const raw =
+      scope === 'session'
+        ? sessionStats?.providers ?? []
+        : scope === 'all'
+          ? ext.cumulativeProviders
+          : ext.providerBreakdownByRange[scope] ?? [];
+    return [...raw].sort(
+      (a, b) => b.totalCostUsd - a.totalCostUsd || b.totalTokens - a.totalTokens || b.callCount - a.callCount
+    );
+  }, [ext.cumulativeProviders, ext.providerBreakdownByRange, scope, sessionStats]);
+
+  const rows7d = useMemo(() => {
+    const map = new Map<string, typeof ext.matrix7d>();
+    for (const cell of ext.matrix7d) {
+      const list = map.get(cell.date) ?? [];
+      list.push(cell);
+      map.set(cell.date, list);
+    }
+    return Array.from(map.entries());
+  }, [ext.matrix7d]);
+
+  const max24Tokens = Math.max(0, ...ext.hourly24h.map((b) => b.totalTokens));
+  const max24Scale = Math.max(1, max24Tokens);
+  const max24CostUsd = Math.max(0, ...ext.hourly24h.map((b) => b.costUsd));
+  const max7dRowCost = useMemo(() => {
+    let m = 0;
+    for (const [, cells] of rows7d) {
+      const sum = cells.reduce((acc, c) => acc + c.costUsd, 0);
+      if (sum > m) m = sum;
+    }
+    return m;
+  }, [rows7d]);
+
+  const rangeTotal =
+    range === '24h'
+      ? ext.hourly24h.reduce((acc, b) => acc + b.totalTokens, 0)
+      : range === '7d'
+        ? ext.matrix7d.reduce((acc, b) => acc + b.totalTokens, 0)
+        : ext.calendar30d.reduce((acc, b) => acc + b.totalTokens, 0);
+
+  const rangeCostUsd =
+    range === '24h'
+      ? ext.hourly24h.reduce((acc, b) => acc + b.costUsd, 0)
+      : range === '7d'
+        ? ext.matrix7d.reduce((acc, b) => acc + b.costUsd, 0)
+        : ext.calendar30d.reduce((acc, b) => acc + b.costUsd, 0);
+
+  const sortedDims = useMemo(() => {
+    const raw = [
+      { key: 'input', label: dict.costDimInput, usd: cost.inputCostUsd, tokens: cost.inputTokens, c: DIM_COLORS.input },
+      { key: 'cached', label: dict.costDimCached, usd: cost.cachedInputCostUsd, tokens: cost.cachedInputTokens, c: DIM_COLORS.cached },
+      { key: 'output', label: dict.costDimOutput, usd: cost.outputCostUsd, tokens: cost.outputTokens, c: DIM_COLORS.output },
+      { key: 'thinking', label: dict.costDimThinking, usd: cost.thinkingCostUsd, tokens: cost.thinkingTokens, c: DIM_COLORS.thinking },
+    ];
+    return raw.sort((a, b) => b.usd - a.usd || b.tokens - a.tokens);
+  }, [cost, dict]);
+
+  const costBarReferenceCap = Math.max(0.01, cost.totalCostUsd * 1.25);
+  const providerBarReferenceCap = Math.max(
+    0.01,
+    cost.totalCostUsd > 0
+      ? cost.totalCostUsd * 1.15
+      : Math.max(0.01, ...providers.map((m) => m.totalCostUsd * 1.25))
+  );
+
+  const verdictTotal = Math.max(1, cum.callCount);
+  const verdicts = [
+    { key: 'approve', label: isZh ? 'AI 放行' : 'Approved', count: cum.approvedCount, c: 'var(--status-success)' },
+    { key: 'ask', label: isZh ? '转人工' : 'Asked', count: cum.askCount, c: 'var(--status-warning)' },
+    { key: 'deny', label: isZh ? '建议拒绝' : 'Denied', count: cum.denyCount, c: 'var(--status-danger)' },
+    { key: 'error', label: isZh ? '异常/超时' : 'Error', count: cum.errorCount, c: '#94a3b8' },
+  ];
+
+  const scopeLabels: Record<ExternalReviewerCostScope, string> = isZh
+    ? { session: '本会话', today: '今日', '7d': '7d', '30d': '30d', all: '累计' }
+    : { session: 'Session', today: 'Today', '7d': '7d', '30d': '30d', all: 'All' };
+
+  return (
+    <div className="inspector-stack" data-testid="external-reviewer-telemetry-view">
+      {/* 1. 外部复核总览：客户端累计（全 API Provider 联合） vs 当前会话 */}
+      <section className="card" data-testid="reviewer-overview-card">
+        <div className="card-head">
+          <span className="card-title">{isZh ? '外部复核 API 用量' : 'External Reviewer API'}</span>
+          {onOpenExternalReviewerSettings ? (
+            <button
+              type="button"
+              className={`badge ${reviewerConnected ? 'badge-success' : 'badge-warning'}`}
+              style={{ cursor: 'pointer', border: 0 }}
+              onClick={onOpenExternalReviewerSettings}
+              data-testid="reviewer-status-shortcut-btn"
+            >
+              <ShieldCheck size={11} />
+              <span>
+                {reviewerConnected
+                  ? isZh ? '已连接' : 'Connected'
+                  : isZh ? '未连接 · 去配置' : 'Not connected'}
+              </span>
+            </button>
+          ) : null}
+        </div>
+
+        <div className="ctx-session-metrics">
+          <div className="ctx-metric-tile" data-testid="reviewer-alltime-summary">
+            <span className="ctx-metric-label">{isZh ? '客户端累计（全服务商）' : 'Client All-Time'}</span>
+            <strong className="ctx-metric-val mono" style={{ color: 'var(--accent-primary)' }}>
+              {formatUsd(cum.totalCostUsd)}
+            </strong>
+            <span className="stat-sub" style={{ fontSize: 11 }}>
+              {formatTokenShort(cum.totalTokens)} tok · {cum.callCount}
+              {isZh ? ` 次 · ${cum.providerCount} 个服务商` : ` calls · ${cum.providerCount} providers`}
+            </span>
+          </div>
+          <div className="ctx-metric-tile" data-testid="reviewer-session-summary">
+            <span className="ctx-metric-label">{isZh ? '当前会话消耗' : 'Current Session'}</span>
+            <strong className="ctx-metric-val mono">
+              {formatUsd(sessionStats?.totalCostUsd ?? 0)}
+            </strong>
+            <span className="stat-sub" style={{ fontSize: 11 }}>
+              {sessionStats
+                ? `${formatTokenShort(sessionStats.totalTokens)} tok · ${sessionStats.callCount}${isZh ? ' 次' : ' calls'}${sessionStats.avgLatencyMs ? ` · ${sessionStats.avgLatencyMs}ms` : ''}`
+                : isZh
+                  ? '本会话暂无调用'
+                  : 'No calls in session'}
+            </span>
+          </div>
+        </div>
+
+        <div className="stack-bar stack-bar-unused-bg" data-testid="reviewer-verdict-bar">
+          {verdicts
+            .filter((v) => v.count > 0)
+            .map((v) => (
+              <span
+                key={v.key}
+                style={{ width: `${(v.count / verdictTotal) * 100}%`, background: v.c }}
+                title={`${v.label}: ${v.count}`}
+              />
+            ))}
+        </div>
+        <div className="legend">
+          {verdicts.map((v) => (
+            <div key={v.key} className="legend-item">
+              <span className="legend-swatch" style={{ background: v.c }} />
+              <span className="legend-label truncate">{v.label}</span>
+              <span className="legend-val">{v.count}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* 2. 外部复核 Token 用量分布（24h / 7d / 30d） */}
+      <section className="card" data-testid="reviewer-heatmap-section">
+        <div className="card-head">
+          <span className="card-title">{isZh ? '复核 Token 分布' : 'Reviewer Token Usage'}</span>
+          <div className="segmented segmented-sm">
+            {(['24h', '7d', '30d'] as const).map((r) => (
+              <button
+                key={r}
+                type="button"
+                className={`segmented-btn ${range === r ? 'is-active' : ''}`}
+                onClick={() => setRange(r)}
+                data-testid={`reviewer-heatmap-range-${r}`}
+              >
+                {dict.heatmapRanges[r]}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span className="stat-big" style={{ fontSize: 17 }}>{formatTokenShort(rangeTotal)}</span>
+          <span className="stat-sub">Tokens</span>
+          <span className="stat-sub mono" style={{ marginLeft: 'auto' }}>
+            {formatUsd(rangeCostUsd)}
+          </span>
+        </div>
+
+        {range === '24h' && (
+          <>
+            <div className="hm-chart-with-scale">
+              <div className="hm-y-scale">
+                <span>{max24CostUsd > 0 ? formatUsd(max24CostUsd) : formatTokenShort(max24Tokens)}</span>
+                <span>{max24CostUsd > 0 ? formatUsd(max24CostUsd / 2) : formatTokenShort(Math.round(max24Tokens / 2))}</span>
+                <span>{max24CostUsd > 0 ? '$0' : '0'}</span>
+              </div>
+              <div className="hm-bars-stage">
+                <div className="hm-grid-lines" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+                <div className="hm-bars" data-testid="reviewer-heatmap-24h-bars">
+                  {ext.hourly24h.map((b) => {
+                    const ratio = b.totalTokens / max24Scale;
+                    const tier = computeBarTier(ratio, b.totalTokens > 0);
+                    return (
+                      <div
+                        key={b.hourKey}
+                        className={`hm-bar ${b.totalTokens > 0 ? `has-data tier-${tier}` : ''}`}
+                        style={{ height: `${b.totalTokens > 0 ? Math.max(8, Math.round(ratio * 100)) : 4}%` }}
+                        onMouseEnter={() =>
+                          setHover(`${b.hourLabel} · ${formatTokenShort(b.totalTokens)} Tokens · ${formatUsd(b.costUsd)}`)
+                        }
+                        title={`${b.hourLabel}: ${formatTokenShort(b.totalTokens)} (${formatUsd(b.costUsd)})`}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+            <div className="hm-axis hm-axis-indented">
+              <span>{ext.hourly24h[0]?.hourLabel ?? ''}</span>
+              <span>{ext.hourly24h[12]?.hourLabel ?? ''}</span>
+              <span>{ext.hourly24h[ext.hourly24h.length - 1]?.hourLabel ?? ''}</span>
+            </div>
+          </>
+        )}
+
+        {range === '7d' && (
+          <div className="hm-matrix" data-testid="reviewer-heatmap-7d-matrix">
+            {rows7d.map(([date, cells]) => {
+              const rowCost = cells.reduce((acc, c) => acc + c.costUsd, 0);
+              return (
+                <div key={date} className="heatmap-7d-matrix heatmap-7d-with-cost">
+                  <span className="hm-row-label" title={`${date} ${formatUsd(rowCost)}`}>
+                    <span>{date.slice(5)}</span>
+                    <em className="hm-row-cost">{rowCost > 0 ? formatUsd(rowCost) : max7dRowCost > 0 ? '$0' : ''}</em>
+                  </span>
+                  {cells.map((cell) => (
+                    <div
+                      key={`${cell.date}-${cell.hour}`}
+                      className={`heatmap-cell i-${cell.intensity}`}
+                      onMouseEnter={() =>
+                        setHover(
+                          `${cell.date} ${String(cell.hour).padStart(2, '0')}:00 · ${formatTokenShort(cell.totalTokens)} · ${formatUsd(cell.costUsd)}`
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {range === '30d' && (
+          <div className="hm-30d-with-scale">
+            <div className="hm-y-scale hm-y-scale-compact">
+              <span>{formatUsd(Math.max(0, ...ext.calendar30d.map((d) => d.costUsd)))}</span>
+              <span>$0</span>
+            </div>
+            <div className="hm-calendar" data-testid="reviewer-heatmap-30d-calendar" style={{ flex: 1 }}>
+              {ext.calendar30d.map((day) => (
+                <div
+                  key={day.date}
+                  className={`heatmap-cell i-${day.intensity}`}
+                  onMouseEnter={() =>
+                    setHover(
+                      `${day.date} · ${formatTokenShort(day.totalTokens)} Tokens · ${day.sessionCount} threads · ${formatUsd(day.costUsd)}`
+                    )
+                  }
+                  title={`${day.date}: ${formatUsd(day.costUsd)}`}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="hm-hover truncate">{hover}</span>
+          <span className="spacer" />
+          <span className="hm-legend">
+            <span>{dict.heatmapLess}</span>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <span key={i} className={`heatmap-cell i-${i}`} />
+            ))}
+            <span>{dict.heatmapMore}</span>
+          </span>
+        </div>
+      </section>
+
+      {/* 3. 外部复核多 Provider 联合费用构成 */}
+      <section className="card" data-testid="reviewer-cost-section">
+        <div className="card-head">
+          <span className="card-title">{isZh ? '复核 API 花费' : 'Reviewer API Cost'}</span>
+          <div className="segmented segmented-sm">
+            {(['session', 'today', '7d', '30d', 'all'] as const).map((sc) => (
+              <button
+                key={sc}
+                type="button"
+                className={`segmented-btn ${scope === sc ? 'is-active' : ''}`}
+                onClick={() => setScope(sc)}
+                data-testid={`reviewer-cost-scope-${sc}`}
+              >
+                {scopeLabels[sc]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span className="stat-big" style={{ color: 'var(--accent-primary)' }} data-testid="reviewer-cost-total-usd">
+            {formatUsd(cost.totalCostUsd)}
+          </span>
+          <span className="stat-sub">
+            {formatTokenShort(cost.totalTokens)} Tokens · {cost.callCount}
+            {isZh ? ' 次' : ' calls'}
+          </span>
+        </div>
+
+        <div className="stack-bar stack-bar-unused-bg">
+          {sortedDims
+            .filter((d) => d.usd > 0)
+            .map((d) => (
+              <span
+                key={d.key}
+                style={{ width: `${Math.min(100, (d.usd / costBarReferenceCap) * 100)}%`, background: d.c }}
+                title={`${d.label}: ${formatUsd(d.usd)}`}
+              />
+            ))}
+        </div>
+
+        <div className="cost-grid">
+          {sortedDims.map((d) => (
+            <div key={d.key} className="cost-cell" title={`${formatTokenShort(d.tokens)} Tokens`}>
+              <span className="cost-cell-label">
+                <span className="legend-swatch" style={{ background: d.c }} />
+                {d.label}
+              </span>
+              <span className="cost-cell-val">{formatUsd(d.usd)}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="sub-head">{isZh ? '多 API 服务商 / 模型费用构成' : 'Provider & Model Breakdown'}</div>
+        {providers.length === 0 ? (
+          <div className="stat-sub">{isZh ? '暂无外部复核 API 调用记录' : 'No external reviewer API calls yet'}</div>
+        ) : (
+          <div className="model-bars" data-testid="reviewer-provider-breakdown">
+            {providers.map((item) => {
+              const scale = 100 / providerBarReferenceCap;
+              const segs = [
+                { key: 'input', usd: item.inputCostUsd, c: DIM_COLORS.input },
+                { key: 'cached', usd: item.cachedInputCostUsd, c: DIM_COLORS.cached },
+                { key: 'output', usd: item.outputCostUsd, c: DIM_COLORS.output },
+                { key: 'thinking', usd: item.thinkingCostUsd, c: DIM_COLORS.thinking },
+              ]
+                .filter((s) => s.usd > 0)
+                .sort((a, b) => b.usd - a.usd);
+              const providerLabel = formatExternalReviewerProviderLabel(item.provider, locale);
+
+              return (
+                <div key={item.key} className="model-bar-row">
+                  <div className="model-bar-head">
+                    <span className="badge badge-mono" style={{ fontSize: 10, padding: '0 5px' }}>
+                      {providerLabel}
+                    </span>
+                    <span className="mono truncate" title={`${providerLabel} · ${item.modelId} (${item.endpointHost})`}>
+                      {item.modelId}
+                    </span>
+                    <span className="spacer" />
+                    <span className="muted mono" style={{ fontSize: 11 }}>
+                      {item.callCount}×
+                    </span>
+                    <span className="mono">{formatUsd(item.totalCostUsd)}</span>
+                  </div>
+                  <div className="model-bar-track stack-bar-unused-bg">
+                    {segs.map((seg) => (
+                      <span
+                        key={seg.key}
+                        style={{ width: `${Math.min(100, seg.usd * scale)}%`, background: seg.c }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {providers.length > 0 && (
+          <>
+            <div className="sub-head">{isZh ? '服务商 / 模型占比' : 'Provider Share'}</div>
+            <div className="donut-wrap">
+              <Donut items={providers} testId="reviewer-cost-donut-svg" />
+              <div className="legend" style={{ gridTemplateColumns: '1fr', flex: 1 }}>
+                {providers.map((item, idx) => (
+                  <div key={item.key} className="legend-item">
+                    <span className="legend-swatch" style={{ background: MODEL_COLORS[idx % MODEL_COLORS.length] }} />
+                    <span className="legend-label truncate mono" title={`${formatExternalReviewerProviderLabel(item.provider, locale)} · ${item.modelId}`}>
+                      {item.modelId}
+                    </span>
+                    <span className="legend-val">{(item.shareRatio * 100).toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="disclaimer">
+            <Info size={11} />
+            {isZh ? '数据来自各 API Provider 返回用量，按模型单价累计估算' : 'Aggregated from API provider usage metadata across all configured providers'}
+          </span>
+          <span className="spacer" />
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenRateCardsSettings}>
+            <Settings2 size={12} />
+            <span>{dict.editRateCardsBtn}</span>
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function computeBarTier(ratio: number, hasData: boolean): 0 | 1 | 2 | 3 | 4 {
   if (!hasData || ratio <= 0) return 0;
   if (ratio < 0.22) return 1;
@@ -149,12 +642,23 @@ function computeBarTier(ratio: number, hasData: boolean): 0 | 1 | 2 | 3 | 4 {
 export function ContextCostInspectorView({
   sessionId,
   dashboard,
+  viewMode: controlledViewMode,
+  onChangeViewMode,
+  reviewerConnected,
+  onOpenExternalReviewerSettings,
   onOpenRateCardsSettings,
 }: ContextCostInspectorViewProps): React.ReactElement {
   const { locale, dict } = useI18n();
+  const [internalViewMode, setInternalViewMode] = useState<ContextInspectorViewMode>('context');
+  const activeView = controlledViewMode ?? internalViewMode;
+  const setActiveView = (next: ContextInspectorViewMode) => {
+    setInternalViewMode(next);
+    onChangeViewMode?.(next);
+  };
   const [range, setRange] = useState<TokenHeatmapRange>('24h');
   const [scope, setScope] = useState<CostTimeScope>(sessionId ? 'session' : 'today');
   const [hover, setHover] = useState('');
+  const extSnap = dashboard.externalReviewer ?? EMPTY_EXT_REVIEWER;
 
   useEffect(() => {
     if (sessionId) {
@@ -302,7 +806,48 @@ export function ContextCostInspectorView({
 
   return (
     <div className="inspector-stack" data-testid="context-cost-inspector">
-      {/* Context 窗口 */}
+      {/* 顶部分类切换：在 Context 窗口统计 与 外部复核（AI 代审）API 统计之间无缝切换 */}
+      <div className="inspector-toolbar">
+        <div
+          className="segmented segmented-sm"
+          style={{ width: '100%', display: 'grid', gridTemplateColumns: '1fr 1fr' }}
+          data-testid="context-inspector-mode-switch"
+        >
+          <button
+            type="button"
+            className={`segmented-btn ${activeView === 'context' ? 'is-active' : ''}`}
+            onClick={() => setActiveView('context')}
+            data-testid="context-mode-tab-context"
+          >
+            {locale === 'zh-CN' ? 'Context 窗口' : 'Context'}
+          </button>
+          <button
+            type="button"
+            className={`segmented-btn ${activeView === 'reviewer' ? 'is-active' : ''}`}
+            onClick={() => setActiveView('reviewer')}
+            data-testid="context-mode-tab-reviewer"
+          >
+            <span>{locale === 'zh-CN' ? '外部复核统计' : 'Reviewer API'}</span>
+            {extSnap.cumulativeAllTime.callCount > 0 && (
+              <span className="mono" style={{ fontSize: 10.5, opacity: 0.8, marginLeft: 4 }}>
+                {formatUsd(extSnap.cumulativeAllTime.totalCostUsd)}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {activeView === 'reviewer' ? (
+        <ExternalReviewerStatsView
+          sessionId={sessionId}
+          ext={extSnap}
+          reviewerConnected={reviewerConnected}
+          onOpenExternalReviewerSettings={onOpenExternalReviewerSettings}
+          onOpenRateCardsSettings={onOpenRateCardsSettings}
+        />
+      ) : (
+        <>
+          {/* Context 窗口 */}
       <section className="card">
         <div className="card-head">
           <span className="card-title">{dict.contextWindowTitle}</span>
@@ -668,6 +1213,8 @@ export function ContextCostInspectorView({
           </button>
         </div>
       </section>
+        </>
+      )}
     </div>
   );
 }

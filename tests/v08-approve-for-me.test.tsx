@@ -132,15 +132,14 @@ describe('v0.8 Approve for me 多段语义快筛、纯只读工具识别与选�
     }
   });
 
-  it('3) 修复选项3（3. Approve for me）点击无效问题：即使未配置外部模型也能立即放行并开启本会话批量托管', async () => {
-    // 初始为 manual 模式且未启用 externalReviewer（真实默认开箱状态）
+  it('3) 选项3（3. Approve for me）：未连接外部复核时放行当前操作并切至基础仅规则模式（绝不伪开 AI 代审）；连接外部复核后开启 AI 代审托管', async () => {
+    // A) 未配置外部模型（真实开箱状态）：点击选项 3 放行本次并切换至基础 rules-only，不伪开 hybrid
     const { engine } = createTestEngine({ mode: 'manual' });
-    let configChangedToHybrid = false;
+    let lastUpdatedMode: string | null = null;
     engine.on('config-updated', (cfg) => {
-      if (cfg.mode === 'hybrid') configChangedToHybrid = true;
+      lastUpdatedMode = cfg.mode;
     });
 
-    // 第一条转交人工的命令（例如未知脚本构建或高风险操作）
     const firstReq = makeAcpPermissionParams({
       toolCallId: 'tc-first',
       kind: 'execute',
@@ -151,46 +150,29 @@ describe('v0.8 Approve for me 多段语义快筛、纯只读工具识别与选�
     const firstPromise = engine.requestPermission(firstReq, 'F:\\插件-Gemini');
     const [firstCard] = (await reqEvent) as [PendingApprovalRequest];
 
-    // 用户点击选项 3: Approve for me
     await engine.submitDecision({
       requestId: firstCard.requestId,
       sessionId: 'sess-v08',
       decision: 'approve_for_me_ai',
     });
 
-    // 1. 当前卡片必须立即放行并从挂起队列移除（不再死锁无响应）
+    // 当前卡片必须立即放行，且模式落到基础 rules-only（未连接外部复核不可开启 hybrid AI 代审）
     expect(await firstPromise).toEqual({ outcome: { outcome: 'selected', optionId: 'opt-once' } });
     expect(engine.listPending()).toHaveLength(0);
-    expect(engine.getConfig().mode).toBe('hybrid');
-    expect(configChangedToHybrid).toBe(true);
-    expect(engine.isSessionDelegated('sess-v08', 'F:\\插件-Gemini')).toBe(true);
+    expect(engine.getConfig().mode).toBe('rules-only');
+    expect(lastUpdatedMode).toBe('rules-only');
 
-    // 2. 随后本会话内连续运行的低风险检查串联命令（含 PowerShell $LASTEXITCODE 判断）与工作区内源码编辑均自动放行
-    const chainedDevCheck = makeAcpPermissionParams({
-      toolCallId: 'tc-chain-check',
+    // 基础规则下：纯只读命令自动放行，灰区开发命令与高危命令均继续由人工把关
+    const readOnlyCheck = makeAcpPermissionParams({
+      toolCallId: 'tc-pwd',
       kind: 'execute',
       title: 'run_command',
-      rawInput: { CommandLine: 'npm run typecheck; if ($LASTEXITCODE -eq 0) { npx vitest run }' },
+      rawInput: { CommandLine: 'pwd' },
     });
-    expect(await engine.requestPermission(chainedDevCheck, 'F:\\插件-Gemini')).toEqual({
+    expect(await engine.requestPermission(readOnlyCheck, 'F:\\插件-Gemini')).toEqual({
       outcome: { outcome: 'selected', optionId: 'opt-once' },
     });
 
-    const inWorkspaceEdit = makeAcpPermissionParams({
-      toolCallId: 'tc-edit-in-cwd',
-      kind: 'edit',
-      title: 'edit_file',
-      rawInput: {
-        Path: 'F:\\插件-Gemini\\src\\renderer\\App.tsx',
-        Target: 'const a = 1;',
-        Replacement: 'const a = 2;',
-      },
-    });
-    expect(await engine.requestPermission(inWorkspaceEdit, 'F:\\插件-Gemini')).toEqual({
-      outcome: { outcome: 'selected', optionId: 'opt-once' },
-    });
-
-    // 3. 高危破坏性命令依然严格拦截交由人工把关
     const destructiveReq = makeAcpPermissionParams({
       toolCallId: 'tc-rm',
       kind: 'execute',
@@ -203,15 +185,92 @@ describe('v0.8 Approve for me 多段语义快筛、纯只读工具识别与选�
     expect(rmCard.riskLevel).toBe('high');
     engine.cancelSession('sess-v08');
     await rmPromise;
+
+    // B) 正常连接外部复核后，点击选项 3 切换至 hybrid AI 代审，灰区命令与工作区内编辑均由外部复核托管放行
+    const dir2 = mkdtempSync(path.join(tmpdir(), 'gravity-v08-approval-ext-'));
+    tempDirs.push(dir2);
+    const reviewer = vi.fn().mockResolvedValue({
+      recommended: 'approve',
+      riskLevel: 'low',
+      reason: '常规本地开发校验与工作区编辑，安全放行',
+      latencyMs: 85,
+    });
+    const connectedEngine = new ApprovalEngine({
+      store: new ClientStore(dir2),
+      config: {
+        mode: 'manual',
+        externalReviewer: {
+          enabled: true,
+          provider: 'local-ollama',
+          endpoint: 'http://127.0.0.1:11434',
+          model: 'qwen2.5-coder:7b',
+          timeoutMs: 8000,
+        },
+      },
+      reviewer,
+    });
+    activeEngines.push(connectedEngine);
+
+    const chainedDevCheck = makeAcpPermissionParams({
+      toolCallId: 'tc-chain-check',
+      kind: 'execute',
+      title: 'run_command',
+      rawInput: { CommandLine: 'npm run typecheck; if ($LASTEXITCODE -eq 0) { npx vitest run }' },
+    });
+    const ev2 = once(connectedEngine, 'requested');
+    const p2 = connectedEngine.requestPermission(chainedDevCheck, 'F:\\插件-Gemini');
+    const [card2] = (await ev2) as [PendingApprovalRequest];
+    await connectedEngine.submitDecision({
+      requestId: card2.requestId,
+      sessionId: 'sess-v08',
+      decision: 'approve_for_me_ai',
+    });
+    expect(await p2).toEqual({ outcome: { outcome: 'selected', optionId: 'opt-once' } });
+    expect(connectedEngine.getConfig().mode).toBe('hybrid');
+    expect(connectedEngine.isSessionDelegated('sess-v08', 'F:\\插件-Gemini')).toBe(true);
+
+    const inWorkspaceEdit = makeAcpPermissionParams({
+      toolCallId: 'tc-edit-in-cwd',
+      kind: 'edit',
+      title: 'edit_file',
+      rawInput: {
+        Path: 'F:\\插件-Gemini\\src\\renderer\\App.tsx',
+        Target: 'const a = 1;',
+        Replacement: 'const a = 2;',
+      },
+    });
+    expect(await connectedEngine.requestPermission(inWorkspaceEdit, 'F:\\插件-Gemini')).toEqual({
+      outcome: { outcome: 'selected', optionId: 'opt-once' },
+    });
+    expect(reviewer).toHaveBeenCalledTimes(2);
   });
 
-  it('4) 密集命令批量守卫预测与 UI 选项副标题渲染闭环', async () => {
-    const { engine } = createTestEngine({ mode: 'hybrid' });
+  it('4) 外部复核守卫事件上报与 UI 选项副标题渲染闭环', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'gravity-v08-guard-'));
+    tempDirs.push(dir);
+    const reviewer = vi.fn().mockResolvedValue({
+      recommended: 'approve',
+      riskLevel: 'low',
+      reason: '只读状态检查安全放行',
+      latencyMs: 50,
+    });
+    const engine = new ApprovalEngine({
+      store: new ClientStore(dir),
+      config: {
+        mode: 'hybrid',
+        externalReviewer: {
+          enabled: true,
+          provider: 'local-ollama',
+          endpoint: 'http://127.0.0.1:11434',
+          model: 'qwen2.5-coder:7b',
+          timeoutMs: 8000,
+        },
+      },
+      reviewer,
+    });
+    activeEngines.push(engine);
     const guardEvents: unknown[] = [];
     engine.on('guard-activity', (ev) => guardEvents.push(ev));
-
-    // 模拟 Plan 阶段预测到多步任务，提前开启批量守卫
-    engine.enableBurstGuard('sess-v08');
 
     const statusReq = makeAcpPermissionParams({
       toolCallId: 'tc-git-status',

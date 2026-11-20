@@ -5,12 +5,15 @@ import {
   COST_DISCLAIMER,
   DEFAULT_MODEL_RATE_CARDS,
   EXTERNAL_REVIEWER_DEFAULTS,
+  formatExternalReviewerProviderLabel,
   inferSupportedThinkingLevels,
+  isExternalReviewerConnected,
   type AccountsStateSnapshot,
   type ApprovalAuditEntry,
   type ApproveForMeConfig,
   type ExternalAiReviewerConfig,
   type ExternalReviewerModelOption,
+  type ExternalReviewerTelemetrySnapshot,
   type ExternalReviewerThinkingLevel,
   type McpActionInput,
   type ModelRateCard,
@@ -20,6 +23,7 @@ import {
 import { useI18n } from '../../i18n/I18nContext';
 import { formatActionError } from '../../i18n/locales';
 import { getDesktopBridge } from '../../services/desktop-bridge';
+import { formatTokenShort, formatUsd } from '../ContextStatusBar';
 
 /** 统一的忙碌 / 错误处理 */
 function useAction() {
@@ -223,21 +227,32 @@ export function AccountsPanel({
 
 /* ------------------------------------------------------------------ Approve for me */
 
-type ApprovalTab = 'rules' | 'audit' | 'reviewer';
+export type ApprovalTab = 'rules' | 'audit' | 'reviewer';
 type PatternField = 'allowPatterns' | 'askPatterns' | 'denyPatterns';
 
 export function ApprovalsPanel({
   config,
   auditEntries,
+  initialTab = 'rules',
+  externalReviewerTelemetry,
+  currentSessionId,
   onUpdateConfig,
 }: {
   config: ApproveForMeConfig;
   auditEntries: ApprovalAuditEntry[];
+  initialTab?: ApprovalTab;
+  externalReviewerTelemetry?: ExternalReviewerTelemetrySnapshot;
+  currentSessionId?: string | null;
   onUpdateConfig: (patch: Partial<ApproveForMeConfig>) => Promise<void>;
 }): React.ReactElement {
-  const { dict } = useI18n();
+  const { locale, dict } = useI18n();
   const { busy, error, run } = useAction();
-  const [tab, setTab] = useState<ApprovalTab>('rules');
+  const [tab, setTab] = useState<ApprovalTab>(initialTab);
+  const [hybridConnectPrompt, setHybridConnectPrompt] = useState(false);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
   const [drafts, setDrafts] = useState<Record<PatternField, string>>({ allowPatterns: '', askPatterns: '', denyPatterns: '' });
   const normalizeReviewer = (raw: ExternalAiReviewerConfig): ExternalAiReviewerConfig => ({
     ...raw,
@@ -294,11 +309,20 @@ export function ApprovalsPanel({
               model: matched.id,
               thinkingLevel: nextLevel,
               maxOutputTokens: nextMax,
+              connectionStatus: 'connected',
+              lastVerifiedAt: result.fetchedAt,
             };
           });
+        } else {
+          setReviewer((prev) => ({
+            ...prev,
+            connectionStatus: 'connected',
+            lastVerifiedAt: result.fetchedAt,
+          }));
         }
       } catch (err) {
         if (seq !== discoverySeqRef.current) return;
+        setReviewer((prev) => ({ ...prev, connectionStatus: 'failed' }));
         setDiscoverError(formatActionError(err, dict));
       } finally {
         if (seq === discoverySeqRef.current) setDiscovering(false);
@@ -384,25 +408,69 @@ export function ApprovalsPanel({
         <>
           <h3 className="settings-group-title">{dict.approvalModeLabel}</h3>
           <div className="settings-group">
-            {APPROVAL_MODE_ORDER.map((mode) => (
-              <button
-                key={mode}
-                type="button"
+            {APPROVAL_MODE_ORDER.map((mode) => {
+              const reviewerReady = isExternalReviewerConnected(config.externalReviewer);
+              const lockedHybrid = mode === 'hybrid' && !reviewerReady;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  className="setting-row"
+                  style={{ textAlign: 'left', minHeight: 42 }}
+                  disabled={busy}
+                  onClick={() => {
+                    if (lockedHybrid) {
+                      setHybridConnectPrompt(true);
+                      return;
+                    }
+                    setHybridConnectPrompt(false);
+                    void run(() => onUpdateConfig({ mode }));
+                  }}
+                  title={dict.approvalModes[mode].shortDesc}
+                  data-testid={`approval-mode-option-${mode}`}
+                >
+                  <span className="setting-label">{dict.approvalModes[mode].label}</span>
+                  <span className="muted truncate" style={{ fontSize: 12 }}>
+                    {dict.approvalModes[mode].shortDesc}
+                  </span>
+                  <span className="spacer" />
+                  {lockedHybrid && (
+                    <span className="badge badge-warning" style={{ fontSize: 10.5 }}>
+                      {locale === 'zh-CN' ? '需先连接外部复核' : 'Connect reviewer'}
+                    </span>
+                  )}
+                  {config.mode === mode && <Check size={16} color="var(--accent-primary)" />}
+                </button>
+              );
+            })}
+            {hybridConnectPrompt && !isExternalReviewerConnected(config.externalReviewer) && (
+              <div
                 className="setting-row"
-                style={{ textAlign: 'left', minHeight: 42 }}
-                disabled={busy}
-                onClick={() => void run(() => onUpdateConfig({ mode }))}
-                title={dict.approvalModes[mode].shortDesc}
-                data-testid={`approval-mode-option-${mode}`}
+                data-testid="rules-hybrid-connect-prompt"
+                style={{
+                  gap: 10,
+                  background: 'color-mix(in srgb, var(--status-warning) 10%, transparent)',
+                  fontSize: 12,
+                }}
               >
-                <span className="setting-label">{dict.approvalModes[mode].label}</span>
-                <span className="muted truncate" style={{ fontSize: 12 }}>
-                  {dict.approvalModes[mode].shortDesc}
+                <span style={{ flex: 1 }}>
+                  {locale === 'zh-CN'
+                    ? '尚未连接外部复核模型，无法开启「AI 代审」；未连接前仅可启用「仅规则」或「人工审批」。'
+                    : 'External reviewer is not connected. Connect one before enabling AI review.'}
                 </span>
-                <span className="spacer" />
-                {config.mode === mode && <Check size={16} color="var(--accent-primary)" />}
-              </button>
-            ))}
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    setHybridConnectPrompt(false);
+                    setTab('reviewer');
+                  }}
+                  data-testid="rules-goto-reviewer-btn"
+                >
+                  {locale === 'zh-CN' ? '去连接外部复核 →' : 'Connect Reviewer →'}
+                </button>
+              </div>
+            )}
             <div className="setting-row" style={{ minHeight: 42 }} title={dict.safeDownloadDesc}>
               <span className="setting-label">{dict.safeDownloadToggle}</span>
               <span className="spacer" />
@@ -503,14 +571,98 @@ export function ApprovalsPanel({
       {tab === 'reviewer' && (
         <>
           <div className="settings-group" style={{ padding: '10px 14px', fontSize: 12, lineHeight: 1.55 }}>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>
-              双层零配额守卫架构（严格遵循合规红线 #6）
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span style={{ fontWeight: 600 }}>双层零配额守卫架构（严格遵循合规红线 #6）</span>
+              <span
+                className={`badge ${
+                  isExternalReviewerConnected(reviewer)
+                    ? 'badge-success'
+                    : reviewer.connectionStatus === 'failed'
+                      ? 'badge-danger'
+                      : 'badge-warning'
+                }`}
+                data-testid="reviewer-connection-badge"
+              >
+                {isExternalReviewerConnected(reviewer)
+                  ? locale === 'zh-CN'
+                    ? '已连接外部复核'
+                    : 'Connected'
+                  : reviewer.connectionStatus === 'failed'
+                    ? locale === 'zh-CN'
+                      ? '连接失败'
+                      : 'Connection failed'
+                    : locale === 'zh-CN'
+                      ? '未连接（仅基础规则）'
+                      : 'Not connected'}
+              </span>
             </div>
             <div className="muted">
-              • <strong>第一层（默认内置、0ms、零额度消耗）</strong>：本地多段 AST 语义引擎 + 密集命令批量守卫，自动放行只读文件/代码/文档/MCP 查询、多级只读管道（如 <code>Get-ChildItem | Select-String</code>）及会话托管下的低风险构建测试与 <code>accept-edits</code> 工作区源码编辑。<br />
-              • <strong>第二层（可选开启）</strong>：对接本机 <code>127.0.0.1:11434</code> Ollama 或自备公开 API Key 模型，在 <strong>AI 代审</strong>模式下自动复核灰区开发命令、非只读 MCP 工具、默认模式源码编辑及只读 PowerShell 分析脚本（结果按 TTL 缓存；超时或失败严格回退人工并显示具体原因；API Key 经系统级加密存储，更新自动保留）。
+              • <strong>第一层（基础规则机制，0ms、零额度消耗）</strong>：未连接外部复核时仅启用基础规则（只读文件/代码/文档/MCP 查询、多级只读管道、自定义规则与会话前缀放行）。<br />
+              • <strong>第二层（AI 代审，需正常连接外部复核）</strong>：对接本机 <code>127.0.0.1:11434</code> Ollama 或自备公开 API Key 模型，自动复核灰区开发命令、非只读 MCP 工具、默认模式源码编辑及只读 PowerShell 分析脚本（结果按 TTL 缓存，用量与花费由各 API Provider 汇总统计，API Key 经系统级加密存储）。
             </div>
           </div>
+
+          {externalReviewerTelemetry && (
+            <div
+              className="settings-group"
+              style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}
+              data-testid="reviewer-panel-usage-card"
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12 }}>
+                <span style={{ fontWeight: 600 }}>
+                  {locale === 'zh-CN' ? '外部复核 API 累计用量（合并全部历史服务商）' : 'Cumulative External Reviewer API Usage'}
+                </span>
+                <span className="mono" style={{ color: 'var(--accent-primary)', fontWeight: 650 }}>
+                  {formatUsd(externalReviewerTelemetry.cumulativeAllTime.totalCostUsd)}
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 11.5 }} className="muted">
+                <span>
+                  {locale === 'zh-CN' ? '客户端累计：' : 'All-time: '}
+                  <strong className="mono" style={{ color: 'var(--text-primary)' }}>
+                    {externalReviewerTelemetry.cumulativeAllTime.callCount}
+                  </strong>{' '}
+                  {locale === 'zh-CN' ? '次 · ' : 'calls · '}
+                  <strong className="mono" style={{ color: 'var(--text-primary)' }}>
+                    {formatTokenShort(externalReviewerTelemetry.cumulativeAllTime.totalTokens)}
+                  </strong>{' '}
+                  Tokens
+                </span>
+                {currentSessionId && externalReviewerTelemetry.bySession[currentSessionId] && (
+                  <span>
+                    {locale === 'zh-CN' ? '当前会话：' : 'This session: '}
+                    <strong className="mono" style={{ color: 'var(--text-primary)' }}>
+                      {externalReviewerTelemetry.bySession[currentSessionId].callCount}
+                    </strong>{' '}
+                    {locale === 'zh-CN' ? '次 · ' : 'calls · '}
+                    <strong className="mono" style={{ color: 'var(--text-primary)' }}>
+                      {formatUsd(externalReviewerTelemetry.bySession[currentSessionId].totalCostUsd)}
+                    </strong>
+                  </span>
+                )}
+              </div>
+              {externalReviewerTelemetry.cumulativeProviders.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 2 }}>
+                  {externalReviewerTelemetry.cumulativeProviders.map((item) => (
+                    <div
+                      key={item.key}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5 }}
+                    >
+                      <span className="badge badge-mono" style={{ fontSize: 10, padding: '0 5px' }}>
+                        {formatExternalReviewerProviderLabel(item.provider, locale)}
+                      </span>
+                      <span className="mono truncate">{item.modelId}</span>
+                      <span className="spacer" />
+                      <span className="muted mono">
+                        {item.callCount}× · {formatTokenShort(item.totalTokens)}
+                      </span>
+                      <span className="mono">{formatUsd(item.totalCostUsd)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {reviewer.enabled && config.mode !== 'hybrid' && (
             <div
               className="settings-group"
@@ -586,6 +738,7 @@ export function ApprovalsPanel({
                     endpoint: defaultsByProvider[nextProvider].endpoint,
                     model: defaultsByProvider[nextProvider].model,
                     thinkingLevel: 'auto',
+                    connectionStatus: 'untested',
                   }));
                 }}
               >
@@ -606,7 +759,7 @@ export function ApprovalsPanel({
                 value={reviewer.endpoint ?? ''}
                 onChange={(e) => {
                   lastAutoDiscoveryKeyRef.current = '';
-                  setReviewer((prev) => ({ ...prev, endpoint: e.target.value }));
+                  setReviewer((prev) => ({ ...prev, endpoint: e.target.value, connectionStatus: 'untested' }));
                 }}
                 aria-label={dict.reviewerEndpointLabel}
               />
@@ -636,7 +789,7 @@ export function ApprovalsPanel({
                     value={reviewer.apiKey ?? ''}
                     onChange={(e) => {
                       lastAutoDiscoveryKeyRef.current = '';
-                      setReviewer((prev) => ({ ...prev, apiKey: e.target.value }));
+                      setReviewer((prev) => ({ ...prev, apiKey: e.target.value, connectionStatus: 'untested' }));
                     }}
                     aria-label={dict.reviewerApiKeyLabel}
                     data-testid="reviewer-apikey-input"
@@ -899,15 +1052,23 @@ export function ApprovalsPanel({
                   ),
                 };
                 setReviewer(sanitized);
+                const readyAfterSave = isExternalReviewerConnected(sanitized);
                 const shouldAutoUpgradeMode =
-                  sanitized.enabled && !config.externalReviewer.enabled && config.mode !== 'hybrid';
-                void run(() =>
-                  onUpdateConfig({
+                  readyAfterSave && !config.externalReviewer.enabled && config.mode !== 'hybrid';
+                void run(async () => {
+                  if (sanitized.enabled && !readyAfterSave) {
+                    throw new Error(
+                      sanitized.connectionStatus === 'failed'
+                        ? '外部复核连接校验失败，请检查 API Key / Endpoint 并重新查询可用模型后再开启 AI 代审'
+                        : '请先填写有效的 API Key 与模型并正常连接，再开启外部复核与 AI 代审'
+                    );
+                  }
+                  await onUpdateConfig({
                     ...(shouldAutoUpgradeMode ? { mode: 'hybrid' as const } : {}),
                     cacheTtlHours,
                     externalReviewer: sanitized,
-                  })
-                );
+                  });
+                });
               }}
               data-testid="save-reviewer-config-btn"
             >

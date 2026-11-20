@@ -11,11 +11,22 @@ import {
   type RiskLevel,
 } from '../../shared/approval-contract';
 
+export interface ExternalModelTokenUsage {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  thinkingTokens: number;
+  totalTokens: number;
+  providerReported: boolean;
+  directCostUsd?: number;
+}
+
 export interface AiReviewResult {
   recommended: 'approve' | 'ask' | 'deny';
   reason: string;
   riskLevel: RiskLevel;
   latencyMs: number;
+  usage?: ExternalModelTokenUsage;
 }
 export interface ReviewContext {
   toolName?: string;
@@ -33,6 +44,13 @@ export type Reviewer = (
 
 const cooldowns = new Map<string, number>();
 export class IndependentModelLimitError extends Error {}
+export class IndependentModelCallError extends Error {
+  readonly usage?: ExternalModelTokenUsage;
+  constructor(message: string, usage?: ExternalModelTokenUsage) {
+    super(message);
+    this.usage = usage;
+  }
+}
 
 const MAX_REVIEW_RESPONSE_BYTES = 262_144;
 const MAX_DISCOVERY_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -324,13 +342,109 @@ export async function discoverExternalModels(
   };
 }
 
-/** Node fetch 复用进程内连接池；禁止重定向，密钥仅留内存，不写日志。 */
-export async function callIndependentModel(
+function extractProviderTokenUsage(
+  provider: ExternalAiReviewerConfig['provider'],
+  data: {
+    usageMetadata?: {
+      promptTokenCount?: number;
+      cachedContentTokenCount?: number;
+      candidatesTokenCount?: number;
+      thoughtsTokenCount?: number;
+      totalTokenCount?: number;
+    };
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      total_tokens?: number;
+      cost?: number;
+      total_cost?: number;
+      prompt_tokens_details?: { cached_tokens?: number };
+      completion_tokens_details?: { reasoning_tokens?: number };
+    };
+    prompt_eval_count?: number;
+    eval_count?: number;
+  }
+): ExternalModelTokenUsage | undefined {
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+  const floatPos = (v: unknown): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined;
+
+  if (provider === 'gemini-api-key' && data.usageMetadata) {
+    const um = data.usageMetadata;
+    const promptTotal = num(um.promptTokenCount);
+    const cachedInputTokens = Math.min(promptTotal, num(um.cachedContentTokenCount));
+    const inputTokens = Math.max(0, promptTotal - cachedInputTokens);
+    const thinkingTokens = num(um.thoughtsTokenCount);
+    const candidatesTokens = num(um.candidatesTokenCount);
+    const rawTotal = num(um.totalTokenCount);
+    const outputTokens =
+      candidatesTokens > 0
+        ? candidatesTokens
+        : rawTotal > 0
+          ? Math.max(0, rawTotal - promptTotal - thinkingTokens)
+          : 0;
+    const totalTokens = inputTokens + cachedInputTokens + outputTokens + thinkingTokens;
+    if (totalTokens > 0) {
+      return {
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+        thinkingTokens,
+        totalTokens,
+        providerReported: true,
+      };
+    }
+  }
+
+  if (provider === 'openai-compatible' && data.usage) {
+    const u = data.usage;
+    const promptTotal = num(u.prompt_tokens);
+    const cachedInputTokens = Math.min(promptTotal, num(u.prompt_tokens_details?.cached_tokens));
+    const inputTokens = Math.max(0, promptTotal - cachedInputTokens);
+    const completionTotal = num(u.completion_tokens);
+    const thinkingTokens = Math.min(completionTotal, num(u.completion_tokens_details?.reasoning_tokens));
+    const outputTokens = Math.max(0, completionTotal - thinkingTokens);
+    const totalTokens = inputTokens + cachedInputTokens + outputTokens + thinkingTokens;
+    if (totalTokens > 0) {
+      return {
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+        thinkingTokens,
+        totalTokens,
+        providerReported: true,
+        directCostUsd: floatPos(u.cost) ?? floatPos(u.total_cost),
+      };
+    }
+  }
+
+  if (provider === 'local-ollama' && (data.prompt_eval_count !== undefined || data.eval_count !== undefined)) {
+    const inputTokens = num(data.prompt_eval_count);
+    const outputTokens = num(data.eval_count);
+    const totalTokens = inputTokens + outputTokens;
+    if (totalTokens > 0) {
+      return {
+        inputTokens,
+        cachedInputTokens: 0,
+        outputTokens,
+        thinkingTokens: 0,
+        totalTokens,
+        providerReported: true,
+        directCostUsd: 0,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+/** Node fetch 复用进程内连接池；禁止重定向，密钥仅留内存，不写日志。同时返回服务端上报的精确 Token 用量。 */
+export async function callIndependentModelWithUsage(
   config: ExternalAiReviewerConfig,
   instruction: string,
   input: string,
   fetcher: typeof fetch = fetch
-): Promise<string> {
+): Promise<{ text: string; usage?: ExternalModelTokenUsage }> {
   if (!config.enabled) throw new Error('独立模型未开启');
   const endpoint = validateExternalEndpoint(config);
   // 冷却时间按服务来源共享。同一端点的其他会话也会在发出网络请求前看到限制。
@@ -442,9 +556,28 @@ export async function callIndependentModel(
         finishReason?: string;
         content?: { parts?: Array<{ text?: string; thought?: boolean }> };
       }>;
+      usageMetadata?: {
+        promptTokenCount?: number;
+        cachedContentTokenCount?: number;
+        candidatesTokenCount?: number;
+        thoughtsTokenCount?: number;
+        totalTokenCount?: number;
+      };
       choices?: Array<{ message?: { content?: string } }>;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+        cost?: number;
+        total_cost?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+        completion_tokens_details?: { reasoning_tokens?: number };
+      };
       message?: { content?: string };
+      prompt_eval_count?: number;
+      eval_count?: number;
     };
+    const usage = extractProviderTokenUsage(config.provider, data);
     const geminiParts = data.candidates?.[0]?.content?.parts;
     const geminiText = Array.isArray(geminiParts)
       ? geminiParts
@@ -458,14 +591,27 @@ export async function callIndependentModel(
       data.message?.content;
     if (typeof text !== 'string' || !text.trim()) {
       if (data.candidates?.[0]?.finishReason === 'MAX_TOKENS') {
-        throw new Error('独立模型输出达到 maxOutputTokens 上限被截断，请调大 Max Output Tokens 或降低思考强度');
+        throw new IndependentModelCallError(
+          '独立模型输出达到 maxOutputTokens 上限被截断，请调大 Max Output Tokens 或降低思考强度',
+          usage
+        );
       }
-      throw new Error('独立模型响应格式无效');
+      throw new IndependentModelCallError('独立模型响应格式无效', usage);
     }
-    return text;
+    return { text, usage };
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function callIndependentModel(
+  config: ExternalAiReviewerConfig,
+  instruction: string,
+  input: string,
+  fetcher: typeof fetch = fetch
+): Promise<string> {
+  const result = await callIndependentModelWithUsage(config, instruction, input, fetcher);
+  return result.text;
 }
 
 function parseReviewerJsonObject(raw: string): Record<string, unknown> {
@@ -513,8 +659,20 @@ export const reviewWithIndependentModel: Reviewer = async (command, cwd, config,
   if (typeof context?.withinWorkspace === 'boolean') payload.withinWorkspace = context.withinWorkspace;
   if (context?.intentSummary) payload.intentSummary = context.intentSummary.slice(0, 500);
 
-  const raw = await callIndependentModel(config, INDEPENDENT_REVIEWER_SYSTEM_PROMPT, JSON.stringify(payload));
-  const parsed = parseReviewerJsonObject(raw);
+  const { text: raw, usage } = await callIndependentModelWithUsage(
+    config,
+    INDEPENDENT_REVIEWER_SYSTEM_PROMPT,
+    JSON.stringify(payload)
+  );
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parseReviewerJsonObject(raw);
+  } catch (err) {
+    throw new IndependentModelCallError(
+      err instanceof Error ? err.message : '独立复核结论格式无效',
+      usage
+    );
+  }
   const recommended = parsed.recommended;
   const riskLevel = parsed.riskLevel;
   const reason = parsed.reason;
@@ -523,7 +681,7 @@ export const reviewWithIndependentModel: Reviewer = async (command, cwd, config,
     (riskLevel !== 'safe' && riskLevel !== 'low' && riskLevel !== 'medium' && riskLevel !== 'high' && riskLevel !== 'critical') ||
     typeof reason !== 'string'
   ) {
-    throw new Error('独立复核结论格式无效');
+    throw new IndependentModelCallError('独立复核结论格式无效', usage);
   }
   const finalRecommended: AiReviewResult['recommended'] =
     recommended === 'approve' && !['safe', 'low'].includes(riskLevel) ? 'ask' : recommended;
@@ -532,5 +690,6 @@ export const reviewWithIndependentModel: Reviewer = async (command, cwd, config,
     reason: reason.slice(0, 1000),
     riskLevel,
     latencyMs: performance.now() - start,
+    usage,
   };
 };

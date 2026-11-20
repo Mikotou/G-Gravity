@@ -4,12 +4,14 @@ import { isAbsolute, relative, resolve, win32 as winPath } from 'node:path';
 import type { AcpRequestPermissionParams, AcpRequestPermissionResult, AgentExecutionMode } from '../../shared/acp-protocol';
 import {
   EXTERNAL_REVIEWER_DEFAULTS,
+  isExternalReviewerConnected,
   type ApprovalAuditEntry,
   type ApprovalDecisionSubmission,
   type ApproveForMeConfig,
   type DeterministicScreeningResult,
   type PendingApprovalRequest,
 } from '../../shared/approval-contract';
+import type { ExternalReviewerUsageRecordInput } from '../../shared/telemetry-contract';
 import { ClientStore } from '../storage/client-store';
 import {
   compileSafePattern,
@@ -24,6 +26,7 @@ import {
   sensitiveTarget,
 } from './shell-screening';
 import {
+  IndependentModelCallError,
   IndependentModelLimitError,
   reviewWithIndependentModel,
   validateExternalEndpoint,
@@ -184,6 +187,11 @@ export class ApprovalEngine extends EventEmitter {
 
   getConfig(): ApproveForMeConfig {
     return structuredClone(this.config);
+  }
+
+  /** 判断当前外部复核是否已正常配置并连通（仅此时允许执行 AI 代审）。 */
+  isExternalReviewerReady(): boolean {
+    return isExternalReviewerConnected(this.config.externalReviewer);
   }
 
   updateConfig(patch: Partial<ApproveForMeConfig>): ApproveForMeConfig {
@@ -549,7 +557,7 @@ export class ApprovalEngine extends EventEmitter {
           screening.verdict === 'force_ask' &&
           !screening.matchedRule &&
           this.config.mode === 'hybrid' &&
-          this.config.externalReviewer.enabled &&
+          this.isExternalReviewerReady() &&
           isReadOnlyScriptReviewCandidate(command)
         ) {
           // 已开启外部独立复核模型时，将非破坏、无重定向的纯只读 PowerShell 分析脚本交由外部模型复审
@@ -662,40 +670,23 @@ export class ApprovalEngine extends EventEmitter {
         return;
       }
       if (item.screen.verdict === 'grey_zone' && this.config.mode === 'hybrid') {
-        const delegated = this.isSessionDelegated(item.card.sessionId, item.card.cwd);
         const execMode = this.sessionModes.get(item.card.sessionId) || 'default';
-        const burstActive = this.isBurstGuardActive(item.card.sessionId);
         const isWorkspaceEdit = /^(?:edit_file|write_file)\s*\(/.test(item.card.commandPrefix || '');
 
-        // 会话显式选择 accept-edits / auto 时，已通过工作区范围与类型校验的源码编辑直接本地放行，不浪费外部复核延迟与额度
-        if (isWorkspaceEdit && (execMode === 'accept-edits' || execMode === 'auto')) {
-          const reason = `会话处于 ${execMode} 模式，已核验为当前工作区源码/文档编辑并自动放行`;
-          this.finish(item, true, 'auto_approved', 'local-rule', reason);
-          this.recordGuardAutoApproval(item.card.sessionId, 'local-burst-guard', item.card.commandOrSummary);
-          return;
-        }
-
-        if (this.config.externalReviewer.enabled) {
-          if (await this.review(item)) {
-            this.recordGuardAutoApproval(item.card.sessionId, 'external-ai', item.card.commandOrSummary);
+        if (this.isExternalReviewerReady()) {
+          // 会话显式选择 accept-edits / auto 时，已通过工作区范围与类型校验的源码编辑直接本地放行，不浪费外部复核延迟与额度
+          if (isWorkspaceEdit && (execMode === 'accept-edits' || execMode === 'auto')) {
+            const reason = `会话处于 ${execMode} 模式，已核验为当前工作区源码/文档编辑并自动放行`;
+            this.finish(item, true, 'auto_approved', 'local-rule', reason);
+            this.recordGuardAutoApproval(item.card.sessionId, 'local-burst-guard', item.card.commandOrSummary);
             return;
           }
-        } else if (
-          (item.screen.riskLevel === 'low' && (delegated || execMode === 'auto' || burstActive)) ||
-          (isWorkspaceEdit && delegated)
-        ) {
-          const reason = delegated
-            ? '本会话已开启 Approve for me 智能托管，本地语义守卫核验低风险自动放行'
-            : execMode === 'auto'
-              ? '会话处于 auto 模式，AI 代审本地语义守卫核验低风险命令放行'
-              : '检测到多命令密集运行，AI 代审批量守卫自动核验低风险命令放行';
-          this.finish(item, true, 'auto_approved', 'local-rule', reason);
-          this.recordGuardAutoApproval(
-            item.card.sessionId,
-            delegated ? 'user-delegated' : 'local-burst-guard',
-            item.card.commandOrSummary
-          );
-          return;
+          if (await this.review(item)) {
+            return;
+          }
+        } else {
+          // 未连接外部复核模型时严禁伪装 AI 代审自动放行：仅执行最基础的规则通过机制，灰区统一转交人工确认
+          item.card.explanation.risk = '未连接外部复核模型，当前按基础规则模式转交人工确认；连接外部复核后方可开启 AI 代审';
         }
       }
     }
@@ -705,7 +696,7 @@ export class ApprovalEngine extends EventEmitter {
   private async review(item: Pending): Promise<boolean> {
     if (item.reviewing) throw new Error('该请求正在复核');
     if (
-      !this.config.externalReviewer.enabled ||
+      !this.isExternalReviewerReady() ||
       this.config.mode !== 'hybrid' ||
       item.screen.verdict === 'force_ask' ||
       item.screen.verdict === 'deny'
@@ -716,14 +707,15 @@ export class ApprovalEngine extends EventEmitter {
     item.reviewing = true;
     const start = this.now();
     const revision = this.configRevision;
+    const reviewerConfig = structuredClone(this.config.externalReviewer);
     let timer: NodeJS.Timeout | undefined;
     try {
       const timeout = Math.min(
-        Math.max(this.config.externalReviewer.timeoutMs || EXTERNAL_REVIEWER_DEFAULTS.timeoutMs, 100),
+        Math.max(reviewerConfig.timeoutMs || EXTERNAL_REVIEWER_DEFAULTS.timeoutMs, 100),
         60_000
       );
       const review: AiReviewResult = await Promise.race([
-        this.reviewer(item.card.commandOrSummary, item.card.cwd, structuredClone(this.config.externalReviewer), {
+        this.reviewer(item.card.commandOrSummary, item.card.cwd, reviewerConfig, {
           toolName: item.card.toolName,
           executionMode: this.sessionModes.get(item.card.sessionId) || 'default',
           intentSummary: item.card.explanation.meaning,
@@ -734,6 +726,19 @@ export class ApprovalEngine extends EventEmitter {
           timer = setTimeout(() => reject(new Error(`复核超时（超过 ${timeout}ms）`)), timeout);
         }),
       ]);
+      const elapsedMs = Math.max(0, Math.round(review.latencyMs || this.now() - start));
+      const usageEvent: ExternalReviewerUsageRecordInput = {
+        sessionId: item.card.sessionId,
+        provider: reviewerConfig.provider,
+        endpoint: reviewerConfig.endpoint,
+        modelId: reviewerConfig.model,
+        outcome: review.recommended,
+        latencyMs: elapsedMs,
+        usage: review.usage,
+        timestamp: this.now(),
+      };
+      this.emit('external-review-usage', usageEvent);
+
       // 等待远端时用户可能已处理请求或更改配置。先核对待审表和版本号，再采用返回的建议。
       if (!this.pending.has(item.card.requestId)) return true;
       if (revision !== this.configRevision || this.config.mode !== 'hybrid') {
@@ -742,21 +747,35 @@ export class ApprovalEngine extends EventEmitter {
       }
       item.card.aiSuggestion = {
         ...review,
-        model: this.config.externalReviewer.model,
+        model: reviewerConfig.model,
         isError: false,
       };
       item.card.screeningSource = 'ai-reviewer-fallback';
       if (review.recommended === 'approve' && ['safe', 'low'].includes(review.riskLevel)) {
+        this.recordGuardAutoApproval(item.card.sessionId, 'external-ai', item.card.commandOrSummary);
         this.finish(item, true, 'ai_approved', 'external-ai', review.reason);
         return true;
       }
       item.card.explanation.risk = review.reason;
       return false;
     } catch (error) {
+      const elapsedMs = Math.max(0, this.now() - start);
+      const usageEvent: ExternalReviewerUsageRecordInput = {
+        sessionId: item.card.sessionId,
+        provider: reviewerConfig.provider,
+        endpoint: reviewerConfig.endpoint,
+        modelId: reviewerConfig.model,
+        outcome: 'error',
+        latencyMs: elapsedMs,
+        usage: error instanceof IndependentModelCallError ? error.usage : undefined,
+        timestamp: this.now(),
+      };
+      this.emit('external-review-usage', usageEvent);
+
       const rawMsg = error instanceof Error ? error.message.trim() : '';
       const maskedMsg =
-        rawMsg && this.config.externalReviewer.apiKey
-          ? rawMsg.split(this.config.externalReviewer.apiKey).join('***')
+        rawMsg && reviewerConfig.apiKey
+          ? rawMsg.split(reviewerConfig.apiKey).join('***')
           : rawMsg;
       const reason =
         error instanceof IndependentModelLimitError
@@ -767,8 +786,8 @@ export class ApprovalEngine extends EventEmitter {
       item.card.aiSuggestion = {
         recommended: 'ask',
         reason,
-        latencyMs: this.now() - start,
-        model: this.config.externalReviewer.model,
+        latencyMs: elapsedMs,
+        model: reviewerConfig.model,
         isError: true,
       };
       item.card.screeningSource = 'ai-reviewer-fallback';
@@ -788,13 +807,7 @@ export class ApprovalEngine extends EventEmitter {
       if (item.screen.verdict === 'deny') {
         throw new Error('该操作涉及敏感凭据或受保护状态，禁止放行');
       }
-      // 1. 激活当前会话的 Approve for me 智能批量托管，并确保全局切至 hybrid（AI 代审）档位（不清空已有会话前缀）
-      this.enableSessionDelegation(item.card.sessionId, item.card.cwd);
-      if (this.config.mode !== 'hybrid') {
-        this.config = { ...this.config, mode: 'hybrid' };
-        this.configRevision++;
-        this.emit('config-updated', this.getConfig());
-      }
+      const reviewerReady = this.isExternalReviewerReady();
       if (item.card.commandPrefix && item.screen.verdict !== 'force_ask') {
         const prefixKey = `${item.card.sessionId}\0${item.card.cwd}`;
         const prefixes = this.prefixes.get(prefixKey) || new Set<string>();
@@ -802,28 +815,48 @@ export class ApprovalEngine extends EventEmitter {
         this.prefixes.set(prefixKey, prefixes);
       }
 
-      // 2. 若已配置外部独立复核模型且当前为灰区命令，优先尝试由独立模型给出审计结论
-      if (this.config.externalReviewer.enabled && item.screen.verdict === 'grey_zone') {
-        if (await this.review(item)) {
-          this.recordGuardAutoApproval(item.card.sessionId, 'external-ai', item.card.commandOrSummary);
-          return;
+      if (reviewerReady) {
+        // 已正常连接外部复核：切至 hybrid（AI 代审）并对灰区尝试由独立模型给出审计结论
+        this.enableSessionDelegation(item.card.sessionId, item.card.cwd);
+        if (this.config.mode !== 'hybrid') {
+          this.config = { ...this.config, mode: 'hybrid' };
+          this.configRevision++;
+          this.emit('config-updated', this.getConfig());
         }
-        if (!this.pending.has(item.card.requestId)) return;
-        if (item.card.aiSuggestion?.recommended === 'deny') {
-          this.emit('requested', structuredClone(item.card));
-          return;
+        if (item.screen.verdict === 'grey_zone') {
+          if (await this.review(item)) {
+            return;
+          }
+          if (!this.pending.has(item.card.requestId)) return;
+          if (item.card.aiSuggestion?.recommended === 'deny') {
+            this.emit('requested', structuredClone(item.card));
+            return;
+          }
         }
+        this.finish(
+          item,
+          true,
+          'user_approved',
+          'user-inline',
+          '用户点击 Approve for me 放行本次操作，并开启 AI 代审外部复核托管'
+        );
+        this.recordGuardAutoApproval(item.card.sessionId, 'user-delegated', item.card.commandOrSummary);
+        return;
       }
 
-      // 3. 放行当前待审操作并接管后续同类与低风险密集命令
+      // 未连接外部复核：禁止伪开启 AI 代审，仅切换至基础「仅规则」机制并放行本次操作（同时记住安全前缀）
+      if (this.config.mode !== 'rules-only') {
+        this.config = { ...this.config, mode: 'rules-only' };
+        this.configRevision++;
+        this.emit('config-updated', this.getConfig());
+      }
       this.finish(
         item,
         true,
         'user_approved',
         'user-inline',
-        '用户点击 Approve for me 放行本次操作，并开启本会话智能批量代审托管'
+        '未连接外部复核模型，已放行本次操作并切换至基础规则模式（连接外部复核后可开启 AI 代审）'
       );
-      this.recordGuardAutoApproval(item.card.sessionId, 'user-delegated', item.card.commandOrSummary);
       return;
     }
 

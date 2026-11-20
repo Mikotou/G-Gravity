@@ -976,12 +976,82 @@
   flex-shrink: 0;
 }
 
+.inspector-tabs-viewport {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 .inspector-bar .inspector-head {
   flex: 1;
   min-width: 0;
   height: 100%;
   border-bottom: 0;
-  padding: 0 4px 0 8px;
+  padding: 0 4px 0 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 45%, transparent) transparent;
+}
+
+.inspector-tabs-viewport.is-overflowing .inspector-head {
+  padding-bottom: 3px;
+}
+
+.inspector-bar .inspector-head::-webkit-scrollbar {
+  display: block;
+  height: 4px;
+}
+
+.inspector-bar .inspector-head::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.inspector-bar .inspector-head::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 32%, transparent);
+}
+
+.inspector-tabs-viewport.is-overflowing .inspector-head::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 55%, transparent);
+}
+
+.inspector-bar .inspector-head::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-primary);
+}
+
+.inspector-scroll-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 26px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  z-index: 2;
+  transition: color var(--dur-1), background var(--dur-1);
+}
+
+.inspector-scroll-btn:hover {
+  color: var(--text-primary);
+  background: var(--hover);
+}
+
+.inspector-scroll-btn.is-left {
+  margin-left: 2px;
+}
+
+.inspector-scroll-btn.is-right {
+  margin-right: 2px;
 }
 
 .inspector-head-actions {
@@ -996,6 +1066,40 @@
 .inspector-tab {
   height: 28px;
   border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.approval-usage-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 9px;
+  margin: 2px 4px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-app) 62%, transparent);
+  border: 1px solid var(--hairline);
+  font-size: 11.5px;
+}
+
+.approval-usage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.approval-connect-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 9px;
+  margin: 4px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--status-warning) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-warning) 35%, transparent);
+  color: var(--text-primary);
 }
 
 .inspector-body {
@@ -1757,6 +1861,7 @@
 [data-window-chrome='win-overlay'] .main-header .tab,
 [data-window-chrome='win-overlay'] .main-header .segmented,
 [data-window-chrome='win-overlay'] .inspector-bar button,
+[data-window-chrome='win-overlay'] .inspector-bar .inspector-tabs-viewport,
 [data-window-chrome='win-overlay'] .inspector-bar .inspector-head,
 [data-window-chrome='win-overlay'] .resize-handle,
 [data-window-chrome='mac-inset'] .rail-top button,
@@ -1766,6 +1871,7 @@
 [data-window-chrome='mac-inset'] .main-header .tab,
 [data-window-chrome='mac-inset'] .main-header .segmented,
 [data-window-chrome='mac-inset'] .inspector-bar button,
+[data-window-chrome='mac-inset'] .inspector-bar .inspector-tabs-viewport,
 [data-window-chrome='mac-inset'] .inspector-bar .inspector-head,
 [data-window-chrome='mac-inset'] .resize-handle {
   -webkit-app-region: no-drag;

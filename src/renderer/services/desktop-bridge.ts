@@ -14,6 +14,7 @@ import {
   generateStructuredChineseTitle,
   getCanonicalToolName,
   GRAVITY_BUILTIN_CAPABILITIES,
+  isExternalReviewerConnected,
   isLegacyPollutionSessionTitle,
   isSafeMcpServerName,
   isSafePluginTarget,
@@ -42,6 +43,8 @@ import {
   type DailyCalendarHeatmapCell,
   type DayHourHeatmapCell,
   type DiscoveredSkillItem,
+  type ExternalReviewerProviderBreakdownItem,
+  type ExternalReviewerTelemetrySnapshot,
   type ExternalReviewerModelsDiscoveryInput,
   type ExternalReviewerModelsDiscoveryResult,
   type GravityDesktopBridge,
@@ -205,7 +208,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
   };
 
   let approvalConfig: ApproveForMeConfig = {
-    mode: 'hybrid',
+    mode: 'rules-only',
     enableSafeDownloadAutoApprove: true,
     maxDownloadSizeMB: 25,
     cacheTtlHours: 24,
@@ -1013,6 +1016,146 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       },
     ]);
 
+    const geminiRate = resolveModelRateCard('gemini-4-hydrogen', rateCards);
+    const openAiRate = resolveModelRateCard('gpt-4o-mini', rateCards);
+    const extProviderGemini = calculateTokenCost(
+      { inputTokens: 18_400, cachedInputTokens: 3_200, outputTokens: 2_100, thinkingTokens: 4_800 },
+      geminiRate
+    );
+    const extProviderOpenAi = calculateTokenCost(
+      { inputTokens: 9_600, cachedInputTokens: 1_200, outputTokens: 1_450, thinkingTokens: 0 },
+      openAiRate
+    );
+    const extTotalCost = extProviderGemini.totalCostUsd + extProviderOpenAi.totalCostUsd;
+    const extCumProviders: ExternalReviewerProviderBreakdownItem[] = [
+      {
+        key: 'gemini-api-key:generativelanguage.googleapis.com:gemini-4-hydrogen',
+        provider: 'gemini-api-key',
+        endpointHost: 'generativelanguage.googleapis.com',
+        modelId: 'gemini-4-hydrogen',
+        displayName: geminiRate.displayName,
+        ...extProviderGemini,
+        callCount: 19,
+        approvedCount: 15,
+        askCount: 3,
+        denyCount: 1,
+        errorCount: 0,
+        shareRatio: extTotalCost > 0 ? extProviderGemini.totalCostUsd / extTotalCost : 0.65,
+      },
+      {
+        key: 'openai-compatible:api.openai.com:gpt-4o-mini',
+        provider: 'openai-compatible',
+        endpointHost: 'api.openai.com',
+        modelId: 'gpt-4o-mini',
+        displayName: openAiRate.displayName,
+        ...extProviderOpenAi,
+        callCount: 11,
+        approvedCount: 9,
+        askCount: 2,
+        denyCount: 0,
+        errorCount: 0,
+        shareRatio: extTotalCost > 0 ? extProviderOpenAi.totalCostUsd / extTotalCost : 0.35,
+      },
+    ];
+    const extSessionGemini = calculateTokenCost(
+      { inputTokens: 4_200, cachedInputTokens: 800, outputTokens: 540, thinkingTokens: 1_100 },
+      geminiRate
+    );
+    const extCumSum = sumTokenCosts(extCumProviders);
+    const externalReviewer: ExternalReviewerTelemetrySnapshot = {
+      cumulativeAllTime: {
+        ...extCumSum,
+        callCount: 30,
+        approvedCount: 24,
+        askCount: 5,
+        denyCount: 1,
+        errorCount: 0,
+        providerCount: 2,
+      },
+      cumulativeProviders: extCumProviders,
+      bySession: {
+        'sess-primary': {
+          sessionId: 'sess-primary',
+          ...extSessionGemini,
+          callCount: 6,
+          approvedCount: 5,
+          askCount: 1,
+          denyCount: 0,
+          errorCount: 0,
+          avgLatencyMs: 640,
+          providers: [
+            {
+              key: 'gemini-api-key:generativelanguage.googleapis.com:gemini-4-hydrogen',
+              provider: 'gemini-api-key',
+              endpointHost: 'generativelanguage.googleapis.com',
+              modelId: 'gemini-4-hydrogen',
+              displayName: geminiRate.displayName,
+              ...extSessionGemini,
+              callCount: 6,
+              approvedCount: 5,
+              askCount: 1,
+              denyCount: 0,
+              errorCount: 0,
+              shareRatio: 1,
+            },
+          ],
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      hourly24h: hourly24h.map((b, idx) => ({
+        ...b,
+        inputTokens: idx >= 20 ? Math.round(b.inputTokens * 0.08) : 0,
+        cachedInputTokens: idx >= 20 ? Math.round(b.cachedInputTokens * 0.06) : 0,
+        outputTokens: idx >= 20 ? Math.round(b.outputTokens * 0.05) : 0,
+        thinkingTokens: idx >= 20 ? Math.round(b.thinkingTokens * 0.05) : 0,
+        totalTokens: idx >= 20 ? Math.round(b.totalTokens * 0.07) : 0,
+        costUsd: idx >= 20 ? b.costUsd * 0.05 : 0,
+      })),
+      matrix7d: matrix7d.map((c, idx) => ({
+        ...c,
+        totalTokens: idx % 17 === 0 ? Math.round(c.totalTokens * 0.08) : 0,
+        costUsd: idx % 17 === 0 ? c.costUsd * 0.05 : 0,
+        intensity: (idx % 17 === 0 && c.intensity > 0 ? Math.min(2, c.intensity) : 0) as 0 | 1 | 2 | 3 | 4,
+      })),
+      calendar30d: calendar30d.map((d, idx) => ({
+        ...d,
+        inputTokens: idx >= 25 ? Math.round(d.inputTokens * 0.08) : 0,
+        cachedInputTokens: idx >= 25 ? Math.round(d.cachedInputTokens * 0.06) : 0,
+        outputTokens: idx >= 25 ? Math.round(d.outputTokens * 0.05) : 0,
+        thinkingTokens: idx >= 25 ? Math.round(d.thinkingTokens * 0.05) : 0,
+        totalTokens: idx >= 25 ? Math.round(d.totalTokens * 0.07) : 0,
+        costUsd: idx >= 25 ? d.costUsd * 0.05 : 0,
+        sessionCount: idx >= 25 ? 1 : 0,
+        intensity: (idx >= 25 ? Math.min(2, d.intensity) : 0) as 0 | 1 | 2 | 3 | 4,
+      })),
+      costByRange: {
+        today: { ...extSessionGemini, callCount: 6 },
+        '7d': { ...extCumSum, callCount: 30 },
+        '30d': { ...extCumSum, callCount: 30 },
+      },
+      providerBreakdownByRange: {
+        today: [
+          {
+            key: 'gemini-api-key:generativelanguage.googleapis.com:gemini-4-hydrogen',
+            provider: 'gemini-api-key',
+            endpointHost: 'generativelanguage.googleapis.com',
+            modelId: 'gemini-4-hydrogen',
+            displayName: geminiRate.displayName,
+            ...extSessionGemini,
+            callCount: 6,
+            approvedCount: 5,
+            askCount: 1,
+            denyCount: 0,
+            errorCount: 0,
+            shareRatio: 1,
+          },
+        ],
+        '7d': extCumProviders,
+        '30d': extCumProviders,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+
     return {
       activeSessions,
       hourly24h,
@@ -1029,6 +1172,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
         '30d': range30dModels,
       },
       sessionModelBreakdowns,
+      externalReviewer,
       rateCards: rateCards.map((r) => ({ ...r })),
       pricingSource,
       generatedAt: new Date().toISOString(),
@@ -1721,18 +1865,25 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     },
 
     async setApprovalMode(mode: ApprovalMode): Promise<ApproveForMeConfig> {
-      approvalConfig = { ...approvalConfig, mode };
-      return structuredClone(approvalConfig);
+      return this.updateApprovalConfig({ mode });
     },
 
     async updateApprovalConfig(patch: Partial<ApproveForMeConfig>): Promise<ApproveForMeConfig> {
+      const nextExternal = {
+        ...approvalConfig.externalReviewer,
+        ...(patch.externalReviewer ?? {}),
+      };
+      const connected = isExternalReviewerConnected(nextExternal);
+      const requestedMode = patch.mode ?? approvalConfig.mode;
+      if (patch.mode === 'hybrid' && !connected) {
+        throw new Error('尚未连接外部复核模型，无法开启「AI 代审」；请先前往「设置 → 审批 → 外部复核」完成连接，当前仅可启用「仅规则」或「人工审批」。');
+      }
+      const nextMode: ApprovalMode = requestedMode === 'hybrid' && !connected ? 'rules-only' : requestedMode;
       approvalConfig = {
         ...approvalConfig,
         ...patch,
-        externalReviewer: {
-          ...approvalConfig.externalReviewer,
-          ...(patch.externalReviewer ?? {}),
-        },
+        mode: nextMode,
+        externalReviewer: nextExternal,
       };
       return structuredClone(approvalConfig);
     },
@@ -1745,7 +1896,10 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
 
       if (req) {
         if (submission.decision === 'approve_for_me_ai') {
-          approvalConfig = { ...approvalConfig, mode: 'hybrid' };
+          approvalConfig = {
+            ...approvalConfig,
+            mode: isExternalReviewerConnected(approvalConfig.externalReviewer) ? 'hybrid' : 'rules-only',
+          };
         }
         const isReject = submission.decision === 'reject_with_feedback';
         auditEntries.unshift({

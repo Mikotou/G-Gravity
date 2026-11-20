@@ -12,6 +12,8 @@ const BACKED_UP_SETTINGS_FILES = new Set([
   'layout.json',
   'window-state.json',
   'model-rates.json',
+  'model-rate-cards.json',
+  'external-reviewer-totals.json',
   'skill-preferences.json',
   'titles.json',
 ]);

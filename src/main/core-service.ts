@@ -5,7 +5,8 @@ import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AcpConfigOption, AcpRequestPermissionParams, AcpSessionNewResult, AcpSessionUpdateNotification, AcpPromptContentBlock, AgentExecutionMode, AgentReasoningEffort } from '../shared/acp-protocol';
-import { EXTERNAL_REVIEWER_DEFAULTS, type ApprovalAuditEntry, type ApprovalDecisionSubmission, type ApprovalMode, type ApproveForMeConfig, type ExternalReviewerModelsDiscoveryInput, type ExternalReviewerThinkingLevel } from '../shared/approval-contract';
+import { EXTERNAL_REVIEWER_DEFAULTS, isExternalReviewerConnected, type ApprovalAuditEntry, type ApprovalDecisionSubmission, type ApprovalMode, type ApproveForMeConfig, type ExternalReviewerConnectionStatus, type ExternalReviewerModelsDiscoveryInput, type ExternalReviewerThinkingLevel } from '../shared/approval-contract';
+import type { ExternalReviewerUsageRecordInput } from '../shared/telemetry-contract';
 import type { AppBootstrapPayload, AcpConnectionStatus, AppUpdateState, CreateSessionInput, OpenLinkOrFileInput, OpenLinkOrFileResult, SendPromptInput } from '../shared/ipc-channels';
 import { isForbiddenCredentialOrStatePath } from '../shared/accounts-history-contract';
 import type { ChatMessageItem, ManagedSessionSummary, TitleOrganizeRequest, TitleOrganizeResult, WorkspaceLayoutState } from '../shared/session-contract';
@@ -101,6 +102,12 @@ function sanitizeStoredApprovalConfig(raw: unknown, restoredApiKey?: string): Ap
     if (rawLevel && VALID_THINKING_LEVELS.has(rawLevel.toLowerCase() as ExternalReviewerThinkingLevel)) {
       base.externalReviewer.thinkingLevel = rawLevel.toLowerCase() as ExternalReviewerThinkingLevel;
     }
+    if (ext.connectionStatus === 'untested' || ext.connectionStatus === 'connected' || ext.connectionStatus === 'failed') {
+      base.externalReviewer.connectionStatus = ext.connectionStatus as ExternalReviewerConnectionStatus;
+    }
+    if (typeof ext.lastVerifiedAt === 'string' && ext.lastVerifiedAt.trim()) {
+      base.externalReviewer.lastVerifiedAt = ext.lastVerifiedAt.trim();
+    }
     const effectiveKey = restoredApiKey || (typeof ext.apiKey === 'string' && ext.apiKey.trim() ? ext.apiKey.trim() : undefined);
     if (effectiveKey) base.externalReviewer.apiKey = effectiveKey;
     const wantsEnabled = Boolean(ext.enabled);
@@ -113,6 +120,10 @@ function sanitizeStoredApprovalConfig(raw: unknown, restoredApiKey?: string): Ap
         base.externalReviewer.enabled = false;
       }
     }
+  }
+  // 严格遵循：未正常连接外部复核时不允许处于 AI 代审（hybrid），自动降级为基础规则通过机制（rules-only）
+  if (base.mode === 'hybrid' && !isExternalReviewerConnected(base.externalReviewer)) {
+    base.mode = 'rules-only';
   }
   return base;
 }
@@ -318,6 +329,9 @@ export class CoreService extends EventEmitter {
         brief: '多命令密集运行实时审查（本地多段 AST 语义快筛 / 独立模型复核，零订阅额度消耗）',
         status: 'working',
       });
+    });
+    this.approval.on('external-review-usage', (ev: ExternalReviewerUsageRecordInput) => {
+      this.telemetry.recordExternalReviewUsage(ev);
     });
     this.thoughts.on('block', block => {
       const owner = this.thoughtOwners.get(block.id); if (!owner) return;
@@ -1399,18 +1413,32 @@ export class CoreService extends EventEmitter {
   async setApprovalMode(mode: ApprovalMode) { return this.updateApprovalConfig({ mode }); }
   async updateApprovalConfig(patch: Partial<ApproveForMeConfig>) {
     const current = this.approval.getConfig();
-    const mergedPatch: Partial<ApproveForMeConfig> = patch.externalReviewer
+    const mergedExternal = patch.externalReviewer
       ? {
-          ...patch,
-          externalReviewer: {
-            ...patch.externalReviewer,
-            // 修改其他字段时若未覆盖 apiKey，保留已恢复的系统加密密钥
-            ...(patch.externalReviewer.apiKey === undefined && current.externalReviewer.apiKey !== undefined
-              ? { apiKey: current.externalReviewer.apiKey }
-              : {}),
-          },
+          ...current.externalReviewer,
+          ...patch.externalReviewer,
+          // 修改其他字段时若未覆盖 apiKey，保留已恢复的系统加密密钥
+          ...(patch.externalReviewer.apiKey === undefined && current.externalReviewer.apiKey !== undefined
+            ? { apiKey: current.externalReviewer.apiKey }
+            : {}),
         }
-      : patch;
+      : current.externalReviewer;
+
+    const mergedPatch: Partial<ApproveForMeConfig> = patch.externalReviewer
+      ? { ...patch, externalReviewer: mergedExternal }
+      : { ...patch };
+
+    const connected = isExternalReviewerConnected(mergedExternal);
+    const nextMode = mergedPatch.mode ?? current.mode;
+
+    if (mergedPatch.mode === 'hybrid' && !connected) {
+      throw new Error('尚未连接外部复核模型，无法开启「AI 代审」；请先前往「设置 → 审批 → 外部复核」完成连接，当前仅可启用「仅规则」或「人工审批」。');
+    }
+    if (nextMode === 'hybrid' && !connected) {
+      // 用户关闭外部复核或清空凭据时，自动降级为基础规则机制
+      mergedPatch.mode = 'rules-only';
+    }
+
     const config = this.approval.updateConfig(mergedPatch);
     this.persistApprovalConfig(config);
     return config;

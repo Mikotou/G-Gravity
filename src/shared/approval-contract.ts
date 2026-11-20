@@ -46,6 +46,8 @@ export const EXTERNAL_REVIEWER_DEFAULTS = {
   cacheTtlHours: 24,
 } as const;
 
+export type ExternalReviewerConnectionStatus = 'untested' | 'connected' | 'failed';
+
 export interface ExternalAiReviewerConfig {
   enabled: boolean;
   provider: 'gemini-api-key' | 'openai-compatible' | 'local-ollama';
@@ -57,6 +59,49 @@ export interface ExternalAiReviewerConfig {
   maxOutputTokens?: number;
   /** 思考强度（auto 表示跟随模型默认；按服务端模型能力动态筛选可用项） */
   thinkingLevel?: ExternalReviewerThinkingLevel;
+  /** 外部复核连接探测状态（用于限制仅正常连接后才允许开启 AI 代审） */
+  connectionStatus?: ExternalReviewerConnectionStatus;
+  /** 最近一次验证连通的时间（ISO 字符串） */
+  lastVerifiedAt?: string;
+}
+
+/**
+ * 判断外部复核模型是否已具备正常连接条件，决定是否允许开启「AI 代审（hybrid）」模式：
+ * - 必须已开启 `enabled` 且配置有效模型名与白名单 Endpoint；
+ * - 云端 API（Gemini / OpenAI）必须持有非空 API Key；本机 Ollama 仅允许 `http://127.0.0.1`；
+ * - 若最近一次连接探测明确失败（`connectionStatus === 'failed'`）则视为未连通。
+ */
+export function isExternalReviewerConnected(cfg?: Partial<ExternalAiReviewerConfig> | null): boolean {
+  if (!cfg || !cfg.enabled) return false;
+  if (cfg.connectionStatus === 'failed') return false;
+  const model = typeof cfg.model === 'string' ? cfg.model.trim() : '';
+  if (!model || !/^[a-zA-Z0-9._:/-]{1,120}$/.test(model)) return false;
+  const rawEndpoint = typeof cfg.endpoint === 'string' ? cfg.endpoint.trim() : '';
+  if (!rawEndpoint) return false;
+  try {
+    const url = new URL(rawEndpoint);
+    if (url.username || url.password || url.search || url.hash) return false;
+    if (cfg.provider === 'local-ollama') {
+      return url.protocol === 'http:' && url.hostname === '127.0.0.1';
+    }
+    const allowedHost =
+      cfg.provider === 'gemini-api-key'
+        ? 'generativelanguage.googleapis.com'
+        : cfg.provider === 'openai-compatible'
+          ? 'api.openai.com'
+          : '';
+    if (url.hostname === '127.0.0.1' && url.protocol === 'http:') return true;
+    const key = typeof cfg.apiKey === 'string' ? cfg.apiKey.trim() : '';
+    return Boolean(
+      allowedHost &&
+        url.hostname === allowedHost &&
+        url.protocol === 'https:' &&
+        (!url.port || url.port === '443') &&
+        key.length > 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 export interface ExternalReviewerModelOption {

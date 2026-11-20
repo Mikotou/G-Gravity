@@ -77,7 +77,8 @@ describe('App 主界面演示桥接交互（不等同真实服务）', () => {
       await waitFor(() => expect(document.documentElement.getAttribute('data-theme')).toBe(theme.id));
     }
     const bridge = getFallbackDesktopBridge();
-    expect((await bridge.getBootstrap()).approvalConfig.mode).toBe('hybrid');
+    // 未连接外部复核时默认仅启用基础「仅规则」机制，不允许无连接开启 AI 代审
+    expect((await bridge.getBootstrap()).approvalConfig.mode).toBe('rules-only');
     // v0.3：设置为全屏覆盖层，Esc 关闭后快捷键才作用于工作台
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByTestId('settings-overlay')).toBeNull());
