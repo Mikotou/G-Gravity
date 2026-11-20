@@ -10,7 +10,7 @@ export function createCoreBridge(core: CoreService): AgyDesktopBridge {
     'renameSession', 'togglePinSession', 'organizeTitles', 'setApprovalMode',
     'updateApprovalConfig', 'submitApprovalDecision', 'listApprovalAudit',
     'getTelemetryDashboard', 'getSwarmState',
-    'setAppIcon', 'importCustomTheme', 'exportCustomTheme', 'openLinkOrFileTarget', 'selectDirectory', 'getAccountsState',
+    'setAppIcon', 'importCustomTheme', 'exportCustomTheme', 'openLinkOrFileTarget', 'selectDirectory', 'getUpdateState', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'getAccountsState',
     'createAccountProfile', 'deleteAccountProfile', 'switchAccountProfile', 'officialLogout',
     'setSessionMode', 'setSessionEffort', 'setSessionModel', 'getSessionInspector', 'listWorkspaceFiles',
     'listImportedHistory', 'getImportedHistoryDetail', 'continueHistoryInGravity', 'updateModelRateCards',
@@ -26,7 +26,7 @@ export function createCoreBridge(core: CoreService): AgyDesktopBridge {
     onSessionUpdated: 'session-updated', onMessageUpserted: 'message-upserted',
     onApprovalRequested: 'approval-requested', onApprovalResolved: 'approval-resolved',
     onTelemetryUpdated: 'telemetry-updated', onSwarmUpdated: 'swarm-updated',
-    onInspectorUpdated: 'inspector-updated', onHistoryUpdated: 'history-updated', onAccountUpdated: 'account-updated',
+    onInspectorUpdated: 'inspector-updated', onHistoryUpdated: 'history-updated', onAccountUpdated: 'account-updated', onUpdateState: 'update-state',
   };
   for (const [method, event] of Object.entries(events)) result[method] = (listener: (...args: any[]) => void) => {
     core.on(event, listener); return () => { core.off(event, listener); };

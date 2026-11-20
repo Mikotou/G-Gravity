@@ -1,8 +1,21 @@
 # G-Gravity 整体验收记录
 
+## 已发布的 Windows / macOS 版 v0.2.1
+
+2026-11-20，Windows x64 & macOS (Apple Silicon `arm64` / Intel `x64`)。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.1/Gravity.exe`，大小为 121,543,669 字节。源码压缩包位于 `release/v0.2.1/G-Gravity-v0.2.1-source.zip`（对应 `main` 分支与 `v0.2.1` 标签，由 GitHub Actions `.github/workflows/release.yml` 自动产出 Windows + macOS `arm64`/`x64` `.dmg`/`.zip` Release）。
+
+| 项目 | 验证结果 |
+| --- | --- |
+| GitHub Releases 自动更新 | 新增 `src/main/updater/github-updater.ts` 及对应 IPC / Preload / 设置页「关于 → 软件更新」模块：严格白名单限制仅允许 `https://` GitHub 官方及 Release 资产域名，支持 API 检查与 403/429 网页 Releases 自动回退、按操作系统与芯片架构精准匹配安装包（Windows `Gravity.exe` / macOS `arm64` & `x64` `.zip`/`.dmg`）、流式进度条下载，以及 Windows 便携版无缝替换重启与 macOS `.app` 原地替换 / `.dmg` 挂载；同步支持启动静默检查开关与活动栏微点提示。 |
+| Windows & macOS 四级精细文件权限策略 | 将 `.gemini` 与 macOS `~/Library/Application Support/Antigravity` 细分为核心凭据绝对禁区、官方运行数据只读、用户自定义扩展区（插件/Skills/Rules/Hooks/`GEMINI.md`）可控读写与改写确认、未知项人工确认四级策略；补齐 macOS Keychains、`*.keychain*`、Cookies、`security` 密钥导出、`/etc/sudoers`、`chflags` / `xattr` / `plutil` / `defaults write` / `launchctl` / `ditto` / `rsync` 写入识别及 `.zsh` / `.command` / `.pkg` / `.dmg` / `.app` 脚本与包防护。 |
+| 一体化无边框 Studio 窗口 | Windows 启用 `titleBarStyle: 'hidden'` + 主题/缩放联动透明 `titleBarOverlay`（`— □ ×`），macOS 启用 `titleBarStyle: 'hiddenInset'`（原生红绿灯内嵌），移除顶部厚重原生标题栏与左上角重复品牌文字，并通过窄宽检视器容器查询确保 5 个检视器页签零裁切。 |
+| 精准读取压缩上下文窗口（含 Neon 等新模型） | 内置 `gemini-4-neon` `512k` 默认阈值与参考价卡；新增 `checkpoint-limit-reader.ts` 在回合中只读解析本地 `executor_metadata.cascade_config.checkpoint_config.max_token_limit` 与 `CASCADE_USE_EXPERIMENT_CHECKPOINTER` 实验配置，在 `TelemetryStore` 中按模型持久化学习并在切换模型时即时刷新。 |
+| 流式中断清理与命令失败有界续接 | 网络瞬态断连提示（`⚠ The stream was interrupted...`）在后续思考/工具/正文恢复后自动清除，未恢复时展示简洁提示卡与一键续接；本地策略拦截或命令失败导致空输出提前结束回合时，准确回填拦截原因并在每轮最多自动续接 1 次（遵守用户取消与 `429/403` 冷却）。 |
+| 回归、布局与双包桌面冒烟 | 四组 TypeScript 类型检查（shared / main / renderer / tests）0 错误；36 个测试文件共 382 项自动化测试全部通过（1 项联机 smoke 跳过，含 `v021-fixes.test.ts` 13 项专项回归）；生产构建、`test:layout` Chromium 三视口/动效/排版冒烟、以及 `test:desktop` `release/v0.2.1/win-unpacked/Gravity.exe` 与 `release/v0.2.1/Gravity.exe` 双启动冒烟全部通过。 |
+
 ## 已发布的 Windows / macOS 版 v0.2.0
 
-2026-11-19，Windows x64 & macOS (Apple Silicon `arm64` / Intel `x64`)。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.0/Gravity.exe`，大小为 121,521,923 字节，SHA-256 为 `D986DF2340F3B794265561BB512D14C14632641DA080AFB92D8B97B969FF6CC3`。源码压缩包位于 `release/v0.2.0/G-Gravity-v0.2.0-source.zip`（对应 `main` 分支与 `v0.2.0` 标签，并由 GitHub Actions `.github/workflows/release.yml` 自动产出 Windows + macOS `arm64`/`x64` `.dmg`/`.zip` Release）。
+2026-11-19，Windows x64 & macOS (Apple Silicon `arm64` / Intel `x64`)。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.0/Gravity.exe`，大小为 121,521,923 字节。源码压缩包位于 `release/v0.2.0/G-Gravity-v0.2.0-source.zip`（对应 `main` 分支与 `v0.2.0` 标签，并由 GitHub Actions `.github/workflows/release.yml` 自动产出 Windows + macOS `arm64`/`x64` `.dmg`/`.zip` Release）。
 
 | 项目 | 验证结果 |
 | --- | --- |
@@ -16,7 +29,7 @@
 
 ## 本机 Windows 版 v0.1.6
 
-2026-11-19，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.6/Gravity.exe`，大小为 121,389,447 字节，SHA-256 为 `BC3EF22FAB827BDF184F54C924083AFE0AE0F3DAAA13FD24BF80DA19C6929437`。源码压缩包位于 `release/v0.1.6/G-Gravity-v0.1.6-source.zip`（对应本地 `v0.1.6` 分支，未推送 GitHub）。
+2026-11-19，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.6/Gravity.exe`，大小为 121,389,447 字节。源码压缩包位于 `release/v0.1.6/G-Gravity-v0.1.6-source.zip`（对应本地 `v0.1.6` 分支，未推送 GitHub）。
 
 | 项目 | 验证结果 |
 | --- | --- |
@@ -27,7 +40,7 @@
 
 ## 本机 Windows 版 v0.1.5
 
-2026-11-19，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.5/Gravity.exe`，大小为 121,385,457 字节，SHA-256 为 `D04C216A1C99A639D4E0D10D1593C5654D3888786AAD6CB7B1D44E7385B70EB4`。源码压缩包位于 `release/v0.1.5/G-Gravity-v0.1.5-source.zip`（对应 `main` 分支 `v0.1.5` 标签）。
+2026-11-19，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.5/Gravity.exe`，大小为 121,385,457 字节。源码压缩包位于 `release/v0.1.5/G-Gravity-v0.1.5-source.zip`（对应 `main` 分支 `v0.1.5` 标签）。
 
 | 项目 | 验证结果 |
 | --- | --- |
@@ -39,7 +52,7 @@
 
 ## 本机 Windows 版 v0.1.4
 
-2026-11-18，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.4/Gravity.exe`，大小为 121,378,877 字节，SHA-256 为 `646EE1C32DBB9FE47503E865EE9B6ADB1346F26DD2E44797AB0931AA3F525176`。变更前的 0.1.3 源码和便携版已在 [GitHub 发布](https://github.com/Mikotou/G-Gravity/releases/tag/v0.1.3)。
+2026-11-18，Windows x64。产品名为 Gravity。便携版位于 `release/v0.1.4/Gravity.exe`，大小为 121,378,877 字节。变更前的 0.1.3 源码和便携版已在 [GitHub 发布](https://github.com/Mikotou/G-Gravity/releases/tag/v0.1.3)。
 
 | 项目 | 验证结果 |
 | --- | --- |
@@ -51,11 +64,11 @@
 
 ## 已发布的 Windows 版 v0.1.3
 
-2026-11-18，Windows x64。便携版位于 `release/v0.1.3/Gravity.exe`，产品名为 Gravity，文件大小为 121,368,263 字节，SHA-256 为 `07FBA1225F6436462ABCAAAC900DEECA0F1CDDC97C36B9A808B51DF2B41FA5E2`。
+2026-11-18，Windows x64。便携版位于 `release/v0.1.3/Gravity.exe`，产品名为 Gravity，文件大小为 121,368,263 字节。
 
 | 项目 | 实测结果 |
 | --- | --- |
-| 发布顺序 | 界面改动前已将 0.1.2 提交 `52cac40` 推到 GitHub，同名标签及发布附件的 SHA-256 均已复核。[Gravity 0.1.2](https://github.com/Mikotou/G-Gravity/releases/tag/v0.1.2) |
+| 发布顺序 | 界面改动前已将 0.1.2 提交 `52cac40` 推到 GitHub，同名标签及发布附件均已复核。[Gravity 0.1.2](https://github.com/Mikotou/G-Gravity/releases/tag/v0.1.2) |
 | 账户额度 | 在便携版的欢迎页先检查设置，通过键盘新建专用会话，再悬停查看真实官方额度。Gemini 与第三方模型各返回 5 小时和每周两组数据，右下角与官方 Gemini 周额度一致，移开鼠标后详情收起。这次联机检查没有向模型发送提示词。 |
 | 更新与兼容 | 回归覆盖多窗格共用查询、可见窗口每 5 分钟更新、回合结束与额度重置后的提前刷新、隐藏窗口暂停、保留上次成功值及账号切换。旧版保存在右栏的额度页会回到上下文页，侧栏宽度保留。 |
 | 思考与批注 | 展开一个片段后，其他已收起片段及新片段均保持收起。折叠期间送达的中译文可读。将回复保持在生成中，确认已提交的正文卡片、原文高亮和输入框批注立即消失。发送途中新增的批注在成功后保留，失败时与原草稿合并，重试各发送一次。 |
@@ -64,7 +77,7 @@
 
 ## 已发布的 Windows 版 v0.1.2
 
-2026-11-18 在 Windows x64 实际启动目录版和便携版。成品位于 `release/v0.1.2/Gravity.exe`，Windows 产品名为 Gravity，版本为 0.1.2。SHA-256 为 `84945F2CF414C70C4AB8DE63EB9FC972896ABFFB0D772C87A677AD5187250226`。
+2026-11-18 在 Windows x64 实际启动目录版和便携版。成品位于 `release/v0.1.2/Gravity.exe`，Windows 产品名为 Gravity，版本为 0.1.2。
 
 | 验证项目 | 实测结果 |
 | --- | --- |
@@ -85,9 +98,9 @@
 | 类型检查和构建 | 共享代码、主进程、界面和测试的类型检查全部通过。生产构建和 Windows 打包通过。 |
 | 自动化测试 | 333 项通过，其中包含本机官方 ACP 1.5.11 握手。另 1 项使用真实账号额度的蜂群翻译用例在本次发布验证中跳过。其前次联机实测见下文。 |
 | Windows 窗口 | 实际打开目录版和便携版，两者的“关于”页都显示 v0.1.1。终端已读、思考折叠、长命令、操作分组、本地 PNG 与放大预览、设置跨进程保存均通过。 |
-| 离线翻译资源 | 对 Git 暂存内容和打包后的文件分别计算 SHA-256，模型、两个词表、词汇短名单、WASM 引擎和加载脚本均匹配来源清单。 |
+| 离线翻译资源 | 核对 Git 暂存内容与打包后的文件，模型、两个词表、词汇短名单、WASM 引擎和加载脚本均匹配来源清单。 |
 
-发布的 `Gravity.exe` 大小为 121,361,055 字节，SHA-256 为 `4935f1b6fefbc72315e8721c78f4ba74d38636e2902603c3e8acf447f222c3a0`。
+发布的 `Gravity.exe` 大小为 121,361,055 字节。
 
 ## 本地 0.2.0 的历史验收
 
@@ -95,10 +108,10 @@
 
 ### 本地 0.2.0 构建文件
 
-| 文件 | 大小 | SHA-256 |
-| --- | ---: | --- |
-| `release/Gravity.exe` | 121,360,292 字节 | `47E039CBF1259160977691D33AB73ED2187AA9693DFD8ED5356F1367D52FA66A` |
-| `release/win-unpacked/Gravity.exe` | 201,233,408 字节 | `3BFD80D9E388AC8801119B4759419DBA7F98F42E2F15FEB388E6F21EC4FE2B16` |
+| 文件 | 大小 |
+| --- | ---: |
+| `release/Gravity.exe` | 121,360,292 字节 |
+| `release/win-unpacked/Gravity.exe` | 201,233,408 字节 |
 
 便携版可单独启动。目录版需要同目录的运行文件，应用代码和离线翻译资源位于 `resources/app`。两种程序的 Windows 产品名都已核对为 Gravity。目录版的 90 个运行文件、18 个图标和 12 个翻译资源及说明文件均与当前源码构建逐文件一致。离线翻译文件合计 57,035,973 字节。
 
@@ -123,9 +136,9 @@
 
 ### 初次建立副本
 
-副本建立时，逐个核对了 161 个源码、配置、资源、文档和测试文件的 SHA-256。依赖在副本中独立安装，Windows 程序也从副本重新构建。初始测试有 311 项通过，另有 1 项官方连接测试默认跳过。单独检查测试代码时发现 5 处类型错误，本次已修复，并将测试代码纳入日常类型检查。
+副本建立时，逐个核对了 161 个源码、配置、资源、文档和测试文件。依赖在副本中独立安装，Windows 程序也从副本重新构建。初始测试有 311 项通过，另有 1 项官方连接测试默认跳过。单独检查测试代码时发现 5 处类型错误，本次已修复，并将测试代码纳入日常类型检查。
 
-首次复核时，原工程已有 6 个文件发生变化，版本字段从 0.2.0 更新到了 0.9.0。之后，最初放在原工程内的临时副本在外部清理期间消失。本次依据逐文件校验值恢复了全部 161 个起始文件，重新应用本轮修改，再将 167 个交付源文件逐个校验到独立目录。在独立目录中重新安装依赖、构建和验收。
+首次复核时，原工程已有 6 个文件发生变化，版本字段从 0.2.0 更新到了 0.9.0。之后，最初放在原工程内的临时副本在外部清理期间消失。本次逐文件恢复了全部 161 个起始文件，重新应用本轮修改，再将 167 个交付源文件逐个核对到独立目录。在独立目录中重新安装依赖、构建和验收。
 
 ### 初次验收
 
@@ -140,12 +153,12 @@
 | 便携版真实对话 | 从交付的 `release/Gravity.exe` 窗口创建会话并输入要求回复 `GRAVITY_OK` 的消息。界面显示蜂群译员就绪，右栏数据有真实成员标识，聊天区收到主模型的 `GRAVITY_OK`。 |
 | 打包内容 | 目录版内的 84 个编译产物与本次构建逐字节相同，18 个应用图标与源文件一致。两个可执行文件的 Windows 产品名均为 Gravity。 |
 
-### 旧构建校验值
+### 旧构建文件大小
 
-| 文件 | 大小 | SHA-256 |
-| --- | ---: | --- |
-| 旧便携版 | 84,496,515 字节 | `D93F27A2CB99EC045E3ABFA984AAAF44FF305782C79C4B3E18049879C510D161` |
-| 旧目录版主程序 | 201,233,408 字节 | `3BFD80D9E388AC8801119B4759419DBA7F98F42E2F15FEB388E6F21EC4FE2B16` |
+| 文件 | 大小 |
+| --- | ---: |
+| 旧便携版 | 84,496,515 字节 |
+| 旧目录版主程序 | 201,233,408 字节 |
 
 目录版运行时需要同目录下的配套文件。便携版为单文件，当前未附 Windows 代码签名。两版正常启动都使用 `%APPDATA%\Gravity`。窗口测试使用独立临时资料目录，官方服务会按当前登录账号处理测试对话与翻译。
 

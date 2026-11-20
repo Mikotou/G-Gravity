@@ -607,3 +607,32 @@ export function generateStructuredChineseTitle(
     categoryTag: category,
   };
 }
+
+const TRANSIENT_STREAM_INTERRUPTION_LINE_RE =
+  /^[ \t]*(?:⚠\uFE0F?|⚠️|Error:\s*)[ \t]*(?:The stream was interrupted\.?(?:[ \t]*Please continue the task you were working on\.?)?|Stream interrupted[^\n]*|Network error(?::[^\n]*|\.?)|Connection interrupted[^\n]*)[ \t]*$/i;
+
+/** 判断单行文本是否为服务端流式断连产生的瞬态错误提示（例如 `⚠ The stream was interrupted...`）。 */
+export function isTransientStreamInterruptionLine(line: string): boolean {
+  return TRANSIENT_STREAM_INTERRUPTION_LINE_RE.test(line);
+}
+
+/** 判断消息正文中是否包含瞬态流式中断提示行。 */
+export function containsTransientStreamInterruption(text: string): boolean {
+  if (!text) return false;
+  return text.split(/\r?\n/).some((line) => isTransientStreamInterruptionLine(line));
+}
+
+/**
+ * 剥离消息中的瞬态流式中断提示行（在流恢复继续输出、工具继续执行或自动续接后调用），
+ * 同时收拢因剥离产生的多余首尾空行，保留所有实质回复正文。
+ */
+export function stripTransientStreamInterruptions(text: string): string {
+  if (!text) return '';
+  const lines = text.split(/\r?\n/);
+  const kept = lines.filter((line) => !isTransientStreamInterruptionLine(line));
+  if (kept.length === lines.length) return text;
+  return kept
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}

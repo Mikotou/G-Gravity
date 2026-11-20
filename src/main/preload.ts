@@ -17,6 +17,10 @@ const bridge: AgyDesktopBridge = {
   exportCustomTheme: () => invoke('gravity:app:export-custom-theme'),
   openLinkOrFileTarget: input => invoke('gravity:app:open-target', input),
   selectDirectory: defaultPath => invoke('gravity:app:select-directory', defaultPath),
+  getUpdateState: () => invoke('gravity:app:get-update-state'),
+  checkForUpdates: () => invoke('gravity:app:check-updates'),
+  downloadUpdate: () => invoke('gravity:app:download-update'),
+  installUpdate: () => invoke('gravity:app:install-update'),
   getAccountsState: () => invoke('gravity:account:get-state'),
   createAccountProfile: input => invoke('gravity:account:create-profile', input),
   deleteAccountProfile: id => invoke('gravity:account:delete-profile', id),
@@ -68,6 +72,7 @@ const bridge: AgyDesktopBridge = {
   onApprovalResolved: listener => subscribe('gravity:event:approval-resolved', listener),
   onTelemetryUpdated: listener => subscribe('gravity:event:telemetry-updated', listener),
   onSwarmUpdated: listener => subscribe('gravity:event:swarm-updated', listener),
+  onUpdateState: listener => subscribe('gravity:event:update-state', listener),
 };
 // 两个全局名称指向同一组冻结的方法，旧版渲染代码也可以调用当前接口。
 contextBridge.exposeInMainWorld('agyDesktop', Object.freeze(bridge));

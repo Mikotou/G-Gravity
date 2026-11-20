@@ -21,7 +21,7 @@
 ## 已准备后续强验证基础设施
 
 - tests/helpers/history-fixture.ts：只在临时目录构造合成的 antigravity/brain/<id>/.system_generated/logs/transcript.jsonl、conversation_summaries.db 和5种敏感诱饵；不枚举真实用户官方目录。
-- 源树快照包含每个文件与目录的条目、SHA256、字节大小、mtime/ctime和mode；排除纯读取可能更新的atime。业务导入前后要求全等，能够发现新增WAL/SHM/日志及目录改动。
+- 源树快照包含每个文件与目录的条目、内容指纹、字节大小、mtime/ctime和mode；排除纯读取可能更新的atime。业务导入前后要求全等，能够发现新增WAL/SHM/日志及目录改动。
 - 测试桩新增Mode/Model设置、官方登出与合成429/403错误请求，仍仅收发stdio、不执行命令或访问网络。
 - 后续需接入业务历史导入器的读取监控，强断言敏感诱饵零读取与源树零写入；测试基建自检不能替代业务验证。
 
@@ -34,7 +34,7 @@ v0.2前端主界面、自定义主题工坊、Inspector六页、Plugins/MCP/Skil
 - Plugins/MCP/Skills 13项通过：仅显式操作才执行CLI、全部shell:false、管理命令互斥、插件target拦截、MCP --分隔、Skill仅写客户端偏好且源文件不变。
 - Telemetry v0.2 6项通过：24/168/30维度、官方input/output总量拆分cached/thought子集避免重复定价、费用精度、分模型占比、单价修改持久化、UTC时间边界、大附件及增量速率。
 - 迁移后的backend-state/core-service/security-baseline共28项通过，包含原有审批闭环与新版冻结桥接、IPC/preload守卫。
-- History导入当前6项中4通过、2待修复：普通JSONL+SQLite确实导入，五类诱饵零readFile，导入前后源树SHA256/文件和目录项/mtime/ctime/mode全等；并发扫描、watch启停、超限文件与缓存目录隔离通过。尚缺真实source/type/created_at transcript格式映射及活跃WAL中已提交新行导入，均已定向反馈后端。
+- History导入当前6项中4通过、2待修复：普通JSONL+SQLite确实导入，五类诱饵零readFile，导入前后源树内容/文件和目录项/mtime/ctime/mode全等；并发扫描、watch启停、超限文件与缓存目录隔离通过。尚缺真实source/type/created_at transcript格式映射及活跃WAL中已提交新行导入，均已定向反馈后端。
 - 根据lead追加契约，允许只读conversation_summaries.db-wal，但仍不读源-shm且禁止源目录任何写入。测试已从“跳过WAL”升级为实际SQLite WAL源库+wal+shm完整快照不变断言。
 - workspace-inspector-v02 4项与core-v02 2项通过：安全相对路径补全与文本引用、路径穿越/敏感/二进制/超限拒绝、Diff/Plan/Terminal衍生状态与会话隔离、冻结桥接方法存在、自定义主题安全导出导入、图标和布局设置，以及只读历史续聊新建标准ACP会话带入摘要且源树不变。
 - 前端foundation 9项已按v0.2术语混排策略迁移通过：4深/2浅六主题、跟随系统监听、语言包键完整、说明/错误中文与术语英文保留、Provider语言切换。当前前端主App仍在重构，未把其过渡类型错误作为已送审缺陷。
@@ -44,4 +44,4 @@ v0.2前端主界面、自定义主题工坊、Inspector六页、Plugins/MCP/Skil
 
 `npm test -- tests/history-import-v02.test.ts tests/core-v02.test.ts` 实跑 **10/10通过**：历史导入已扩展8项，Core整合2项。此前WAL新行与真实source/type/created_at格式失败均已解除。
 
-新增证据包括：真实SQLite WAL连接保持打开，WAL内新提交摘要可被导入；源db/wal/shm的SHA256与元数据全等，源-shm未被readFile读取；无旁路WAL文件时仅规范化客户端副本头部，源DB头部保持2；真实fs.watch在测试主动修改合成JSONL后触发防抖更新，业务刷新本身未改源树。普通JSONL/SQLite与敏感诱饵零读取断言继续通过。测试始终只使用临时合成历史，不扫描用户真实官方目录。
+新增证据包括：真实SQLite WAL连接保持打开，WAL内新提交摘要可被导入；源db/wal/shm的内容与元数据全等，源-shm未被readFile读取；无旁路WAL文件时仅规范化客户端副本头部，源DB头部保持2；真实fs.watch在测试主动修改合成JSONL后触发防抖更新，业务刷新本身未改源树。普通JSONL/SQLite与敏感诱饵零读取断言继续通过。测试始终只使用临时合成历史，不扫描用户真实官方目录。

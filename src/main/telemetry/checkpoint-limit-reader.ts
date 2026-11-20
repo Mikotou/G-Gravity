@@ -21,9 +21,9 @@ function readVarint(buf: Buffer, offset: number): { value: number; next: number 
   return null;
 }
 
-function findProtoSubmessage(buf: Buffer, targetField: number): Buffer | null {
+function findAllProtoSubmessages(buf: Buffer, targetField: number): Buffer[] {
   let pos = 0;
-  let found: Buffer | null = null;
+  const found: Buffer[] = [];
   while (pos < buf.length) {
     const tag = readVarint(buf, pos);
     if (!tag || tag.value === 0) break;
@@ -39,7 +39,7 @@ function findProtoSubmessage(buf: Buffer, targetField: number): Buffer | null {
       if (!len || len.next + len.value > buf.length) break;
       const slice = buf.subarray(len.next, len.next + len.value);
       pos = len.next + len.value;
-      if (field === targetField) found = slice;
+      if (field === targetField) found.push(slice);
     } else if (wire === 5) {
       pos += 4;
     } else if (wire === 1) {
@@ -80,21 +80,39 @@ function findProtoVarint(buf: Buffer, targetField: number): number | null {
   return found;
 }
 
+function isValidCheckpointLimit(limit: number | null): limit is number {
+  return limit !== null && Number.isFinite(limit) && limit >= 16_000 && limit <= 2_000_000;
+}
+
 /**
- * 从 `executor_metadata` 二进制负载解析 `cascade_config (10) -> checkpoint_config (2) -> max_token_limit (5)`。
+ * 从 `executor_metadata` 二进制负载解析压缩触发上限：
+ * 1) 首选标准 Protobuf 路径：`cascade_config (10) -> checkpoint_config (2) -> max_token_limit (5)`；
+ * 2) 兼容服务端随实验下发的 `CASCADE_USE_EXPERIMENT_CHECKPOINTER` JSON 文本（`"max_token_limit":"512000"`）。
  */
 export function decodeCheckpointMaxTokenLimit(executorMetadataBlob: Buffer): number | null {
-  const cascadeConfig = findProtoSubmessage(executorMetadataBlob, 10);
-  if (!cascadeConfig) return null;
-  const checkpointConfig = findProtoSubmessage(cascadeConfig, 2);
-  if (!checkpointConfig) return null;
-  const limit = findProtoVarint(checkpointConfig, 5);
-  // 仅采纳处于客户端可识别范围内的阈值。返回 null 时调用者保留已有的窗口估计值。
-  if (limit !== null && limit >= 16_000 && limit <= 2_000_000) {
-    return limit;
+  const cascadeConfigs = findAllProtoSubmessages(executorMetadataBlob, 10);
+  for (let i = cascadeConfigs.length - 1; i >= 0; i -= 1) {
+    const checkpointConfigs = findAllProtoSubmessages(cascadeConfigs[i], 2);
+    for (let j = checkpointConfigs.length - 1; j >= 0; j -= 1) {
+      const limit = findProtoVarint(checkpointConfigs[j], 5);
+      if (isValidCheckpointLimit(limit)) {
+        return limit;
+      }
+    }
+  }
+  // 兜底：若二进制内嵌 `CASCADE_USE_EXPERIMENT_CHECKPOINTER` 或 checkpoint JSON 字符串，直接提取其中的 max_token_limit
+  const asUtf8 = executorMetadataBlob.toString('utf8');
+  const jsonMatches = [...asUtf8.matchAll(/"max_token_limit"\s*:\s*"?(\d{5,7})"?/g)];
+  for (let i = jsonMatches.length - 1; i >= 0; i -= 1) {
+    const parsed = Number(jsonMatches[i][1]);
+    if (isValidCheckpointLimit(parsed)) {
+      return parsed;
+    }
   }
   return null;
 }
+
+const MAX_SESSION_DB_BYTES = 128 * 1024 * 1024;
 
 /**
  * 纯只读提取会话数据库 `<sessionId>.db` 中 `executor_metadata -> cascade_config.checkpoint_config.max_token_limit`：
@@ -108,38 +126,47 @@ export async function readSessionCheckpointLimit(options: {
 }): Promise<number | null> {
   const { sessionId, cacheDir, isolatedAppDataDir, homeDir } = options;
   if (!/^[a-zA-Z0-9_-]{8,80}$/.test(sessionId)) return null;
+  if (isForbiddenCredentialOrStatePath(cacheDir)) return null;
 
-  const baseRoot = isolatedAppDataDir
-    ? resolve(isolatedAppDataDir)
-    : join(homeDir || homedir(), '.gemini', 'antigravity-cli');
-  const sourceDb = join(baseRoot, 'conversations', `${sessionId}.db`);
-  if (isForbiddenCredentialOrStatePath(sourceDb) || isForbiddenCredentialOrStatePath(cacheDir)) {
-    return null;
-  }
+  const baseRoots = isolatedAppDataDir
+    ? [resolve(isolatedAppDataDir)]
+    : [
+        join(homeDir || homedir(), '.gemini', 'antigravity-cli'),
+        join(homeDir || homedir(), '.gemini', 'antigravity'),
+      ];
 
-  let bytes: Buffer;
+  let sourceDb = '';
+  let bytes: Buffer | undefined;
   let walBytes: Buffer | undefined;
-  try {
-    const st = await fs.lstat(sourceDb);
-    if (st.isSymbolicLink() || !st.isFile() || st.size > 32 * 1024 * 1024) return null;
-    bytes = await fs.readFile(sourceDb);
-    if (bytes.subarray(0, 16).toString() !== 'SQLite format 3\0') return null;
-    if (bytes[18] === 2 || bytes[19] === 2) {
-      try {
-        const walPath = `${sourceDb}-wal`;
-        if (!isForbiddenCredentialOrStatePath(walPath)) {
-          const wst = await fs.lstat(walPath);
-          if (!wst.isSymbolicLink() && wst.isFile() && wst.size <= 32 * 1024 * 1024) {
-            walBytes = await fs.readFile(walPath);
+  for (const baseRoot of baseRoots) {
+    const candidate = join(baseRoot, 'conversations', `${sessionId}.db`);
+    if (isForbiddenCredentialOrStatePath(candidate)) continue;
+    try {
+      const st = await fs.lstat(candidate);
+      if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_SESSION_DB_BYTES) continue;
+      const buf = await fs.readFile(candidate);
+      if (buf.subarray(0, 16).toString() !== 'SQLite format 3\0') continue;
+      sourceDb = candidate;
+      bytes = buf;
+      if (buf[18] === 2 || buf[19] === 2) {
+        try {
+          const walPath = `${candidate}-wal`;
+          if (!isForbiddenCredentialOrStatePath(walPath)) {
+            const wst = await fs.lstat(walPath);
+            if (!wst.isSymbolicLink() && wst.isFile() && wst.size <= MAX_SESSION_DB_BYTES) {
+              walBytes = await fs.readFile(walPath);
+            }
           }
+        } catch {
+          /* WAL 不存在时仅规范化内存副本头 */
         }
-      } catch {
-        /* WAL 不存在时仅规范化内存副本头 */
       }
+      break;
+    } catch {
+      /* 尝试下一候选目录 */
     }
-  } catch {
-    return null;
   }
+  if (!sourceDb || !bytes) return null;
 
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
   await fs.mkdir(cacheDir, { recursive: true, mode: 0o700 });
@@ -163,12 +190,24 @@ export async function readSessionCheckpointLimit(options: {
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='executor_metadata'")
       .get();
     if (!hasTable) return null;
-    // 按 idx 取最近一次记录。空表、缺字段及不可解析的内容均可回到模型默认窗口。
-    const row = db.prepare('SELECT data FROM executor_metadata ORDER BY idx DESC LIMIT 1').get() as
-      | { data?: Uint8Array | Buffer }
-      | undefined;
-    if (!row?.data) return null;
-    return decodeCheckpointMaxTokenLimit(Buffer.from(row.data));
+    // 优先倒序检索最近 16 条记录（避免末尾状态更新行省略 cascade_config），若均缺失再回退首部 4 条。
+    const recentRows = db
+      .prepare('SELECT data FROM executor_metadata ORDER BY idx DESC LIMIT 16')
+      .all() as Array<{ data?: Uint8Array | Buffer }>;
+    for (const row of recentRows) {
+      if (!row?.data) continue;
+      const found = decodeCheckpointMaxTokenLimit(Buffer.from(row.data));
+      if (found !== null) return found;
+    }
+    const headRows = db
+      .prepare('SELECT data FROM executor_metadata ORDER BY idx ASC LIMIT 4')
+      .all() as Array<{ data?: Uint8Array | Buffer }>;
+    for (const row of headRows) {
+      if (!row?.data) continue;
+      const found = decodeCheckpointMaxTokenLimit(Buffer.from(row.data));
+      if (found !== null) return found;
+    }
+    return null;
   } catch {
     return null;
   } finally {

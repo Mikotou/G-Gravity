@@ -3,6 +3,8 @@ import {
   Blocks,
   Check,
   Coins,
+  Download,
+  ExternalLink,
   FolderKanban,
   FolderOpen,
   Info,
@@ -11,6 +13,8 @@ import {
   Pencil,
   Pin,
   Plus,
+  RefreshCw,
+  RotateCw,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -28,6 +32,7 @@ import {
   type AccountsStateSnapshot,
   type AcpConnectionStatus,
   type AgentExecutionMode,
+  type AppUpdateState,
   type ApprovalAuditEntry,
   type ApproveForMeConfig,
   type ClientPreferences,
@@ -57,9 +62,13 @@ export interface SettingsViewProps {
   auditEntries: ApprovalAuditEntry[];
   plugins: PluginsManagerSnapshot;
   rateCards: ModelRateCard[];
+  updateState: AppUpdateState;
   onSectionChange: (section: SettingsSection) => void;
   onClose: () => void;
   onUpdatePreferences: (patch: Partial<ClientPreferences>) => Promise<void>;
+  onCheckUpdates: () => Promise<void>;
+  onDownloadUpdate: () => Promise<void>;
+  onInstallUpdate: () => Promise<void>;
   onSetAppIcon: (iconId: GravityIconId) => Promise<void>;
   onImportCustomTheme: (jsonText: string) => Promise<void>;
   onExportCustomTheme: () => Promise<string>;
@@ -543,15 +552,41 @@ function ProjectsPanel({
   );
 }
 
+function formatUpdateBytes(bytes?: number): string {
+  if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
 function AboutPanel({
   preferences,
   connection,
+  updateState,
+  onUpdatePreferences,
+  onCheckUpdates,
+  onDownloadUpdate,
+  onInstallUpdate,
 }: {
   preferences: ClientPreferences;
   connection: AcpConnectionStatus;
+  updateState: AppUpdateState;
+  onUpdatePreferences: (patch: Partial<ClientPreferences>) => Promise<void>;
+  onCheckUpdates: () => Promise<void>;
+  onDownloadUpdate: () => Promise<void>;
+  onInstallUpdate: () => Promise<void>;
 }): React.ReactElement {
   const { dict } = useI18n();
   const icon = resolveGravityIconVariant(preferences.appIcon);
+  const autoCheckEnabled = preferences.autoCheckUpdates !== false;
+  const repoUrl = updateState.repoUrl || APP_BRAND.repoUrl;
+  const releaseHref = updateState.releaseUrl || `${repoUrl}/releases`;
+  const progressPct =
+    updateState.progressPercent !== undefined
+      ? Math.max(0, Math.min(100, updateState.progressPercent))
+      : updateState.totalBytes && updateState.downloadedBytes
+        ? Math.min(100, Math.round((updateState.downloadedBytes / updateState.totalBytes) * 100))
+        : 0;
   const shortcuts: Array<[string, string]> = [
     [dict.shortcutLabels.newThread, 'Ctrl N'],
     [dict.shortcutLabels.sidebar, 'Ctrl B'],
@@ -560,6 +595,11 @@ function AboutPanel({
     [dict.shortcutLabels.mode, 'Shift Tab'],
     [dict.shortcutLabels.settings, 'Ctrl ,'],
   ];
+
+  const openExternal = (target: string) => {
+    void getDesktopBridge().openLinkOrFileTarget({ target, action: 'browser' }).catch(() => {});
+  };
+
   return (
     <div className="settings-section" data-testid="about-gravity-modal">
       <div className="about-hero">
@@ -567,11 +607,173 @@ function AboutPanel({
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <h3>{APP_BRAND.name}</h3>
-            <span className="badge badge-accent badge-mono">v{APP_BRAND.version}</span>
+            <span className="badge badge-accent badge-mono">v{updateState.currentVersion || APP_BRAND.version}</span>
           </div>
           <div className="muted" style={{ marginTop: 4 }}>{dict.appTagline}</div>
         </div>
       </div>
+
+      <h3 className="settings-group-title">{dict.updatesSectionTitle}</h3>
+      <div className="settings-group update-card" data-testid="update-panel">
+        <div className="setting-row">
+          <span className="setting-label">{dict.updatesSourceLabel}</span>
+          <span className="muted mono truncate">{APP_BRAND.repoSlug}</span>
+          <span className="spacer" />
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => openExternal(releaseHref)}
+            data-testid="open-release-page-btn"
+          >
+            <ExternalLink size={13} />
+            <span>{dict.updatesViewReleaseBtn}</span>
+          </button>
+        </div>
+
+        <div className="setting-row">
+          <div>
+            <div className="setting-label">{dict.updatesAutoCheckLabel}</div>
+            <div className="setting-desc">{dict.updatesAutoCheckDesc}</div>
+          </div>
+          <span className="spacer" />
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={autoCheckEnabled}
+              aria-label={dict.updatesAutoCheckLabel}
+              onChange={(e) => void onUpdatePreferences({ autoCheckUpdates: e.target.checked })}
+              data-testid="auto-check-updates-toggle"
+            />
+            <span className="switch-track" />
+          </label>
+        </div>
+
+        <div className="setting-row update-status-row">
+          <div className="update-status-copy">
+            {updateState.status === 'checking' && (
+              <span className="update-status-line muted">
+                <RefreshCw size={13} className="spin" />
+                <span>{dict.updatesChecking}</span>
+              </span>
+            )}
+            {updateState.status === 'up-to-date' && (
+              <span className="update-status-line" style={{ color: 'var(--status-success)' }}>
+                <Check size={14} />
+                <span>
+                  {dict.updatesUpToDate}
+                  {updateState.latestVersion ? ` (v${updateState.latestVersion})` : ''}
+                </span>
+              </span>
+            )}
+            {updateState.status === 'available' && (
+              <div className="update-available-meta">
+                <span className="badge badge-accent badge-mono">
+                  {dict.updatesAvailableBadge(updateState.latestVersion || '')}
+                </span>
+                {updateState.asset ? (
+                  <span className="muted mono truncate">
+                    {updateState.asset.name}
+                    {updateState.asset.sizeBytes ? ` · ${formatUpdateBytes(updateState.asset.sizeBytes)}` : ''}
+                  </span>
+                ) : (
+                  <span className="muted">{dict.updatesNoMatchingAsset}</span>
+                )}
+              </div>
+            )}
+            {updateState.status === 'downloading' && (
+              <div className="update-progress-wrap">
+                <div className="update-progress-head">
+                  <span>{dict.updatesDownloading}</span>
+                  <span className="mono muted">
+                    {progressPct}%
+                    {updateState.downloadedBytes
+                      ? ` · ${formatUpdateBytes(updateState.downloadedBytes)}${updateState.totalBytes ? ` / ${formatUpdateBytes(updateState.totalBytes)}` : ''}`
+                      : ''}
+                  </span>
+                </div>
+                <div className="update-progress-track">
+                  <div className="update-progress-fill" style={{ width: `${progressPct}%` }} />
+                </div>
+              </div>
+            )}
+            {updateState.status === 'downloaded' && (
+              <div className="update-available-meta">
+                <span className="badge badge-success badge-mono">
+                  v{updateState.latestVersion}
+                </span>
+                <span className="muted truncate">{updateState.asset?.name}</span>
+              </div>
+            )}
+            {updateState.status === 'installing' && (
+              <span className="update-status-line muted">
+                <RotateCw size={13} className="spin" />
+                <span>{dict.updatesInstalling}</span>
+              </span>
+            )}
+            {updateState.status === 'error' && (
+              <span className="update-status-line" style={{ color: 'var(--status-danger)' }}>
+                {updateState.errorMessage || dict.unknownError}
+              </span>
+            )}
+            {updateState.status === 'idle' && (
+              <span className="muted">{dict.updatesIdleHint}</span>
+            )}
+          </div>
+
+          <div className="update-actions">
+            {updateState.status === 'available' && updateState.asset && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => void onDownloadUpdate()}
+                data-testid="download-update-btn"
+              >
+                <Download size={13} />
+                <span>{dict.updatesDownloadBtn}</span>
+              </button>
+            )}
+            {updateState.status === 'downloaded' && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => void onInstallUpdate()}
+                data-testid="install-update-btn"
+              >
+                <RotateCw size={13} />
+                <span>
+                  {updateState.canInstallDirectly
+                    ? dict.updatesInstallRestartBtn
+                    : dict.updatesOpenPackageBtn}
+                </span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={
+                updateState.status === 'checking' ||
+                updateState.status === 'downloading' ||
+                updateState.status === 'installing'
+              }
+              onClick={() => void onCheckUpdates()}
+              data-testid="check-updates-btn"
+            >
+              <RefreshCw size={13} className={updateState.status === 'checking' ? 'spin' : ''} />
+              <span>{dict.updatesCheckBtn}</span>
+            </button>
+          </div>
+        </div>
+
+        {updateState.releaseNotes &&
+          (updateState.status === 'available' ||
+            updateState.status === 'downloading' ||
+            updateState.status === 'downloaded') && (
+            <div className="update-notes" data-testid="update-release-notes">
+              <pre>{updateState.releaseNotes}</pre>
+            </div>
+          )}
+      </div>
+
       <div className="settings-group">
         <div className="setting-row">
           <span className="setting-label">agy</span>
@@ -704,8 +906,21 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
       content = <RatesPanel rateCards={props.rateCards} onUpdateRateCards={props.onUpdateRateCards} />;
       break;
     default:
-      content = <AboutPanel preferences={props.preferences} connection={props.connection} />;
+      content = (
+        <AboutPanel
+          preferences={props.preferences}
+          connection={props.connection}
+          updateState={props.updateState}
+          onUpdatePreferences={props.onUpdatePreferences}
+          onCheckUpdates={props.onCheckUpdates}
+          onDownloadUpdate={props.onDownloadUpdate}
+          onInstallUpdate={props.onInstallUpdate}
+        />
+      );
   }
+
+  const hasPendingUpdate =
+    props.updateState.status === 'available' || props.updateState.status === 'downloaded';
 
   return (
     <div className="overlay" onMouseDown={onClose} data-testid="settings-overlay">
@@ -725,6 +940,9 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
                 >
                   <Icon size={15} />
                   <span className="truncate">{dict.settingsNav[id]}</span>
+                  {id === 'about' && hasPendingUpdate && (
+                    <span className="settings-nav-dot" aria-hidden="true" />
+                  )}
                 </button>
               ))}
             </React.Fragment>

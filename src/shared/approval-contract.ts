@@ -93,6 +93,7 @@ export interface ApprovalAuditEntry {
   id: string;
   timestamp: string;
   sessionId: string;
+  toolCallId?: string;
   cwd: string;
   toolName: string;
   commandOrSummary: string;

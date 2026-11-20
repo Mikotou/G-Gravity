@@ -5,7 +5,7 @@ import {
   TITLE_ORGANIZE_RATE_LIMIT,
   withoutSession,
 } from '../../shared/session-contract';
-import { clampUiScale, UI_SCALE_LIMITS } from '../../shared/theme-i18n-contract';
+import { APP_BRAND, clampUiScale, UI_SCALE_LIMITS } from '../../shared/theme-i18n-contract';
 import { prepareRevision } from '../../shared/message-revision';
 import {
   calculateTokenCost,
@@ -27,6 +27,7 @@ import {
   type AgentExecutionMode,
   type AgentReasoningEffort,
   type AppBootstrapPayload,
+  type AppUpdateState,
   type ApprovalAuditEntry,
   type ApprovalDecisionSubmission,
   type ApprovalMode,
@@ -144,6 +145,14 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
   const swarmEvents = createEventChannel<SwarmTopologyState>();
   const historyEvents = createEventChannel<ImportedHistorySessionRecord[]>();
   const accountEvents = createEventChannel<AccountsStateSnapshot>();
+  const updateEvents = createEventChannel<AppUpdateState>();
+
+  let updateState: AppUpdateState = {
+    status: 'idle',
+    currentVersion: APP_BRAND.version,
+    repoUrl: APP_BRAND.repoUrl,
+    canInstallDirectly: false,
+  };
 
   let preferences: ClientPreferences = {
     locale: 'zh-CN',
@@ -153,6 +162,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     translationEngine: 'local',
     processPerSession: false,
     activeProfileId: 'default',
+    autoCheckUpdates: true,
   };
 
   let rateCards: ModelRateCard[] = DEFAULT_MODEL_RATE_CARDS.map((c) => ({ ...c }));
@@ -1131,6 +1141,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
         pendingApprovals: pendingApprovals.map((p) => structuredClone(p)),
         telemetry: buildTelemetrySnapshot(),
         plugins: buildPluginsSnapshot(),
+        updateState: structuredClone(updateState),
       };
     },
 
@@ -1923,6 +1934,32 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       };
     },
 
+    async getUpdateState(): Promise<AppUpdateState> {
+      return structuredClone(updateState);
+    },
+
+    async checkForUpdates(): Promise<AppUpdateState> {
+      updateState = {
+        ...updateState,
+        status: 'up-to-date',
+        latestVersion: APP_BRAND.version,
+        releaseTag: `v${APP_BRAND.version}`,
+        releaseUrl: `${APP_BRAND.repoUrl}/releases/latest`,
+        checkedAt: new Date().toISOString(),
+        errorMessage: undefined,
+      };
+      updateEvents.emit(structuredClone(updateState));
+      return structuredClone(updateState);
+    },
+
+    async downloadUpdate(): Promise<AppUpdateState> {
+      return structuredClone(updateState);
+    },
+
+    async installUpdate(): Promise<{ launched: boolean; message: string }> {
+      return { launched: false, message: '演示模式下不支持安装更新包。' };
+    },
+
     onSessionUpdated: sessionEvents.subscribe,
     onMessageUpserted: messageEvents.subscribe,
     onInspectorUpdated: inspectorEvents.subscribe,
@@ -1932,6 +1969,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     onSwarmUpdated: swarmEvents.subscribe,
     onHistoryUpdated: historyEvents.subscribe,
     onAccountUpdated: accountEvents.subscribe,
+    onUpdateState: updateEvents.subscribe,
   };
 }
 

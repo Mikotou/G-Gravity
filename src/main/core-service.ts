@@ -5,13 +5,13 @@ import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AcpConfigOption, AcpRequestPermissionParams, AcpSessionNewResult, AcpSessionUpdateNotification, AcpPromptContentBlock, AgentExecutionMode, AgentReasoningEffort } from '../shared/acp-protocol';
-import type { ApprovalDecisionSubmission, ApprovalMode, ApproveForMeConfig } from '../shared/approval-contract';
-import type { AppBootstrapPayload, AcpConnectionStatus, CreateSessionInput, OpenLinkOrFileInput, OpenLinkOrFileResult, SendPromptInput } from '../shared/ipc-channels';
+import type { ApprovalAuditEntry, ApprovalDecisionSubmission, ApprovalMode, ApproveForMeConfig } from '../shared/approval-contract';
+import type { AppBootstrapPayload, AcpConnectionStatus, AppUpdateState, CreateSessionInput, OpenLinkOrFileInput, OpenLinkOrFileResult, SendPromptInput } from '../shared/ipc-channels';
 import { isForbiddenCredentialOrStatePath } from '../shared/accounts-history-contract';
 import type { ChatMessageItem, ManagedSessionSummary, TitleOrganizeRequest, TitleOrganizeResult, WorkspaceLayoutState } from '../shared/session-contract';
-import { clampSplitRatio, generateStructuredChineseTitle, isLegacyPollutionSessionTitle, isRightInspectorTab, LAYOUT_LIMITS, normalizeWorkspacePath, TITLE_ORGANIZE_MODEL_LABEL, TITLE_ORGANIZE_RATE_LIMIT } from '../shared/session-contract';
+import { clampSplitRatio, containsTransientStreamInterruption, generateStructuredChineseTitle, isLegacyPollutionSessionTitle, isRightInspectorTab, LAYOUT_LIMITS, normalizeWorkspacePath, stripTransientStreamInterruptions, TITLE_ORGANIZE_MODEL_LABEL, TITLE_ORGANIZE_RATE_LIMIT } from '../shared/session-contract';
 import type { ClientPreferences, GravityIconId, WorkspaceProjectConfig } from '../shared/theme-i18n-contract';
-import { THEME_PRESETS, GRAVITY_ICON_VARIANTS, UI_SCALE_LIMITS, clampUiScale, validateCustomThemeConfig } from '../shared/theme-i18n-contract';
+import { APP_BRAND, THEME_PRESETS, GRAVITY_ICON_VARIANTS, UI_SCALE_LIMITS, clampUiScale, validateCustomThemeConfig } from '../shared/theme-i18n-contract';
 import type { ModelRateCard } from '../shared/telemetry-contract';
 import type { CreateAccountProfileInput, ContinueHistoryInGravityInput } from '../shared/accounts-history-contract';
 import type { PluginActionInput, McpActionInput } from '../shared/plugins-contract';
@@ -40,16 +40,17 @@ import type { QuestionSubmission } from '../shared/user-question';
 import { modelMessage, restoreAnnotatedMessage } from './session/annotation-prompt';
 import { appendImage } from './session/message-images';
 import { LocalTranslator } from './translation/local-translator';
+import { GitHubUpdater, type GitHubUpdaterOptions } from './updater/github-updater';
 
-export const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'gravity-claude-dark', defaultThoughtTrack: 'zh', translationEngine: 'local', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [] };
+export const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'gravity-claude-dark', defaultThoughtTrack: 'zh', translationEngine: 'local', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [], autoCheckUpdates: true };
 export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context', splitRatio: 0.5 };
-export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; now?: () => number; setIcon?: (iconId: GravityIconId) => void | Promise<void>; setZoom?: (factor: number) => void; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
+export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; now?: () => number; appVersion?: string; enableAutoUpdateCheck?: boolean; updaterOptions?: Partial<GitHubUpdaterOptions>; windowChrome?: 'win-overlay' | 'mac-inset' | 'standard'; setIcon?: (iconId: GravityIconId) => void | Promise<void>; setZoom?: (factor: number) => void; onThemeChanged?: (preferences: ClientPreferences) => void; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
 /** 主进程的业务入口。窗口请求进入此处，ACP 更新按会话分发给消息、审批、统计和检视器，再由事件通知渲染层。 */
 export class CoreService extends EventEmitter {
   readonly store: ClientStore; readonly client: AcpClient; readonly sessions: SessionMultiplexer; readonly approval: ApprovalEngine;
   readonly telemetry: TelemetryStore; readonly titles: TitleOrganizer; readonly thoughts: ThoughtTranslator; readonly swarm: SwarmTracker;
   readonly accounts: AccountManager; readonly history: HistoryImporter; readonly plugins: PluginsManager;
-  readonly inspector: InspectorStore; readonly workspaceFiles = new WorkspaceFiles();
+  readonly inspector: InspectorStore; readonly updater: GitHubUpdater; readonly workspaceFiles = new WorkspaceFiles();
   private preferences: ClientPreferences;
   private layout: WorkspaceLayoutState;
   private messages = new Map<string, ChatMessageItem[]>();
@@ -77,8 +78,15 @@ export class CoreService extends EventEmitter {
   private organizingTitles = false;
   private localTranslator = new LocalTranslator();
   private guardActiveSessions = new Map<string, { count: number; modelLabel: string }>();
+  private checkpointSyncAt = new Map<string, number>();
+  private checkpointResolvedModel = new Map<string, string>();
+  private turnUserCancelled = new Set<string>();
+  private turnStreamInterrupted = new Set<string>();
+  private turnAutoDenied = new Map<string, Array<{ toolCallId?: string; toolName: string; command: string; reason: string }>>();
+  private autoDeniedByToolCall = new Map<string, string>();
   private bootstrapping?: Promise<AppBootstrapPayload>;
   private telemetryPush?: NodeJS.Timeout;
+  private autoUpdateTimer?: NodeJS.Timeout;
   constructor(private options: CoreServiceOptions) {
     super(); this.store = new ClientStore(options.dataDir);
     this.preferences = { ...DEFAULT_PREFERENCES, ...this.store.read('preferences.json', {}) };
@@ -124,6 +132,21 @@ export class CoreService extends EventEmitter {
     // 默认与外部 Antigravity 历史完全隔离（roots=[]），仅在显式指定 historyRoots（如单测）时扫描
     this.history = new HistoryImporter({ roots: options.historyRoots ?? [], cacheDir: join(options.dataDir, 'history-cache') });
     this.plugins = new PluginsManager({ store: this.store, binaryPath: options.acpOptions?.binaryPath, executor: options.pluginsExecutor, homeDir: options.homeDir });
+    this.updater = new GitHubUpdater({
+      currentVersion: options.appVersion || APP_BRAND.version,
+      updatesDir: join(options.dataDir, 'updates'),
+      ...options.updaterOptions,
+    });
+    this.updater.on('state', (state: AppUpdateState) => this.emit('update-state', state));
+    if (options.enableAutoUpdateCheck && this.preferences.autoCheckUpdates !== false) {
+      this.autoUpdateTimer = setTimeout(() => {
+        this.autoUpdateTimer = undefined;
+        if (!this.disposed && this.preferences.autoCheckUpdates !== false) {
+          void this.updater.checkForUpdates().catch(() => {});
+        }
+      }, 4500);
+      this.autoUpdateTimer.unref?.();
+    }
     // 切换账号要跨越两套会话状态。旧消息在切换前保存，新账号的消息在窗格和内存索引清空后载入。
     this.accounts = new AccountManager({ store: this.store, client: this.client, sessions: this.sessions,
       beforeSwitch: async () => { if (this.managing.size) throw new Error('正在保存会话变更'); this.questions.cancel(); this.customAnswers.clear(); this.approval.dispose(); this.feedback.clear(); this.saveMessages(); },
@@ -131,6 +154,12 @@ export class CoreService extends EventEmitter {
         this.thoughts.dispose();
         for (const id of this.reactiveTurnTimers.keys()) this.clearReactiveTurnTimer(id);
         this.guardActiveSessions.clear();
+        this.checkpointSyncAt.clear();
+        this.checkpointResolvedModel.clear();
+        this.turnUserCancelled.clear();
+        this.turnStreamInterrupted.clear();
+        this.turnAutoDenied.clear();
+        this.autoDeniedByToolCall.clear();
         for (const id of this.messages.keys()) this.telemetry.remove(id);
         this.assistantMessages.clear(); this.thoughtOwners.clear(); this.compactAvailable.clear(); this.messages.clear();
         this.preferences.activeProfileId = profileId; this.store.write('preferences.json', this.preferences);
@@ -167,6 +196,21 @@ export class CoreService extends EventEmitter {
     this.approval.on('feedback', ({ sessionId, text }) => {
       const list = this.feedback.get(sessionId) || []; list.push(text); this.feedback.set(sessionId, list);
       this.upsert({ id: randomUUID(), sessionId, role: 'system', content: `已拒绝操作。反馈将在当前执行结束后发送给智能体：${text}`, createdAt: new Date().toISOString() });
+    });
+    this.approval.on('audit', (entry: ApprovalAuditEntry) => {
+      if (entry.verdict !== 'denied' || entry.decisionSource !== 'local-rule') return;
+      const list = this.turnAutoDenied.get(entry.sessionId) || [];
+      list.push({ toolCallId: entry.toolCallId, toolName: entry.toolName, command: entry.commandOrSummary, reason: entry.reason });
+      this.turnAutoDenied.set(entry.sessionId, list);
+      if (entry.toolCallId) {
+        this.autoDeniedByToolCall.set(`${entry.sessionId}\0${entry.toolCallId}`, entry.reason);
+        const activeMsg = this.assistantMessages.get(entry.sessionId);
+        const card = activeMsg?.toolCalls?.find((tc) => tc.toolCallId === entry.toolCallId);
+        if (card && (!card.outputPreview || /^\s*(?:\{\s*"output"\s*:\s*""\s*\})?\s*$/.test(card.outputPreview))) {
+          card.outputPreview = `已由本地安全策略拦截：${entry.reason}`;
+          this.upsert(activeMsg!);
+        }
+      }
     });
     this.approval.on('config-updated', (cfg: ApproveForMeConfig) => {
       const persisted = structuredClone(cfg);
@@ -252,6 +296,12 @@ export class CoreService extends EventEmitter {
     if (!message) { message = { id: randomUUID(), sessionId, role: 'assistant', content: '', isStreaming: true, createdAt: new Date().toISOString() }; this.assistantMessages.set(sessionId, message); }
     return message;
   }
+  private clearTransientStreamWarning(sessionId: string, message: ChatMessageItem): boolean {
+    if (!containsTransientStreamInterruption(message.content)) return false;
+    message.content = stripTransientStreamInterruptions(message.content);
+    this.turnStreamInterrupted.delete(sessionId);
+    return true;
+  }
   /** 按 ACP 更新类型合并增量。回复正文、思考、工具状态和用量共享 sessionId，各自维护自己的累计方式。 */
   private consumeUpdate({ sessionId, update }: AcpSessionUpdateNotification): void {
     if (this.disposed) return;
@@ -266,6 +316,7 @@ export class CoreService extends EventEmitter {
       const todos = this.inspector.get(sessionId).todos;
       if (todos.length >= 2) this.approval.enableBurstGuard(sessionId);
       const message = this.assistant(sessionId);
+      this.clearTransientStreamWarning(sessionId, message);
       message.todos = todos;
       this.upsert(message);
     }
@@ -285,6 +336,7 @@ export class CoreService extends EventEmitter {
         this.telemetry.applyContextWindow(sessionId, update.used, update.size);
       }
       if (update.usage) this.telemetry.applyUsage(sessionId, update.usage);
+      if (!replaying) this.maybeSyncSessionCheckpointWindow(sessionId);
       if (this.reactiveWakeupActive.has(sessionId)) {
         this.scheduleReactiveTurnSettle(sessionId, true);
       }
@@ -323,8 +375,19 @@ export class CoreService extends EventEmitter {
         this.completeStreamingThoughts(message);
         appendImage(message, update.content);
         message.content += text;
+        if (containsTransientStreamInterruption(message.content)) {
+          const cleaned = stripTransientStreamInterruptions(message.content);
+          if (cleaned.length > 0) {
+            // 流式已恢复并输出真实正文，自动清除此前残留的瞬态中断提示
+            message.content = cleaned;
+            this.turnStreamInterrupted.delete(sessionId);
+          } else {
+            this.turnStreamInterrupted.add(sessionId);
+          }
+        }
         this.telemetry.addChunk(sessionId, text);
       } else {
+        if (text.trim()) this.clearTransientStreamWarning(sessionId, message);
         const id = `${message.id}:thought`;
         this.thoughtOwners.set(id, { sessionId, message });
         const prev = message.thoughts?.[0];
@@ -344,7 +407,23 @@ export class CoreService extends EventEmitter {
       const toolResults = Array.isArray(update.content) ? update.content : update.toolContent || [];
       for (const result of toolResults) appendImage(message, result);
       const card = this.inspector.consume(sessionId, update, index >= 0 ? cards[index] : undefined);
-      if (card) { if (index >= 0) cards[index] = card; else cards.push(card); }
+      if (card) {
+        if (card.status === 'failed' && (!card.outputPreview || /^\s*(?:\{\s*"output"\s*:\s*""\s*\})?\s*$/.test(card.outputPreview))) {
+          const denyReason = this.autoDeniedByToolCall.get(`${sessionId}\0${update.toolCallId}`);
+          if (denyReason) {
+            card.outputPreview = `已由本地安全策略拦截：${denyReason}`;
+          } else if ((this.turnAutoDenied.get(sessionId)?.length || 0) > 0) {
+            card.outputPreview = '因同批次其他命令触发本地安全策略拦截，此并行命令被一并取消';
+          }
+        }
+        if (index >= 0) cards[index] = card; else cards.push(card);
+        if (update.sessionUpdate === 'tool_call' || (card.status !== 'failed' && card.status !== 'rejected')) {
+          this.clearTransientStreamWarning(sessionId, message);
+        }
+      }
+      if (!replaying && update.sessionUpdate === 'tool_call') {
+        this.maybeSyncSessionCheckpointWindow(sessionId);
+      }
       this.telemetry.addChunk(sessionId, JSON.stringify(update), 'toolCallsTokens'); this.upsert(message);
     }
     if (isReactiveAgentUpdate) {
@@ -450,7 +529,7 @@ export class CoreService extends EventEmitter {
       }
       const importedHistory = await this.history.refresh();
       if (this.history.roots.length > 0) this.history.startWatching();
-      return { preferences: { ...this.preferences }, connection: await this.getConnectionStatus(), accounts: this.accounts.getState(), importedHistory, plugins: this.plugins.getCachedSnapshot(), approvalConfig: this.approval.getConfig(), sessions, layout: structuredClone(this.layout), pendingApprovals: this.approval.listPending(), telemetry: this.telemetry.snapshot() };
+      return { preferences: { ...this.preferences }, connection: await this.getConnectionStatus(), accounts: this.accounts.getState(), importedHistory, plugins: this.plugins.getCachedSnapshot(), approvalConfig: this.approval.getConfig(), sessions, layout: structuredClone(this.layout), pendingApprovals: this.approval.listPending(), telemetry: this.telemetry.snapshot(), windowChrome: this.options.windowChrome ?? 'standard', updateState: this.updater.getState() };
     })();
     try { return await this.bootstrapping; } finally { this.bootstrapping = undefined; }
   }
@@ -518,9 +597,14 @@ export class CoreService extends EventEmitter {
       if (typeof next.uiScale !== 'number' || !Number.isFinite(next.uiScale) || next.uiScale < UI_SCALE_LIMITS.min || next.uiScale > UI_SCALE_LIMITS.max) throw new Error('界面缩放倍率无效');
       next.uiScale = clampUiScale(next.uiScale);
     }
+    if (next.autoCheckUpdates !== undefined && typeof next.autoCheckUpdates !== 'boolean') {
+      throw new Error('自动检查更新设置无效');
+    }
     if (next.appIcon !== this.preferences.appIcon) await this.options.setIcon?.(next.appIcon);
     if ((next.uiScale ?? 1) !== (this.preferences.uiScale ?? 1)) this.options.setZoom?.(next.uiScale ?? 1);
+    const themeChanged = next.theme !== this.preferences.theme || next.customTheme !== this.preferences.customTheme;
     this.preferences = next; this.store.write('preferences.json', next);
+    if (themeChanged) this.options.onThemeChanged?.(structuredClone(next));
     if (!this.client.connected) { this.client.options.args = ['acp', ...(next.processPerSession ? ['--process-per-session'] : [])]; this.accounts.applyArgs(); }
     return structuredClone(next);
   }
@@ -531,15 +615,23 @@ export class CoreService extends EventEmitter {
     const picked = await this.options.selectDirectoryHandler?.(defaultPath?.trim() || this.preferences.defaultWorkspaceCwd || undefined);
     return picked ? normalizeWorkspacePath(picked) : null;
   }
+  async getUpdateState(): Promise<AppUpdateState> { return this.updater.getState(); }
+  async checkForUpdates(): Promise<AppUpdateState> { return this.updater.checkForUpdates(); }
+  async downloadUpdate(): Promise<AppUpdateState> { return this.updater.downloadUpdate(); }
+  async installUpdate(): Promise<{ launched: boolean; message: string }> { return this.updater.installUpdate(); }
   async launchOfficialLogin(profileId?: string) { return this.accounts.login(profileId); }
   async listSessions(includeHiddenPollution = false) { this.accounts.assertReady(); return (await this.sessions.listSessions(includeHiddenPollution)).map(item => this.titles.apply(item)); }
   private hasAntigravityOptions(sessionId?: string): boolean {
     const agentName = this.client.initializeResult?.agentInfo?.name || '';
     return agentName.toLowerCase().includes('antigravity') || Boolean(sessionId && this.sessions.hasConfigOptions(sessionId));
   }
-  /** 在后台读取当前 Profile 里该会话的压缩阈值，成功后再更新看板。缺失读数时继续使用已有窗口估计。 */
+  /** 在后台读取当前 Profile 里该会话的压缩阈值，成功后再更新看板并记录同模型学习值。缺失读数时继续使用已有窗口估计。 */
   private syncSessionCheckpointWindow(sessionId: string): void {
     if (!this.hasAntigravityOptions(sessionId)) return;
+    const session = this.sessions.sessions.get(sessionId);
+    const modelId = session?.modelId;
+    const modelKey = (modelId || '').trim().toLowerCase();
+    this.checkpointSyncAt.set(sessionId, this.nowMs());
     const activeProfile = this.accounts
       .getState()
       .profiles.find((p) => p.profileId === this.accounts.activeProfileId);
@@ -550,9 +642,21 @@ export class CoreService extends EventEmitter {
       homeDir: this.options.homeDir,
     })
       .then((limit) => {
-        if (limit) this.telemetry.setCheckpointWindowLimit(sessionId, limit);
+        if (limit) {
+          this.checkpointResolvedModel.set(sessionId, modelKey);
+          this.telemetry.setCheckpointWindowLimit(sessionId, limit, modelId);
+        }
       })
       .catch(() => {});
+  }
+  /** 回合进行中按 4 秒节流读取一次实测压缩阈值，避免长回合首轮一直停留在 256k 默认值。 */
+  private maybeSyncSessionCheckpointWindow(sessionId: string): void {
+    if (!this.hasAntigravityOptions(sessionId)) return;
+    const modelKey = (this.sessions.sessions.get(sessionId)?.modelId || '').trim().toLowerCase();
+    if (this.checkpointResolvedModel.get(sessionId) === modelKey && modelKey) return;
+    const last = this.checkpointSyncAt.get(sessionId) || 0;
+    if (this.nowMs() - last < 4000) return;
+    this.syncSessionCheckpointWindow(sessionId);
   }
   async createSession(input: CreateSessionInput) {
     this.accounts.assertReady();
@@ -613,6 +717,9 @@ export class CoreService extends EventEmitter {
     }
     this.clearReactiveTurnTimer(id);
     this.feedback.delete(id); this.compactAvailable.delete(id); this.guardActiveSessions.delete(id);
+    this.checkpointSyncAt.delete(id); this.checkpointResolvedModel.delete(id);
+    this.turnUserCancelled.delete(id); this.turnStreamInterrupted.delete(id); this.turnAutoDenied.delete(id);
+    for (const key of this.autoDeniedByToolCall.keys()) if (key.startsWith(`${id}\0`)) this.autoDeniedByToolCall.delete(key);
     this.assistantMessages.delete(id);
     this.messages.delete(id);
     this.saveMessages();
@@ -786,15 +893,26 @@ export class CoreService extends EventEmitter {
     const submitted = this.userMessage(input);
     this.upsert(submitted);
     this.clearReactiveTurnTimer(input.sessionId);
+    this.turnUserCancelled.delete(input.sessionId);
+    this.turnStreamInterrupted.delete(input.sessionId);
+    this.turnAutoDenied.delete(input.sessionId);
+    for (const key of this.autoDeniedByToolCall.keys()) {
+      if (key.startsWith(`${input.sessionId}\0`)) this.autoDeniedByToolCall.delete(key);
+    }
     this.telemetry.ensure(input.sessionId, session.modelId);
     if (isManualCompact) this.telemetry.beginManualCompaction(input.sessionId);
     this.telemetry.beginTurn(input.sessionId, wireText, attachments); this.assistantMessages.delete(input.sessionId);
-    try { const result = await this.sessions.sendPrompt({ sessionId: input.sessionId, prompt }); if (result.usage) this.telemetry.applyUsage(input.sessionId, result.usage); }
+    let turnAssistantMsg: ChatMessageItem | undefined;
+    try {
+      const result = await this.sessions.sendPrompt({ sessionId: input.sessionId, prompt });
+      if (result.usage) this.telemetry.applyUsage(input.sessionId, result.usage);
+    }
     catch (error) {
       this.customAnswers.delete(input.sessionId);
       if (profileId === this.accounts.activeProfileId) { submitted.sendFailed = true; this.upsert(submitted); }
       throw error;
     } finally {
+      turnAssistantMsg = this.assistantMessages.get(input.sessionId);
       this.questions.cancel(input.sessionId);
       this.finishMessage(input.sessionId);
       this.telemetry.endTurn(input.sessionId);
@@ -814,6 +932,73 @@ export class CoreService extends EventEmitter {
       this.telemetry.beginTurn(input.sessionId, text);
       try { const result = await this.sessions.sendPrompt({ sessionId: input.sessionId, prompt: [{ type: 'text', text }] }); if (result.usage) this.telemetry.applyUsage(input.sessionId, result.usage); }
       finally { this.finishMessage(input.sessionId); this.telemetry.endTurn(input.sessionId); }
+      return;
+    }
+
+    // 防止因单条命令触发安全拦截、少量命令失败或瞬态断连导致整轮无正文回复即完全中止：最多自动续接 1 次（有界，绝不循环）。
+    const wasCancelledByUser = this.turnUserCancelled.has(input.sessionId);
+    const autoDenied = this.turnAutoDenied.get(input.sessionId) || [];
+    const streamInterruptedUnrecovered = this.turnStreamInterrupted.has(input.sessionId);
+    const failedTools = (turnAssistantMsg?.toolCalls || []).filter((tc) => tc.status === 'failed');
+    const hasSubstantiveReply = Boolean(
+      turnAssistantMsg && stripTransientStreamInterruptions(turnAssistantMsg.content || '').trim().length > 0
+    );
+    const shouldAutoRecover =
+      !isManualCompact &&
+      !custom?.length &&
+      !wasCancelledByUser &&
+      !this.client.isRateLimited &&
+      !hasSubstantiveReply &&
+      this.sessions.isActive(input.sessionId) &&
+      profileId === this.accounts.activeProfileId &&
+      (autoDenied.length > 0 || streamInterruptedUnrecovered || failedTools.length > 0);
+
+    if (shouldAutoRecover) {
+      if (turnAssistantMsg && containsTransientStreamInterruption(turnAssistantMsg.content)) {
+        turnAssistantMsg.content = stripTransientStreamInterruptions(turnAssistantMsg.content);
+        this.upsert(turnAssistantMsg);
+      }
+      this.turnStreamInterrupted.delete(input.sessionId);
+      this.turnAutoDenied.delete(input.sessionId);
+
+      const uniqueReasons = [...new Set(autoDenied.map((d) => d.reason).filter(Boolean))].slice(0, 3);
+      let noticeText = '';
+      let continuationPrompt = '';
+      if (autoDenied.length > 0) {
+        noticeText = `部分命令因触及本地安全策略已被拦截（${uniqueReasons.join('；') || '受保护路径'}），已自动通知模型跳过受限项并继续完成答复…`;
+        continuationPrompt = `上一轮中有 ${autoDenied.length} 项操作因触发客户端安全策略被拦截（${uniqueReasons.join('；') || '受保护目录或敏感路径'}），同批次并行命令随之取消。请不要再访问受限路径或重试被拦截的命令，直接基于此前已收集到的信息或改用安全方式继续完成任务并给出完整最终答复。`;
+      } else if (failedTools.length > 0) {
+        const failedNames = failedTools.slice(0, 3).map((tc) => tc.compactTarget || tc.canonicalToolName).join('、');
+        noticeText = `上一轮有 ${failedTools.length} 项命令执行失败导致回复提前中断，已自动续接以完成最终答复…`;
+        continuationPrompt = `上一轮有 ${failedTools.length} 项工具调用失败（${failedNames}）并导致回复提前中止。请跳过或调整失败的命令，基于已有上下文直接继续完成任务并给出完整最终答复。`;
+      } else {
+        noticeText = '检测到流式连接中断导致本轮未完成输出，已自动续接当前任务…';
+        continuationPrompt = '上一轮流式输出因连接中断未能收尾。请不要重复已完成的只读检查，直接基于已有上下文继续完成任务并给出最终答复。';
+      }
+
+      this.upsert({
+        id: randomUUID(),
+        sessionId: input.sessionId,
+        role: 'system',
+        content: noticeText,
+        createdAt: new Date().toISOString(),
+      });
+      this.telemetry.beginTurn(input.sessionId, continuationPrompt);
+      this.assistantMessages.delete(input.sessionId);
+      try {
+        const resumed = await this.sessions.sendPrompt({
+          sessionId: input.sessionId,
+          prompt: [{ type: 'text', text: continuationPrompt }],
+        });
+        if (resumed.usage) this.telemetry.applyUsage(input.sessionId, resumed.usage);
+      } catch {
+        /* 单次续接失败时不二次重试，交由界面保留可点击的手动续接入口 */
+      } finally {
+        this.questions.cancel(input.sessionId);
+        this.finishMessage(input.sessionId);
+        this.telemetry.endTurn(input.sessionId);
+        this.syncSessionCheckpointWindow(input.sessionId);
+      }
     }
   }
   async answerQuestion(input: QuestionSubmission): Promise<void> {
@@ -821,6 +1006,7 @@ export class CoreService extends EventEmitter {
     this.questions.answer(input);
   }
   async cancelPrompt(sessionId: string): Promise<void> {
+    this.turnUserCancelled.add(sessionId);
     this.clearReactiveTurnTimer(sessionId);
     this.swarm.markWorkingSubagentsCompleted(sessionId, '用户已停止执行');
     await this.sessions.cancelPrompt(sessionId);
@@ -1191,7 +1377,7 @@ export class CoreService extends EventEmitter {
       throw new Error('无法将目录作为图片复制');
     }
     const ext = extname(localPath).toLowerCase();
-    const isExecutableOrScript = /^\.(?:exe|bat|cmd|ps1|vbs|vbe|wsf|wsh|msi|msp|com|scr|pif|reg|dll|sys|cpl|hta|sh)$/i.test(ext);
+    const isExecutableOrScript = /^\.(?:exe|bat|cmd|ps1|vbs|vbe|wsf|wsh|msi|msp|com|scr|pif|reg|dll|sys|cpl|hta|sh|bash|zsh|command|pkg|app)$/i.test(ext);
 
     // 根据文件类型智能分流：可执行程序/脚本或文件夹强制定位到文件管理器，文档/图片/代码支持系统默认应用打开
     const modeUsed: OpenLinkOrFileResult['modeUsed'] =
@@ -1216,7 +1402,15 @@ export class CoreService extends EventEmitter {
     return updated;
   }
   async setSessionEffort(sessionId: string, effort: AgentReasoningEffort) { this.accounts.assertReady(); return this.sessions.setSessionEffort(sessionId, effort); }
-  async setSessionModel(sessionId: string, modelId: string) { this.accounts.assertReady(); const session = await this.sessions.setSessionModel(sessionId, modelId); this.telemetry.ensure(sessionId, modelId); return session; }
+  async setSessionModel(sessionId: string, modelId: string) {
+    this.accounts.assertReady();
+    const session = await this.sessions.setSessionModel(sessionId, modelId);
+    this.telemetry.ensure(sessionId, modelId);
+    this.telemetry.clearSessionCheckpointLimit(sessionId, modelId);
+    this.checkpointResolvedModel.delete(sessionId);
+    this.syncSessionCheckpointWindow(sessionId);
+    return session;
+  }
   async getSessionInspector(sessionId: string) { return this.inspector.get(sessionId); }
   async listWorkspaceFiles(cwd: string, query?: string) { return this.workspaceFiles.list(cwd, query); }
   async listImportedHistory() { return this.history.refresh(); }
@@ -1248,6 +1442,7 @@ export class CoreService extends EventEmitter {
     this.localTranslator.dispose();
     this.history.dispose();
     this.approval.dispose(); if (this.telemetryPush) clearTimeout(this.telemetryPush);
+    if (this.autoUpdateTimer) { clearTimeout(this.autoUpdateTimer); this.autoUpdateTimer = undefined; }
     try { this.saveMessages(); this.telemetry.dispose(); } finally { await this.client.stop(); }
   }
 }

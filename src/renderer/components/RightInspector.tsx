@@ -9,9 +9,9 @@ import {
   Layers,
   ListTodo,
   Network,
+  PanelRight,
   PanelRightClose,
   SquareTerminal,
-  X,
 } from 'lucide-react';
 import type {
   ChatMessageItem,
@@ -320,7 +320,7 @@ export function RightInspector({
               aria-label={floating ? ui.dockInspector : ui.floatInspector}
               data-testid="inspector-float-toggle"
             >
-              {floating ? <PanelRightClose size={13} /> : <Layers size={13} />}
+              {floating ? <PanelRight size={13} /> : <Layers size={13} />}
             </button>
             {onCollapse && (
               <button
@@ -331,7 +331,7 @@ export function RightInspector({
                 aria-label={dict.inspectorToggleHide}
                 data-testid="inspector-close-btn"
               >
-                <X size={13} />
+                <PanelRightClose size={13} />
               </button>
             )}
           </div>

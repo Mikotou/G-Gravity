@@ -1687,3 +1687,328 @@
     animation: none;
   }
 }
+
+/* ============================================================================
+ * 12. 一体化无边框沉浸式顶栏（Windows TitleBarOverlay & macOS HiddenInset）
+ *     移除生硬的原生顶部标题栏，将 Rail / Sidebar / TabBar / Inspector 融为同一条 44px 视野线
+ * ========================================================================== */
+
+[data-window-chrome='win-overlay'] .activity-rail,
+[data-window-chrome='mac-inset'] .activity-rail {
+  padding-top: 5px;
+}
+
+[data-window-chrome='win-overlay'] .rail-top,
+[data-window-chrome='win-overlay'] .sidebar-head,
+[data-window-chrome='win-overlay'] .main-header,
+[data-window-chrome='win-overlay'] .inspector-bar,
+[data-window-chrome='mac-inset'] .rail-top,
+[data-window-chrome='mac-inset'] .sidebar-head,
+[data-window-chrome='mac-inset'] .main-header,
+[data-window-chrome='mac-inset'] .inspector-bar {
+  -webkit-app-region: drag;
+}
+
+/* 顶部条内所有可交互控件保持可点击、可拖拽排序，绝不吞掉鼠标事件 */
+[data-window-chrome='win-overlay'] .rail-top button,
+[data-window-chrome='win-overlay'] .sidebar-head button,
+[data-window-chrome='win-overlay'] .sidebar-head input,
+[data-window-chrome='win-overlay'] .main-header button,
+[data-window-chrome='win-overlay'] .main-header .tab,
+[data-window-chrome='win-overlay'] .main-header .segmented,
+[data-window-chrome='win-overlay'] .inspector-bar button,
+[data-window-chrome='win-overlay'] .inspector-bar .inspector-head,
+[data-window-chrome='win-overlay'] .resize-handle,
+[data-window-chrome='mac-inset'] .rail-top button,
+[data-window-chrome='mac-inset'] .sidebar-head button,
+[data-window-chrome='mac-inset'] .sidebar-head input,
+[data-window-chrome='mac-inset'] .main-header button,
+[data-window-chrome='mac-inset'] .main-header .tab,
+[data-window-chrome='mac-inset'] .main-header .segmented,
+[data-window-chrome='mac-inset'] .inspector-bar button,
+[data-window-chrome='mac-inset'] .inspector-bar .inspector-head,
+[data-window-chrome='mac-inset'] .resize-handle {
+  -webkit-app-region: no-drag;
+}
+
+/* Windows 无边框透明控制键（— □ ×）：自动为最右侧可见顶栏预留安全区，并配柔和竖分隔线 */
+[data-window-chrome='win-overlay'] .app-shell:has(> .inspector:not(.is-collapsed):not(.is-floating)) .inspector-bar {
+  position: relative;
+  padding-right: calc(var(--win-controls-w, 138px) + 6px);
+}
+
+[data-window-chrome='win-overlay'] .app-shell:has(> .inspector:not(.is-collapsed):not(.is-floating)) .inspector-bar::after {
+  content: '';
+  position: absolute;
+  top: 13px;
+  bottom: 13px;
+  right: calc(var(--win-controls-w, 138px) + 1px);
+  width: 1px;
+  background: var(--hairline-strong);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+[data-window-chrome='win-overlay'] .app-shell:not(:has(> .inspector:not(.is-collapsed):not(.is-floating))) .main-header {
+  position: relative;
+  padding-right: calc(var(--win-controls-w, 138px) + 10px);
+}
+
+[data-window-chrome='win-overlay'] .app-shell:not(:has(> .inspector:not(.is-collapsed):not(.is-floating))) .main-header::after {
+  content: '';
+  position: absolute;
+  top: 13px;
+  bottom: 13px;
+  right: calc(var(--win-controls-w, 138px) + 2px);
+  width: 1px;
+  background: var(--hairline-strong);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+[data-window-chrome='win-overlay'] .inspector.is-floating {
+  top: calc(var(--header-h) + 10px);
+}
+
+/* 全屏设置/弹窗覆盖层顶部预留拖拽与窗口控制键安全区，打开设置页依然可自由拖动或关闭窗口 */
+[data-window-chrome='win-overlay'] .overlay,
+[data-window-chrome='mac-inset'] .overlay {
+  padding-top: max(22px, var(--header-h));
+}
+
+[data-window-chrome='win-overlay'] .overlay::before,
+[data-window-chrome='mac-inset'] .overlay::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: var(--win-controls-w, 138px);
+  height: var(--header-h);
+  -webkit-app-region: drag;
+  pointer-events: auto;
+}
+
+[data-window-chrome='mac-inset'] .overlay::before {
+  left: 78px;
+  right: 0;
+}
+
+/* macOS hiddenInset：左上角为原生红黄绿交通灯自然留白，不遮挡活动栏图标与抽屉标题 */
+[data-window-chrome='mac-inset'] .activity-rail {
+  padding-top: 42px;
+}
+
+[data-window-chrome='mac-inset'] .sidebar-head {
+  padding-left: 34px;
+}
+
+[data-window-chrome='mac-inset'] .app-shell:has(> .sidebar.is-collapsed) .main-header {
+  padding-left: 34px;
+}
+
+/* 检视器停靠于 Windows 无边框右上角时，窄宽下全部 5 个页签收为纯图标，确保与 [⧉][◨] 和 — □ × 零裁切、零重叠 */
+[data-window-chrome='win-overlay'] .app-shell:has(> .inspector:not(.is-collapsed):not(.is-floating)) .inspector-bar .inspector-head {
+  overflow-x: auto;
+  scrollbar-width: none;
+  gap: 2px;
+  padding: 0 4px 0 6px;
+}
+
+[data-window-chrome='win-overlay'] .app-shell:has(> .inspector:not(.is-collapsed):not(.is-floating)) .inspector-bar .inspector-head::-webkit-scrollbar {
+  display: none;
+}
+
+@container insp (max-width: 490px) {
+  [data-window-chrome='win-overlay'] .inspector:not(.is-floating) .inspector-tab {
+    padding: 0 6px;
+    min-width: 26px;
+    justify-content: center;
+  }
+
+  [data-window-chrome='win-overlay'] .inspector:not(.is-floating) .inspector-tab .inspector-tab-label,
+  [data-window-chrome='win-overlay'] .inspector:not(.is-floating) .inspector-tab.is-active .inspector-tab-label {
+    display: none;
+  }
+
+  [data-window-chrome='win-overlay'] .inspector:not(.is-floating) .inspector-head-actions {
+    padding: 0 5px 0 4px;
+    gap: 1px;
+  }
+}
+
+/* 活动栏顶部 Logo 与抽屉/顶栏对齐在同一 44px 视觉地平线上 */
+.rail-brand-btn {
+  margin-bottom: 5px;
+}
+
+/* ============================================================================
+ * 13. 流式中断瞬态提示卡（仅在未能自动恢复时展示，提供一键续接）
+ * ========================================================================== */
+
+.stream-interrupted-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 7px 11px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--status-warning) 36%, var(--hairline));
+  background: color-mix(in srgb, var(--status-warning) 9%, var(--studio-card));
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.stream-interrupted-icon {
+  flex-shrink: 0;
+  color: var(--status-warning);
+}
+
+.stream-interrupted-text {
+  min-width: 0;
+}
+
+.stream-interrupted-retry {
+  margin-left: 4px;
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 9px;
+  gap: 5px;
+  border-radius: 7px;
+  border-color: color-mix(in srgb, var(--status-warning) 44%, var(--hairline));
+  background: color-mix(in srgb, var(--status-warning) 14%, var(--bg-surface));
+  color: var(--text-primary);
+  font-size: 11.5px;
+}
+
+.stream-interrupted-retry:hover {
+  background: color-mix(in srgb, var(--status-warning) 24%, var(--bg-surface));
+  border-color: var(--status-warning);
+}
+
+/* ============================================================================
+ * 14. 软件自动更新卡片与导航提示点
+ * ========================================================================== */
+
+.rail-update-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--bg-sidebar);
+}
+
+.settings-nav-dot {
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.setting-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.badge-success {
+  background: color-mix(in srgb, var(--status-success) 16%, transparent);
+  color: var(--status-success);
+  border-color: color-mix(in srgb, var(--status-success) 34%, transparent);
+}
+
+.update-status-row {
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.update-status-copy {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.update-status-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+
+.update-available-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+
+.update-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.update-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.update-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.update-progress-track {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 20%, transparent);
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-primary), color-mix(in srgb, var(--accent-primary) 72%, var(--status-success)));
+  transition: width 160ms ease-out;
+}
+
+.update-notes {
+  border-top: 1px solid var(--hairline);
+  padding: 10px 14px 12px;
+  background: color-mix(in srgb, var(--bg-app) 45%, transparent);
+}
+
+.update-notes pre {
+  margin: 0;
+  max-height: 168px;
+  overflow: auto;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@keyframes gravity-spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: gravity-spin 0.9s linear infinite;
+}

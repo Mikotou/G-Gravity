@@ -57,8 +57,12 @@ Gravity 在架构立项阶段就确立了**十大不可逾越的合规红线**�
 
 1. **只走官方公开协议，零私有接口**
    - 仅通过 `agy acp` 公开标准协议通信。源码静态扫描守卫确保全仓库**不包含**任何 `cloudcode-pa.googleapis.com` 等 Google 非公开内部端点 URL。
-2. **零触碰任何私有凭据与认证状态**
-   - `isForbiddenCredentialOrStatePath()` 在路径层硬拦截 `~/.gemini`、`antigravity`、`antigravity-cli` 及隔离目录中的 OAuth Token、`refresh_token`、`access_token`、Cookie、`installation_id`、`*.pbtxt`、`state.vscdb*`、`application_default_credentials.json` 等一切敏感文件——**既不读、也不写、更不导出**。
+2. **零触碰任何私有凭据与认证状态（Windows & macOS 四级精细权限策略）**
+   - 审批与安全路径引擎对 `.gemini` 与 macOS `~/Library/Application Support/Antigravity` 实施四级精细治理：
+     - **核心凭据禁区（硬拦截，禁读写）**：`oauth_creds.json`、`google_accounts.json`、`installation_id`、`antigravity-cli/auth`、`*.pbtxt`、`Cookies`、`state.vscdb`、macOS `Library/Keychains`、`*.keychain*`、`.binarycookies`、`security find-*-password/dump-keychain` 等。
+     - **官方内部数据（仅允许只读查询，禁改写）**：`brain`、`conversations`、`history`、`conversation_summaries.db`、`antigravity/User/settings.json`、`mcp_config.json`、`tmp`、`cache`、`logs` 等。
+     - **用户自定义目录（正常读写，写入/改写时弹出确认）**：`~/.gemini/config/plugins`、`skills`、`rules`、`hooks`、`workflows`、`extensions`、`GEMINI.md` 等，不再“一刀切”误伤日常排障或插件管理。
+     - **其他未知路径**：默认转交人工确认（Fail-Closed）。
 3. **不修改官方二进制，不注入越权/伪装参数**
    - 原样拉起官方 `agy` / `agy.exe`，绝不做二进制补丁或 `NODE_OPTIONS` / `ELECTRON_RUN_AS_NODE` 劫持。
    - 所有启动参数必须通过 `validateAgyArgs()` 严格白名单放行且固定 `shell: false`，明确禁止 `--dangerously-skip-permissions`、`--override_user_agent_name`、`--cloud_code_endpoint`、`--use_stubby_auth`、`--is_google3_workspace`、`--is_google_internal` 等参数。
@@ -119,7 +123,7 @@ Gravity 在**共享契约层、主进程调度器（`SessionMultiplexer`）与�
 
 ### 2. `Context & Cost Inspector`（Built-in · 上下文与费用实时分析看板）
 常驻右侧检视器 `Context` 页签，与输入框底栏状态条实时联动：
-- **实时 Context 压缩窗口监控**：精确按模型区分实际压缩触发阈值（如 Carbon / Hydrogen / Orchestrator 的 `512k` 窗口与其他模型的 `256k` 窗口），直观展示 System / User / Assistant / Thinking / Tools / Attachments 六类 Token 占比，并自动记录每次手动 `/compact` 与服务端自动压缩前后的 Token 节省量。
+- **实时 Context 压缩窗口监控**：默认涵盖最新模型（含 `Gemini 4 Neon / Carbon / Hydrogen / Orchestrator` 的 `512k` 窗口），并会在回合中自动只读解析本地 `executor_metadata` 里的 `checkpoint_config.max_token_limit` 与 `CASCADE_USE_EXPERIMENT_CHECKPOINTER` 配置，动态学习未来新模型的真实压缩上限；直观展示 System / User / Assistant / Thinking / Tools / Attachments 六类 Token 占比，并自动记录每次手动 `/compact` 与服务端自动压缩前后的 Token 节省量。
 - **实时速率 vs 会话平均指标**：
   - **输入框底栏**：展示当前滑动时间窗的 **实时输出速率（`tok/s`）**；
   - **Context 检视器**：展示当前会话累计加权的 **会话平均速率（Avg `tok/s`）** 与 **平均缓存命中率（`Cached / (Input + Cached)`）**，并跨重启持久化。
@@ -134,14 +138,15 @@ Gravity 在**共享契约层、主进程调度器（`SessionMultiplexer`）与�
 - **零额度本地离线思考汉化（Bergamot Engine）**：随包分发 Mozilla 英译简中模型，流式按句界分段在本地线程实时翻译英文思考过程，保护代码块、命令与文件路径不被误翻，支持「中文 / 原文」一键切换、平滑中文显影动效与折叠记忆。
 - **按需内置 AI 标题整理（`Hydrogen medium`）**：仅在用户主动点击时通过官方 `agy acp` 临时只读会话调用内置 `Hydrogen (medium)` 整理为 `分类｜核心主题`；顶部「全部整理」自动跳过先前已整理的会话，每个 Project 分组与每条会话也均配有独立整理按钮，三者共享 1 分钟最多 4 次冷却，整理过程实时提示当前所用模型。
 - **Swarm 多智能体态势看板**：被动监听主会话中的 `swarm` / `invoke_subagent` / `send_message` 工具流，实时展示成员状态、任务分工、消息板与动作时间线。
+- **内置 GitHub Releases 自动更新**：自动对接本仓库 `Mikotou/G-Gravity` Releases，按操作系统与架构匹配最新安装包（`Windows x64` / `macOS arm64` / `macOS x64`），支持启动静默检查、进度条下载与一键替换重启（可在「设置 → 关于」随时检查或关闭启动自动检查）。
 
 ---
 
 <a id="layout"></a>
 
-## 🖥️ 六、界面布局与核心亮点（v0.2.0 Claude Code Studio）
+## 🖥️ 六、界面布局与核心亮点（v0.2.1 一体化无边框 Claude Code Studio）
 
-Gravity 采用 **Claude Code Studio** 桌面工作台架构：**48px 常驻极窄活动栏 + 可展开/调宽会话抽屉 + 居中对话主舞台（单/双栏）+ 可停靠/悬浮切换的右侧检视器**。抽屉宽度、检视器宽度、双栏比例与输入框高度全部支持拖拽调整（双击分隔条复位），高分辨率屏幕支持 `Ctrl/Cmd + =` / `-` / `0` 整体缩放：
+Gravity 采用 **一体化无边框 Claude Code Studio** 桌面工作台架构（Windows 移除原生厚标题栏并融合透明系统控制键，macOS 采用原生红绿灯内嵌顶栏）：**48px 常驻极窄活动栏 + 可展开/调宽会话抽屉 + 居中对话主舞台（单/双栏）+ 可停靠/悬浮切换的右侧检视器**。抽屉宽度、检视器宽度、双栏比例与输入框高度全部支持拖拽调整（双击分隔条复位），高分辨率屏幕支持 `Ctrl/Cmd + =` / `-` / `0` 整体缩放：
 
 | 🧭 活动栏 + 📁 会话抽屉 (`Ctrl/Cmd+B`) | 💬 中栏 · 对话主舞台 (`Ctrl/Cmd+\`) | 🔍 右栏 · 停靠/悬浮检视器 (`Ctrl/Cmd+J`) |
 | :--- | :--- | :--- |
@@ -287,7 +292,7 @@ npm run test:layout
 npm run test:desktop
 ```
 
-- **版本验收与文件校验记录**：详见 [`tests/QA-G-Gravity.md`](./tests/QA-G-Gravity.md)。
+- **版本验收记录**：详见 [`tests/QA-G-Gravity.md`](./tests/QA-G-Gravity.md)。
 - **合规红线与工程规范**：详见 [`CLAUDE.md`](./CLAUDE.md) 与 [`docs/compliance/audit-report.md`](./docs/compliance/audit-report.md)。
 - **架构总纲**：详见 [`docs/architecture.md`](./docs/architecture.md)。
 

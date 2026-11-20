@@ -86,6 +86,14 @@ export const DEFAULT_MODEL_RATE_CARDS: readonly ModelRateCard[] = [
     thinkingPerMillionUsd: 8.0,
   },
   {
+    modelId: 'gemini-4-neon',
+    displayName: 'Gemini 4 Neon',
+    inputPerMillionUsd: 1.5,
+    cachedInputPerMillionUsd: 0.375,
+    outputPerMillionUsd: 10.0,
+    thinkingPerMillionUsd: 10.0,
+  },
+  {
     modelId: 'gemini-pro-orchestrator',
     displayName: 'Orchestrator (Carbon / Argon)',
     inputPerMillionUsd: 2.0,
@@ -207,14 +215,14 @@ export function calculateTokenCost(
 
 /**
  * 解析各模型在 Antigravity / `agy` 中的实际 Checkpointer 压缩触发窗口上限：
- * - Carbon / Hydrogen / Orchestrator 经服务端 `CASCADE_USE_EXPERIMENT_CHECKPOINTER` 下发 `max_token_limit = 512000`
- * - 其余模型沿用本地 `GetCheckpointConfig` 默认压缩阈值 `256000`（若会话库 `executor_metadata` 存在实测覆盖值则进一步以实测为准）
+ * - Gemini 4 系列（Carbon / Hydrogen / Neon / Argon）与 Orchestrator 经服务端 `CASCADE_USE_EXPERIMENT_CHECKPOINTER` 下发 `max_token_limit = 512000`
+ * - 其余模型沿用本地 `GetCheckpointConfig` 默认压缩阈值 `256000`（若会话库 `executor_metadata` 存在实测覆盖值或已学习到的同模型实测值，始终以实测为准）
  */
 export function resolveModelCompactionLimit(modelId?: string): number {
   const normalized = (modelId || '').trim().toLowerCase();
   if (
-    normalized.includes('gemini-4-carbon') ||
-    normalized.includes('gemini-4-hydrogen') ||
+    normalized.includes('gemini-4-') ||
+    normalized.includes('gemini-4') ||
     normalized.includes('gemini-pro-orchestrator') ||
     normalized.includes('orchestrator')
   ) {

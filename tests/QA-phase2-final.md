@@ -30,7 +30,7 @@
 | 主题与语言 | 四深两浅六预设、23 tokens 自定义取色、CSS 应用、JSON 导出真实 Blob 内容、非法 URL 主题拒绝、图标切换；中英语言包键完整，说明/错误/提示中文；按 v0.2 约定保留 Bash/Read/Edit 等英文技术名称。思考原文分片不丢块与翻译版本隔离通过，翻译完整性限制见下文。 |
 | Mode/Model/Effort | 四档执行 Mode 与三档审批模式分离；Shift+Tab 循环执行 Mode；能力声明时才调用官方 Mode/Model 请求；会话配置隔离；Effort 为本地引导而非伪造官方 RPC。 |
 | 上下文与费用 | 24 小时、168 时段、30 天聚合；空历史、多会话、大附件、速率与归零、重复 usage 幂等；官方 input/output 总量拆除 cached/thinking 子集后四维互斥计价，避免重复计算；价格保存、分模型占比、UTC 边界及估算声明；非有限数输入不产生无穷费用。 |
-| 只读历史 | 自建临时 JSONL/SQLite 历史，实际业务导入；支持 source/type/created_at；打开真实 SQLite WAL 连接后新提交行可导入；源 db/wal/shm 全树条目、SHA256、大小、mtime/ctime/mode 前后相同；源 shm 不读取、五类敏感诱饵零 readFile；无 WAL 时只改客户端副本头；真实 fs.watch 防抖、并发扫描、大小限制及缓存隔离。atime 不纳入零写比较。 |
+| 只读历史 | 自建临时 JSONL/SQLite 历史，实际业务导入；支持 source/type/created_at；打开真实 SQLite WAL 连接后新提交行可导入；源 db/wal/shm 全树条目、内容、大小、mtime/ctime/mode 前后相同；源 shm 不读取、五类敏感诱饵零 readFile；无 WAL 时只改客户端副本头；真实 fs.watch 防抖、并发扫描、大小限制及缓存隔离。atime 不纳入零写比较。 |
 | 历史续聊 | 通过实际 CoreService 将只读历史摘要带入新建标准 ACP 会话，源树仍不变；不向原官方历史文件回写。 |
 | 手动账号 | profile 显式切换时才重启连接并传官方 `--app-data-dir`；合成 429/403 不轮换、不新拉连接、不触发登录；删除客户端条目不删官方资料目录；登录参数与 auth/logout 使用可观测测试注入，不进行真实账号操作。 |
 | Plugins/MCP/Skills | 13 项业务测试：仅显式操作才执行官方 CLI，`shell:false`、管理互斥、目标拦截、MCP 参数分隔；Skill 只写客户端偏好且源不变。组件安装/MCP 流程走内存适配器；未真实安装或改官方配置。 |
@@ -51,7 +51,7 @@
 | macOS Light | `F:\插件-Gemini\tests\screenshots\macos-light.png` | 245, 245, 247 |
 | Solarized Dark | `F:\插件-Gemini\tests\screenshots\solarized-dark.png` | 0, 42, 54 |
 
-六图均为 **1429×954**，六个 SHA256 不同，路径与图像格式已程序复核，现场图像逐一目视检查。完整哈希与元数据见 `tests/screenshots/manifest.json`。原始截图接口返回 JPEG，保留于 `tests/screenshots/raw/`；PNG 仅作编码转换，没有缩放、裁剪或修饰。原生窗口观察发生在最后编号审批修复之前，因此该修复的证据来自最终组件回归与生产重构建，截图不单独证明审批修复。
+六图均为 **1429×954**，图像内容各异，路径与图像格式已程序复核，现场图像逐一目视检查。完整元数据见 `tests/screenshots/manifest.json`。原始截图接口返回 JPEG，保留于 `tests/screenshots/raw/`；PNG 仅作编码转换，没有缩放、裁剪或修饰。原生窗口观察发生在最后编号审批修复之前，因此该修复的证据来自最终组件回归与生产重构建，截图不单独证明审批修复。
 
 原生窗口只做初始化/列表/只读历史展示与主题设置，没有真实提示、登录、账号切换、插件安装或外部 API 调用。专属测试资料目录为 `tests/artifacts/gravity-v02-qa`，应排除发行内容；截图后用窗口正常关闭操作退出，所属 Electron 主 PID 44652 已不存在。
 

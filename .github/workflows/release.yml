@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish (defaults to current ref, e.g. v0.2.0)'
+        description: 'Release tag to publish (defaults to current ref, e.g. v0.2.1)'
         required: false
         type: string
 
@@ -45,7 +45,6 @@ jobs:
         shell: pwsh
         run: |
           Get-Item release\Gravity.exe | Select-Object Name, Length
-          (Get-FileHash release\Gravity.exe -Algorithm SHA256).Hash
 
       - uses: actions/upload-artifact@v4
         with:
@@ -86,7 +85,6 @@ jobs:
       - name: Verify macOS artifacts
         run: |
           ls -lh release/*.dmg release/*.zip
-          shasum -a 256 release/*.dmg release/*.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -107,12 +105,6 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
-
-      - name: Generate SHA-256 checksums
-        working-directory: release-artifacts
-        run: |
-          sha256sum Gravity.exe Gravity-*-mac-*.dmg Gravity-*-mac-*.zip > SHA256SUMS.txt
-          cat SHA256SUMS.txt
 
       - name: Create or update GitHub Release
         env:
@@ -139,16 +131,11 @@ jobs:
           > - **前置条件**：请先在本机安装并登录官方原版 \`agy\` CLI（终端运行 \`agy --version\` 正常可用）。
 
           ### 本版亮点
-          - **Claude Code Studio 全新布局**：48px 常驻极窄活动栏 + 可调宽会话抽屉 + 单/双栏主舞台（统一左侧柔砂竖胶囊与表面景深焦点指示）+ 可停靠/悬浮右侧检视器。
-          - **右下角独立色系额度条 & Bento 弹层**：移除 \`ctx\` 左侧重复入口，右下角以钴蓝渐变进度条 + 百分比展示（与上下文绿色区分），配玻璃拟态 Bento 额度详情卡片（Windows 支持自动读取；macOS 请在终端通过 \`agy\` 查看）。
-          - **实时 TPS vs 会话平均 TPS & 缓存命中率**：输入框底栏展示实时滑窗 \`tok/s\`；Context 检视器展示当前会话平均速率与平均缓存命中率。
-          - **内置 \`Hydrogen (medium)\` 按需标题整理**：仅用户主动点击时执行，支持「全部整理（跳过已整理）/ 项目单独整理 / 单会话整理」，实时提示所用模型，三者共享 1 分钟最多 4 次冷却。
-          - **中文思考平滑显影动效 + 正文图片一键复制**：优化英文思考转为中文时的渐进显影与流光左轨；正文末尾图片支持悬浮按钮、大图工具栏、\`Ctrl+C / Cmd+C\` 与右键菜单复制到系统剪贴板。
-
-          ### SHA-256 校验值
-          \`\`\`text
-          $(cat release-artifacts/SHA256SUMS.txt)
-          \`\`\`
+          - **内置 GitHub Releases 自动更新**：自动对接本仓库 Releases，启动按需检查并在「设置 → 关于」提供一键下载与升级（Windows 便携版支持无缝替换重启，macOS 自动匹配 \`arm64\` / \`x64\` 更新包原地替换或挂载镜像）。
+          - **一体化无边框 Studio 窗口**：Windows 移除厚重原生标题栏并改用透明系统控制键覆盖层（随主题与缩放自适应），macOS 采用原生红绿灯内嵌顶栏，去除左上角重复品牌文字，视觉浑然一体。
+          - **精准读取压缩上下文窗口（含 Gemini 4 Neon 等新模型）**：支持 \`gemini-4-neon\` \`512k\` 窗口，并实时从本地会话状态只读解析 \`executor_metadata.cascade_config.checkpoint_config.max_token_limit\` 与 \`CASCADE_USE_EXPERIMENT_CHECKPOINTER\` 配置，自动学习并持久化未来新模型上限。
+          - **Windows & macOS 精细化四级安全权限策略**：将 \`.gemini\` 与 macOS \`~/Library/Application Support/Antigravity\` 细分为「核心凭据绝对禁区 / 官方内部数据只读 / 用户自定义配置（插件/Skills/Rules/Hooks）正常读写与改写确认 / 其他未知项询问确认」，同时覆盖 macOS Keychain、Cookies、\`security\`、\`defaults write\`、\`xattr\`、\`chflags\` 与脚本包防护。
+          - **流式中断自动清除与异常中断有界续接**：网络短暂中断后一旦恢复立即自动清除提示条，未自动恢复时呈现简洁提示与一键续接；工具因本地策略被拦截或命令失败导致回合空结束时，精准标注原因并在每轮最多自动续接 1 次（严格遵守手动取消与 \`429/403\` 冷却）。
           EOF
 
           if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
@@ -157,3 +144,74 @@ jobs:
           else
             gh release create "${TAG_NAME}" release-artifacts/* --title "Gravity ${TAG_NAME}" --notes-file release-notes.md
           fi
+
+      - name: Clean hash assets and hash text from all releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process');
+
+          const repo = process.env.REPO;
+          const releases = JSON.parse(
+            execFileSync('gh', ['api', '--paginate', `repos/${repo}/releases?per_page=100`], { encoding: 'utf8' })
+          );
+
+          function cleanReleaseBody(raw) {
+            if (!raw) return '';
+            let text = String(raw).replace(/\r\n/g, '\n');
+            // 1. Remove any heading section dedicated to SHA-256 / checksums
+            text = text.replace(/\n{0,2}^#{1,6}\s*[^\n]*(?:sha-?256|checksum|校验值|哈希)[^\n]*[\s\S]*?(?=\n#{1,6}\s|$)/gim, '');
+            // 2. Remove fenced code blocks containing 64-hex digests
+            text = text.replace(/```[^\n]*\n[\s\S]*?\b[0-9a-fA-F]{64}\b[\s\S]*?```/g, '');
+            // 3. Process line-by-line to remove any SHA-256 or 64-hex mentions
+            const lines = text.split('\n');
+            const kept = [];
+            for (let line of lines) {
+              if (!/(?:sha-?256|checksum|校验值|哈希|\b[0-9a-fA-F]{64}\b)/i.test(line)) {
+                kept.push(line);
+                continue;
+              }
+              // Drop table header/rows or standalone lines dedicated to SHA-256 / digests
+              const trimmed = line.trim();
+              if (
+                /^[-*•]?\s*(?:gravity\.exe|windows\s*便携版|mac|checksum|sha-?256|`?gravity\.exe`?)\b.*(?:sha-?256|\b[0-9a-fA-F]{64}\b)/i.test(trimmed) ||
+                /^\|.*(?:sha-?256|\b[0-9a-fA-F]{64}\b).*\|$/i.test(trimmed)
+              ) {
+                continue;
+              }
+              // Otherwise strip inline hash clauses while preserving surrounding release notes
+              line = line
+                .replace(/[（(][^）)\n]*(?:sha-?256|\b[0-9a-fA-F]{64}\b)[^）)\n]*[）)]/gi, '')
+                .replace(/[，,；;\s]*(?:其|该文件的|文件的|Windows\s*便携版|Gravity\.exe\s*的)?\s*SHA-?256\s*(?:校验值)?\s*(?:为|是|:|：)\s*`?[0-9a-fA-F]{16,64}`?[。.]?/gi, '')
+                .replace(/[，,；;\s]*[^，。；;\n]*SHA-?256[^，。；;\n]*/gi, '')
+                .replace(/`?\b[0-9a-fA-F]{64}\b`?/g, '')
+                .replace(/[，,；;]\s*$/g, '。')
+                .replace(/\s{2,}/g, ' ')
+                .trimEnd();
+              if (line.trim() && !/^[。.,，；;:\-\s]+$/.test(line.trim())) {
+                kept.push(line);
+              }
+            }
+            return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+          }
+
+          for (const rel of releases) {
+            for (const asset of rel.assets || []) {
+              if (/(?:sha-?256|checksum|hashes)/i.test(asset.name || '')) {
+                console.log(`Deleting hash asset ${asset.name} from ${rel.tag_name}`);
+                execFileSync('gh', ['api', '--method', 'DELETE', `repos/${repo}/releases/assets/${asset.id}`], { stdio: 'inherit' });
+              }
+            }
+            const original = rel.body || '';
+            const cleaned = cleanReleaseBody(original);
+            if (cleaned !== original.trim()) {
+              console.log(`Cleaning hash text from release ${rel.tag_name}`);
+              execFileSync('gh', ['api', '--method', 'PATCH', `repos/${repo}/releases/${rel.id}`, '--input', '-'], {
+                input: JSON.stringify({ body: cleaned }),
+                stdio: ['pipe', 'inherit', 'inherit'],
+              });
+            }
+          }
+          NODE

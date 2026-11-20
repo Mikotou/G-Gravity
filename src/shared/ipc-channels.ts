@@ -54,6 +54,10 @@ export const IPC_CHANNELS = {
   APP_EXPORT_CUSTOM_THEME: 'gravity:app:export-custom-theme',
   APP_OPEN_TARGET: 'gravity:app:open-target',
   APP_SELECT_DIRECTORY: 'gravity:app:select-directory',
+  APP_GET_UPDATE_STATE: 'gravity:app:get-update-state',
+  APP_CHECK_UPDATES: 'gravity:app:check-updates',
+  APP_DOWNLOAD_UPDATE: 'gravity:app:download-update',
+  APP_INSTALL_UPDATE: 'gravity:app:install-update',
   ACP_GET_CONNECTION_STATUS: 'gravity:acp:get-connection-status',
 
   // 多账号 Profile 管理与官方登录/登出（100% 仅限用户手动触发）
@@ -123,6 +127,7 @@ export const IPC_CHANNELS = {
   EVENT_SWARM_UPDATED: 'gravity:event:swarm-updated',
   EVENT_HISTORY_UPDATED: 'gravity:event:history-updated',
   EVENT_ACCOUNT_UPDATED: 'gravity:event:account-updated',
+  EVENT_UPDATE_STATE: 'gravity:event:update-state',
 } as const;
 
 export interface AcpConnectionStatus {
@@ -149,6 +154,45 @@ export interface AppBootstrapPayload {
   pendingApprovals: PendingApprovalRequest[];
   telemetry: TelemetryDashboardSnapshot;
   plugins: PluginsManagerSnapshot;
+  /** 窗口外框模式：Windows 无边框透明覆盖控制键 / macOS 内嵌红绿灯 / 普通浏览模式 */
+  windowChrome?: 'win-overlay' | 'mac-inset' | 'standard';
+  /** 当前自动更新状态快照（更新源为 GitHub Releases） */
+  updateState?: AppUpdateState;
+}
+
+export interface AppUpdateAssetInfo {
+  name: string;
+  downloadUrl: string;
+  sizeBytes: number;
+}
+
+export interface AppUpdateState {
+  status:
+    | 'idle'
+    | 'checking'
+    | 'up-to-date'
+    | 'available'
+    | 'downloading'
+    | 'downloaded'
+    | 'installing'
+    | 'error';
+  currentVersion: string;
+  repoUrl: string;
+  latestVersion?: string;
+  releaseTag?: string;
+  releaseName?: string;
+  releaseNotes?: string;
+  releaseUrl?: string;
+  publishedAt?: string;
+  asset?: AppUpdateAssetInfo;
+  downloadedBytes?: number;
+  totalBytes?: number;
+  progressPercent?: number;
+  downloadedFilePath?: string;
+  checkedAt?: string;
+  errorMessage?: string;
+  /** Windows 便携版或 macOS 可写 .app 支持一键替换重启；其余环境打开下载包由用户手动安装 */
+  canInstallDirectly?: boolean;
 }
 
 export interface CreateSessionInput {
@@ -205,6 +249,10 @@ export interface GravityDesktopBridge {
   exportCustomTheme(): Promise<string>;
   openLinkOrFileTarget(input: OpenLinkOrFileInput): Promise<OpenLinkOrFileResult>;
   selectDirectory(defaultPath?: string): Promise<string | null>;
+  getUpdateState(): Promise<AppUpdateState>;
+  checkForUpdates(): Promise<AppUpdateState>;
+  downloadUpdate(): Promise<AppUpdateState>;
+  installUpdate(): Promise<{ launched: boolean; message: string }>;
   getConnectionStatus(): Promise<AcpConnectionStatus>;
 
   // 账号 Profile 与官方认证（仅用户手动触发）
@@ -286,6 +334,7 @@ export interface GravityDesktopBridge {
     listener: (records: ImportedHistorySessionRecord[]) => void
   ): () => void;
   onAccountUpdated(listener: (state: AccountsStateSnapshot) => void): () => void;
+  onUpdateState(listener: (state: AppUpdateState) => void): () => void;
 }
 
 /** 向后兼容类型别名 */

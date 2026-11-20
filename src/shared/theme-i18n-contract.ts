@@ -7,7 +7,9 @@
 export const APP_BRAND = {
   name: 'Gravity',
   productName: 'Gravity',
-  version: '0.2.0',
+  version: '0.2.1',
+  repoSlug: 'Mikotou/G-Gravity',
+  repoUrl: 'https://github.com/Mikotou/G-Gravity',
   descriptionZh: '基于官方 ACP 协议的本地智能编码工作台',
   descriptionEn: 'Local Agentic Coding Studio powered by Official ACP',
 } as const;
@@ -594,6 +596,8 @@ export interface ClientPreferences {
   projects?: WorkspaceProjectConfig[];
   /** 界面缩放倍率（高分辨率屏幕适配），由主进程写入窗口 zoomFactor，缺省 1 */
   uiScale?: number;
+  /** 启动时自动从 GitHub Releases 检查更新（默认 true） */
+  autoCheckUpdates?: boolean;
 }
 
 /** 界面缩放的允许区间与步进。快捷键 Ctrl+= / Ctrl+- / Ctrl+0 与设置页共用。 */

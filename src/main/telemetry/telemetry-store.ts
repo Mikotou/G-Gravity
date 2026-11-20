@@ -74,6 +74,7 @@ export class TelemetryStore extends EventEmitter {
   private turns = new Map<string, Turn>();
   private reportedUsed = new Map<string, number>();
   private checkpointLimits = new Map<string, number>();
+  private learnedModelLimits = new Map<string, number>();
   private compactionsBySession = new Map<string, ContextCompactionRecord[]>();
   private pendingCompaction = new Map<string, number>();
   private rateCards: ModelRateCard[];
@@ -119,6 +120,7 @@ export class TelemetryStore extends EventEmitter {
       sessionSpeedStats?: Record<string, { totalGeneratedTokens: number; totalDurationSec: number; completedTurns: number }>;
       reportedUsed?: Record<string, number>;
       checkpointLimits?: Record<string, number>;
+      learnedModelLimits?: Record<string, number>;
     }>('session-telemetry.json', {});
     if (savedSessions?.sessionSpeedStats && typeof savedSessions.sessionSpeedStats === 'object') {
       for (const [sid, stat] of Object.entries(savedSessions.sessionSpeedStats)) {
@@ -144,6 +146,14 @@ export class TelemetryStore extends EventEmitter {
       for (const [sid, lim] of Object.entries(savedSessions.checkpointLimits)) {
         if (typeof lim === 'number' && lim >= 16_000 && lim <= 2_000_000) {
           this.checkpointLimits.set(sid, lim);
+        }
+      }
+    }
+    if (savedSessions?.learnedModelLimits && typeof savedSessions.learnedModelLimits === 'object') {
+      for (const [mid, lim] of Object.entries(savedSessions.learnedModelLimits)) {
+        const key = mid.trim().toLowerCase();
+        if (key && key !== 'default' && typeof lim === 'number' && lim >= 16_000 && lim <= 2_000_000) {
+          this.learnedModelLimits.set(key, Math.round(lim));
         }
       }
     }
@@ -188,22 +198,67 @@ export class TelemetryStore extends EventEmitter {
     }
   }
 
-  /** 选择压缩窗口时，显式传入的上限优先，其次为本会话读到的阈值，最后才按模型估算。 */
+  /** 选择压缩窗口时：显式上限 > 本会话实测阈值 > 同模型历史实测学习值 > 内置默认估计。 */
   private resolveMaxWindow(sessionId: string, modelId?: string): number {
     if (this.options.maxContextTokens) return this.options.maxContextTokens;
-    return this.checkpointLimits.get(sessionId) || resolveModelCompactionLimit(modelId);
+    const direct = this.checkpointLimits.get(sessionId);
+    if (direct) return direct;
+    const modelKey = (modelId || '').trim().toLowerCase();
+    if (modelKey && modelKey !== 'default') {
+      const learned = this.learnedModelLimits.get(modelKey);
+      if (learned) return learned;
+    }
+    return resolveModelCompactionLimit(modelId);
   }
 
   /**
-   * 写入从会话库 `executor_metadata -> cascade_config.checkpoint_config.max_token_limit` 实测读出的压缩阈值。
+   * 写入从会话库 `executor_metadata -> cascade_config.checkpoint_config.max_token_limit` 实测读出的压缩阈值，
+   * 并按模型 ID 持久化学习结果，让新模型（如 Neon 或未来新发布模型）在后续新会话首秒即可获得准确上限。
    */
-  setCheckpointWindowLimit(sessionId: string, limitTokens: number): void {
+  setCheckpointWindowLimit(sessionId: string, limitTokens: number, modelId?: string): void {
     if (!Number.isFinite(limitTokens) || limitTokens < 16_000 || limitTokens > 2_000_000) return;
-    if (this.checkpointLimits.get(sessionId) === limitTokens) return;
-    this.checkpointLimits.set(sessionId, Math.round(limitTokens));
+    const rounded = Math.round(limitTokens);
+    const resolvedModel = (modelId || this.states.get(sessionId)?.modelId || '').trim().toLowerCase();
+    const learnedChanged = Boolean(resolvedModel && resolvedModel !== 'default' && this.learnedModelLimits.get(resolvedModel) !== rounded);
+    const sessionChanged = this.checkpointLimits.get(sessionId) !== rounded;
+    if (!sessionChanged && !learnedChanged) return;
+
+    this.checkpointLimits.set(sessionId, rounded);
+    if (resolvedModel && resolvedModel !== 'default') {
+      this.learnedModelLimits.set(resolvedModel, rounded);
+    }
+
+    let updatedAny = false;
     const state = this.states.get(sessionId);
     if (state && !this.options.maxContextTokens) {
-      state.maxContextTokens = Math.round(limitTokens);
+      state.maxContextTokens = rounded;
+      this.refresh(state, true);
+      updatedAny = true;
+    }
+    // 同步刷新使用同一新模型且尚未写入独立实测值的其他活跃会话
+    if (resolvedModel && resolvedModel !== 'default' && !this.options.maxContextTokens) {
+      for (const [sid, other] of this.states) {
+        if (sid === sessionId || this.checkpointLimits.has(sid)) continue;
+        if ((other.modelId || '').trim().toLowerCase() === resolvedModel && other.maxContextTokens !== rounded) {
+          other.maxContextTokens = rounded;
+          this.refresh(other, true);
+          updatedAny = true;
+        }
+      }
+    }
+    if (updatedAny || learnedChanged) {
+      this.scheduleFlush();
+    }
+  }
+
+  /** 切换会话模型时清除旧会话缓存阈值并立即按新模型的实测学习值/默认阈值更新显示窗口。 */
+  clearSessionCheckpointLimit(sessionId: string, nextModelId?: string): void {
+    this.checkpointLimits.delete(sessionId);
+    const state = this.states.get(sessionId);
+    if (!state) return;
+    if (nextModelId) state.modelId = nextModelId;
+    if (!this.options.maxContextTokens) {
+      state.maxContextTokens = this.resolveMaxWindow(sessionId, state.modelId);
       this.refresh(state, true);
       this.scheduleFlush();
     }
@@ -825,6 +880,7 @@ export class TelemetryStore extends EventEmitter {
       sessionSpeedStats: Object.fromEntries(this.sessionSpeedStats),
       reportedUsed: Object.fromEntries(this.reportedUsed),
       checkpointLimits: Object.fromEntries(this.checkpointLimits),
+      learnedModelLimits: Object.fromEntries(this.learnedModelLimits),
     });
   }
 

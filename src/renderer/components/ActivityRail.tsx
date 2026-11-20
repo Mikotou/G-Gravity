@@ -25,6 +25,8 @@ export interface ActivityRailProps {
   projectCount: number;
   pluginCount: number;
   activeSessionCount: number;
+  hasAvailableUpdate?: boolean;
+  availableUpdateVersion?: string;
   onToggleSidebar: () => void;
   onOpenNewSession: () => void;
   onOpenProjects: () => void;
@@ -47,6 +49,8 @@ export function ActivityRail({
   projectCount,
   pluginCount,
   activeSessionCount,
+  hasAvailableUpdate = false,
+  availableUpdateVersion,
   onToggleSidebar,
   onOpenNewSession,
   onOpenProjects,
@@ -246,11 +250,18 @@ export function ActivityRail({
           type="button"
           className="rail-btn"
           onClick={onOpenSettings}
-          title={`${dict.navSettings} (Ctrl+,)`}
+          title={
+            hasAvailableUpdate && availableUpdateVersion
+              ? `${dict.navSettings} (Ctrl+,) · ${dict.updatesAvailableBadge(availableUpdateVersion)}`
+              : `${dict.navSettings} (Ctrl+,)`
+          }
           aria-label={dict.navSettings}
           data-testid="open-theme-modal-btn"
         >
           <Settings size={17} />
+          {hasAvailableUpdate && (
+            <span className="rail-update-dot" aria-hidden="true" data-testid="rail-update-dot" />
+          )}
         </button>
       </div>
     </nav>

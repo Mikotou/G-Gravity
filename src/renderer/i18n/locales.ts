@@ -371,9 +371,26 @@ export interface UiDictionary {
   swarmStallBadge: string;
   swarmTimelineTitle: string;
 
-  // About
+  // About & Updates
   aboutComplianceNote: string;
   aboutVersionLabel: string;
+  updatesSectionTitle: string;
+  updatesSourceLabel: string;
+  updatesAutoCheckLabel: string;
+  updatesAutoCheckDesc: string;
+  updatesCheckBtn: string;
+  updatesIdleHint: string;
+  updatesChecking: string;
+  updatesUpToDate: string;
+  updatesAvailableBadge: (version: string) => string;
+  updatesDownloadBtn: string;
+  updatesDownloading: string;
+  updatesInstallRestartBtn: string;
+  updatesOpenPackageBtn: string;
+  updatesInstalling: string;
+  updatesViewReleaseBtn: string;
+  updatesNoMatchingAsset: string;
+  updatesToastAvailable: (version: string) => string;
 }
 
 // 标签用共享主题色键索引。增删一个色键时，两份本地化标签都需要随类型一起更新。
@@ -960,6 +977,23 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
     aboutComplianceNote:
       'Gravity 只通过本机未修改的官方 agy acp（stdio JSON-RPC）工作：不读取私有凭据，不请求非公开接口，不自动轮换账号。',
     aboutVersionLabel: '版本',
+    updatesSectionTitle: '软件更新',
+    updatesSourceLabel: '更新源',
+    updatesAutoCheckLabel: '启动时自动检查更新',
+    updatesAutoCheckDesc: '启动 Gravity 时静默检查 GitHub Releases 是否有新版本，按需下载安装',
+    updatesCheckBtn: '检查更新',
+    updatesIdleHint: '尚未检查，点击右侧按钮检查 GitHub Releases 最新版本',
+    updatesChecking: '正在检查 GitHub Releases…',
+    updatesUpToDate: '当前已是最新版本',
+    updatesAvailableBadge: (version) => `发现新版本 v${version}`,
+    updatesDownloadBtn: '下载更新',
+    updatesDownloading: '正在下载更新包…',
+    updatesInstallRestartBtn: '安装并重启',
+    updatesOpenPackageBtn: '打开更新包',
+    updatesInstalling: '正在准备更新并重启…',
+    updatesViewReleaseBtn: '查看 Release 页面',
+    updatesNoMatchingAsset: '当前系统暂无自动匹配的安装包，请前往 Release 页面查看。',
+    updatesToastAvailable: (version) => `发现 Gravity v${version} 新版本，可在“设置 → 关于”中一键更新`,
   },
 
   'en-US': {
@@ -1373,6 +1407,23 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
     aboutComplianceNote:
       'Gravity works only through your local, unmodified official agy acp (stdio JSON-RPC): no private credential access, no non-public endpoints, no automatic account rotation.',
     aboutVersionLabel: 'Version',
+    updatesSectionTitle: 'Software updates',
+    updatesSourceLabel: 'Source',
+    updatesAutoCheckLabel: 'Check for updates on startup',
+    updatesAutoCheckDesc: 'Silently check GitHub Releases on launch; download and install only when you choose',
+    updatesCheckBtn: 'Check now',
+    updatesIdleHint: 'Click Check now to look for the latest GitHub Release',
+    updatesChecking: 'Checking GitHub Releases…',
+    updatesUpToDate: 'You are up to date',
+    updatesAvailableBadge: (version) => `Update available: v${version}`,
+    updatesDownloadBtn: 'Download update',
+    updatesDownloading: 'Downloading update…',
+    updatesInstallRestartBtn: 'Install & restart',
+    updatesOpenPackageBtn: 'Open package',
+    updatesInstalling: 'Applying update and restarting…',
+    updatesViewReleaseBtn: 'View on GitHub',
+    updatesNoMatchingAsset: 'No matching package found for this platform; open the GitHub Release page to download.',
+    updatesToastAvailable: (version) => `Gravity v${version} is available — open Settings → About to update`,
   },
 };
 

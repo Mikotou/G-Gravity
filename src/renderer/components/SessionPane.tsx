@@ -1,6 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowDown, FolderGit2, Info, Network, Plus, X } from 'lucide-react';
+import { AlertTriangle, ArrowDown, FolderGit2, Info, Network, Plus, RotateCw, X } from 'lucide-react';
 import {
+  containsTransientStreamInterruption,
+  stripTransientStreamInterruptions,
   type AcpModelOption,
   type AgentExecutionMode,
   type AgentReasoningEffort,
@@ -167,6 +169,7 @@ function MessageTurn({
   defaultThoughtTrack,
   turnStartedAt,
   onRevise,
+  onContinueInterrupted,
   editRequest, latest,
   busy,
   onInspectDiff,
@@ -176,6 +179,7 @@ function MessageTurn({
   turnStartedAt?: string;
   latest?: boolean; editRequest?: number;
   onRevise?: SessionPaneProps['onReviseMessage'];
+  onContinueInterrupted?: () => void;
   busy: boolean;
   onInspectDiff: (filePath: string) => void;
 }): React.ReactElement | null {
@@ -229,6 +233,9 @@ function MessageTurn({
     message.todos?.length;
   if (!hasBody) return null;
 
+  const hasTransientWarning = containsTransientStreamInterruption(message.content || '');
+  const cleanContent = hasTransientWarning ? stripTransientStreamInterruptions(message.content || '') : message.content;
+  const onlyTransientWarning = hasTransientWarning && !cleanContent.trim();
   const todos = message.todos ?? [];
   const doneTodos = todos.filter((t) => t.status === 'completed').length;
   return (
@@ -264,10 +271,35 @@ function MessageTurn({
           ))}
         </div>
       )}
-      {(message.content || message.attachments?.length) ? (
+      {onlyTransientWarning && (
+        <div className="stream-interrupted-banner" data-testid={`stream-interrupted-${message.id}`}>
+          <AlertTriangle size={14} className="stream-interrupted-icon" />
+          <span className="stream-interrupted-text">
+            {message.isStreaming
+              ? locale === 'zh-CN'
+                ? '流式连接短暂波动，正在等待恢复…'
+                : 'Stream briefly interrupted, waiting to resume…'
+              : locale === 'zh-CN'
+                ? '流式连接意外中断，本轮输出未能完整收尾。'
+                : 'The stream was interrupted before finishing.'}
+          </span>
+          {!message.isStreaming && !busy && onContinueInterrupted && (
+            <button
+              type="button"
+              className="btn btn-sm stream-interrupted-retry"
+              onClick={onContinueInterrupted}
+              data-testid={`stream-continue-btn-${message.id}`}
+            >
+              <RotateCw size={12} />
+              <span>{locale === 'zh-CN' ? '继续任务' : 'Continue'}</span>
+            </button>
+          )}
+        </div>
+      )}
+      {(cleanContent || message.attachments?.length) ? (
         <div className="cc-text" data-message-body="true" data-testid={`assistant-body-${message.id}`}>
           <span className={`cc-bullet ${message.isStreaming ? 'is-streaming' : ''}`}>⏺</span>
-          <Markdown text={message.content} attachments={message.attachments} streaming={message.isStreaming} />
+          <Markdown text={cleanContent} attachments={message.attachments} streaming={message.isStreaming} />
         </div>
       ) : null}
       {!message.isStreaming && !message.toolCalls?.length && (
@@ -629,6 +661,15 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
                   latest={msg.id === lastUserId}
                   editRequest={editRequest.id === msg.id ? editRequest.seq : 0}
                   onRevise={session.readOnly ? undefined : props.onReviseMessage}
+                  onContinueInterrupted={
+                    session.readOnly
+                      ? undefined
+                      : () =>
+                          void props.onSendPrompt({
+                            sessionId: session.sessionId,
+                            text: locale === 'zh-CN' ? '请继续完成刚才中断的任务并给出完整回复。' : 'Please continue the interrupted task and provide the complete response.',
+                          })
+                  }
                   busy={session.status === 'streaming' || session.status === 'waiting_approval'}
                   defaultThoughtTrack={defaultThoughtTrack}
                   turnStartedAt={turnStartById.get(msg.id)}

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 import {
+  APP_BRAND,
   APPROVAL_MODE_ORDER,
   clampUiScale,
   DEFAULT_MODEL_RATE_CARDS,
@@ -14,6 +15,7 @@ import {
   type AcpConnectionStatus,
   type AgentExecutionMode,
   type AgentReasoningEffort,
+  type AppUpdateState,
   type ApprovalAuditEntry,
   type ApprovalDecisionSubmission,
   type ApprovalMode,
@@ -186,6 +188,13 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     refreshedAt: '',
   });
   const [swarmBySession, setSwarmBySession] = useState<Record<string, SwarmTopologyState>>({});
+  const [updateState, setUpdateState] = useState<AppUpdateState>({
+    status: 'idle',
+    currentVersion: APP_BRAND.version,
+    repoUrl: APP_BRAND.repoUrl,
+    canInstallDirectly: false,
+  });
+  const notifiedUpdateVersionRef = useRef<string | null>(null);
 
   // 覆盖层
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(reopenAccounts ? 'accounts' : null);
@@ -218,6 +227,11 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
   }, [organizeCooldownUntil]);
+
+  useEffect(() => {
+    const scale = clampUiScale(preferences.uiScale);
+    document.documentElement.style.setProperty('--win-controls-w', `${Math.round(138 / scale)}px`);
+  }, [preferences.uiScale]);
 
   const scrollMemoryRef = useRef<Record<string, number>>({});
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -252,6 +266,9 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         applyThemePreference(boot.preferences.theme, boot.preferences.customTheme);
         applyDocumentFavicon(boot.preferences.appIcon);
         document.documentElement.lang = boot.preferences.locale;
+        document.documentElement.dataset.windowChrome = boot.windowChrome || 'standard';
+        const initScale = clampUiScale(boot.preferences.uiScale);
+        document.documentElement.style.setProperty('--win-controls-w', `${Math.round(138 / initScale)}px`);
 
         // 恢复上次打开的标签前，先与本次取得的会话列表取交集。
         // 单个关闭会话恢复失败时保留摘要，继续处理其他标签。
@@ -295,6 +312,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         setFocusedSessionId(primaryId);
         setPendingApprovals(boot.pendingApprovals);
         setPluginsSnap(boot.plugins);
+        if (boot.updateState) setUpdateState(boot.updateState);
 
         // 启动快照只列会话摘要。并行拉取已打开标签的消息、检视数据和协作看板，按会话号放回各自的缓存。
         const [audits, freshTele, ...bundles] = await Promise.all([
@@ -367,6 +385,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       bridge.onSwarmUpdated((topo) => setSwarmBySession((prev) => ({ ...prev, [topo.sessionId]: topo }))),
       bridge.onHistoryUpdated((records) => setImportedHistory(records)),
       bridge.onAccountUpdated((state) => setAccounts(state)),
+      bridge.onUpdateState((next) => setUpdateState(next)),
     ];
     // 注销窗口事件的同时，让尚未完成的启动请求识别卸载状态，避免继续应用其最终结果。
     return () => {
@@ -390,6 +409,17 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   useEffect(() => {
     document.documentElement.lang = preferences.locale;
   }, [preferences.locale]);
+
+  useEffect(() => {
+    if (
+      updateState.status === 'available' &&
+      updateState.latestVersion &&
+      notifiedUpdateVersionRef.current !== updateState.latestVersion
+    ) {
+      notifiedUpdateVersionRef.current = updateState.latestVersion;
+      showToast(UI_DICTIONARIES[preferences.locale].updatesToastAvailable(updateState.latestVersion), 'info');
+    }
+  }, [preferences.locale, showToast, updateState.latestVersion, updateState.status]);
 
   /* ---------------------------------------------------------------- 布局 */
   const patchLayout = useCallback(
@@ -777,6 +807,30 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   const handleUpdateRates = useCallback(async (cards: ModelRateCard[]) => {
     setTelemetry(await getDesktopBridge().updateModelRateCards(cards));
   }, []);
+  const handleCheckUpdates = useCallback(async () => {
+    try {
+      const next = await getDesktopBridge().checkForUpdates();
+      setUpdateState(next);
+    } catch (err) {
+      reportError(err);
+    }
+  }, [reportError]);
+  const handleDownloadUpdate = useCallback(async () => {
+    try {
+      const next = await getDesktopBridge().downloadUpdate();
+      setUpdateState(next);
+    } catch (err) {
+      reportError(err);
+    }
+  }, [reportError]);
+  const handleInstallUpdate = useCallback(async () => {
+    try {
+      const res = await getDesktopBridge().installUpdate();
+      if (res.message) showToast(res.message, res.launched ? 'success' : 'info');
+    } catch (err) {
+      reportError(err);
+    }
+  }, [reportError, showToast]);
   const handleRefreshPlugins = useCallback(async () => {
     setPluginsSnap(await getDesktopBridge().getPluginsSnapshot());
   }, []);
@@ -967,6 +1021,8 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           projectCount={(preferences.projects ?? []).length}
           pluginCount={pluginsSnap.plugins.length + pluginsSnap.mcpServers.length}
           activeSessionCount={activeCount}
+          hasAvailableUpdate={updateState.status === 'available' || updateState.status === 'downloaded'}
+          availableUpdateVersion={updateState.latestVersion}
           onToggleSidebar={() => void patchLayout({ leftSidebarCollapsed: !layout.leftSidebarCollapsed })}
           onOpenNewSession={() => setNewSessionOpen(true)}
           onOpenProjects={() => setSettingsSection('projects')}
@@ -1092,9 +1148,13 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
             auditEntries={auditEntries}
             plugins={pluginsSnap}
             rateCards={telemetry.rateCards}
+            updateState={updateState}
             onSectionChange={setSettingsSection}
             onClose={() => setSettingsSection(null)}
             onUpdatePreferences={handleUpdatePreferences}
+            onCheckUpdates={handleCheckUpdates}
+            onDownloadUpdate={handleDownloadUpdate}
+            onInstallUpdate={handleInstallUpdate}
             onSetAppIcon={handleSetAppIcon}
             onImportCustomTheme={handleImportTheme}
             onExportCustomTheme={handleExportTheme}

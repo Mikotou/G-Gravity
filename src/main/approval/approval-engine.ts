@@ -10,7 +10,13 @@ import type {
   PendingApprovalRequest,
 } from '../../shared/approval-contract';
 import { ClientStore } from '../storage/client-store';
-import { compileSafePattern, screenCommand, sensitiveTarget } from './shell-screening';
+import {
+  compileSafePattern,
+  inspectGeminiPathPolicy,
+  isMutatingShellCommand,
+  screenCommand,
+  sensitiveTarget,
+} from './shell-screening';
 import {
   IndependentModelLimitError,
   reviewWithIndependentModel,
@@ -312,17 +318,63 @@ export class ApprovalEngine extends EventEmitter {
       Boolean(rawObj) &&
       (declaredKind === 'edit' || /^(edit|edit_file|replace|write|write_file|create_file)$/i.test(toolName));
 
-    if (sensitiveTarget(rawSerialized) || candidatePaths.some((p) => sensitiveTarget(p))) {
+    const isDeleteOrMoveTool =
+      declaredKind === 'delete' ||
+      declaredKind === 'move' ||
+      /^(delete|remove|rm|unlink|move|rename)/i.test(toolName);
+
+    const commandKind = /^(execute|run_command|bash|zsh|sh|powershell|command|terminal)$/i.test(toolName);
+    const geminiPolicy = inspectGeminiPathPolicy(rawSerialized, candidatePaths, cwd);
+    const isMutatingToolOperation =
+      isEditOrWriteTool ||
+      isDeleteOrMoveTool ||
+      (hasMutationFields && !commandKind) ||
+      (commandKind && isMutatingShellCommand(command));
+
+    if (
+      sensitiveTarget(rawSerialized) ||
+      candidatePaths.some((p) => sensitiveTarget(p)) ||
+      geminiPolicy.tier === 'forbidden'
+    ) {
       screening.verdict = 'deny';
       screening.riskLevel = 'critical';
-      screening.explanation.risk = '完整工具参数涉及敏感凭据或受保护目录';
+      screening.explanation.risk =
+        geminiPolicy.tier === 'forbidden' && geminiPolicy.reason
+          ? geminiPolicy.reason
+          : '完整工具参数涉及敏感凭据、密钥或私有认证状态文件，客户端硬性拒绝';
+    } else if (
+      (geminiPolicy.tier === 'readonly_official' || geminiPolicy.tier === 'unknown_gemini') &&
+      isMutatingToolOperation
+    ) {
+      screening.verdict = 'deny';
+      screening.riskLevel = 'critical';
+      screening.commandPrefix = undefined;
+      screening.explanation.risk =
+        geminiPolicy.tier === 'readonly_official'
+          ? '该路径属于 .gemini 官方只读数据/历史或受控配置区（请通过官方 agy CLI 管理），客户端禁止直接修改或写入'
+          : '该路径位于 .gemini 根目录或未白名单内部状态区，客户端禁止直接写入或修改';
+    } else if (geminiPolicy.tier === 'unknown_gemini' && screening.verdict !== 'deny') {
+      screening.verdict = 'force_ask';
+      screening.riskLevel = 'high';
+      screening.commandPrefix = undefined;
+      screening.explanation.risk = '目标位于 .gemini 未分类子目录，转交人工核对确认不含凭据后再读取';
+    } else if (geminiPolicy.tier === 'user_custom' && isMutatingToolOperation && screening.verdict !== 'deny') {
+      screening.verdict = 'force_ask';
+      screening.riskLevel = 'medium';
+      screening.commandPrefix = undefined;
+      screening.explanation.risk = '目标位于 .gemini 用户自定义规则/技能/插件目录，修改全局配置前请人工核对确认';
     } else if (screening.verdict !== 'deny') {
       if (isPureReadOrSearchTool) {
         if (!screening.matchedRule || screening.verdict !== 'force_ask') {
           screening.verdict = 'auto_approve';
           screening.riskLevel = 'safe';
           screening.commandPrefix = declaredKind === 'search' ? 'search' : 'read';
-          screening.explanation.risk = '纯只读文件/代码检索操作，不含敏感凭据路径，已安全放行';
+          screening.explanation.risk =
+            geminiPolicy.tier === 'readonly_official'
+              ? '纯只读查阅 .gemini 官方只读数据/历史/内置文档，不含凭据且零写入'
+              : geminiPolicy.tier === 'user_custom'
+                ? '纯只读查阅 .gemini 用户自定义插件/技能/规则/日志，不含凭据'
+                : '纯只读文件/代码检索操作，不含敏感凭据路径，已安全放行';
         }
       } else if (isEditOrWriteTool) {
         const primaryTarget = candidatePaths[0] || '';
@@ -330,7 +382,7 @@ export class ApprovalEngine extends EventEmitter {
           Boolean(primaryTarget) &&
           candidatePaths.every((p) => isPathWithinWorkspace(p, cwd)) &&
           !candidatePaths.some((p) => /(?:^|[\\/])\.git(?:[\\/]|$)/i.test(p)) &&
-          !candidatePaths.some((p) => /\.(?:exe|bat|cmd|ps1|vbs|vbe|wsf|wsh|msi|dll|sys|reg|sh)$/i.test(p));
+          !candidatePaths.some((p) => /\.(?:exe|bat|cmd|ps1|vbs|vbe|wsf|wsh|msi|dll|sys|reg|sh|bash|zsh|command|pkg|dmg|app|dylib|plist)$/i.test(p));
 
         if (allWithinWorkspace && (!screening.matchedRule || screening.verdict !== 'force_ask')) {
           screening.verdict = 'grey_zone';
@@ -345,7 +397,6 @@ export class ApprovalEngine extends EventEmitter {
           screening.explanation.risk = '涉及跨工作区文件写入、可执行脚本或缺少明确路径，已解析代码用意并转交人工确认';
         }
       } else {
-        const commandKind = /^(execute|run_command|bash|powershell|command|terminal)$/i.test(toolName);
         const explicitCommand =
           typeof raw === 'string' ||
           Boolean(
@@ -643,6 +694,7 @@ export class ApprovalEngine extends EventEmitter {
       id: randomUUID(),
       timestamp: new Date(this.now()).toISOString(),
       sessionId: item.card.sessionId,
+      toolCallId: item.card.toolCallId,
       cwd: item.card.cwd,
       toolName: item.card.toolName,
       commandOrSummary: item.card.commandOrSummary,

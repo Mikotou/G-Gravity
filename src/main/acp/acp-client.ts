@@ -78,6 +78,7 @@ export class AcpClient extends EventEmitter {
   private cooldownUntil = 0;
   constructor(readonly options: AcpClientOptions = {}) { super(); }
   get connected(): boolean { return !!this.child && !!this.initializeResult; }
+  get isRateLimited(): boolean { return Date.now() < this.cooldownUntil; }
   registerRequestHandler(method: string, handler: (params: unknown, id: JsonRpcId) => unknown | Promise<unknown>): void { this.handlers.set(method, handler); }
   /** 复用正在进行的握手。首次同时打开多个会话时，所有调用者等待同一次 initialize。 */
   async start(): Promise<AcpInitializeResult> {
