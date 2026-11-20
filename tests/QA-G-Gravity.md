@@ -2,13 +2,14 @@
 
 ## 本机 Windows 版 v0.2.2（本地构建，未推送）
 
-2026-11-20，Windows x64。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.2/Gravity.exe`，大小为 121,556,128 字节；目录版位于 `release/v0.2.2/win-unpacked/Gravity.exe`；源码压缩包位于 `release/v0.2.2/G-Gravity-v0.2.2-source.zip`（仅本地提交，未推送至 GitHub）。
+2026-11-20，Windows x64。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.2/Gravity.exe`，大小为 121,558,579 字节；目录版位于 `release/v0.2.2/win-unpacked/Gravity.exe`；源码压缩包位于 `release/v0.2.2/G-Gravity-v0.2.2-source.zip`（仅本地提交，未推送至 GitHub）。
 
 | 项目 | 验证结果 |
 | --- | --- |
 | 外部复核服务端模型与思考强度发现 | 新增 `discoverExternalModels()` 与 IPC `gravity:approval:discover-models`：用户在设置页填入公开 API Key（或切换本机 Ollama）后自动防抖并支持手动查询服务端允许使用的模型列表与思考强度（Gemini `/v1beta/models`、OpenAI `/v1/models`、Ollama `/api/tags`），下拉选择模型时动态筛选可用思考强度（`auto / off / minimal / low / medium / high`），同时保留自定义模型 ID 入口。 |
 | 默认参数与多代模型兼容 | 外部复核默认参数统一升级为 `timeoutMs = 8000`、`maxOutputTokens = 4096`、`thinkingLevel = 'auto'`、`cacheTtlHours = 24` 且均支持在设置页自由调整；Gemini 3/4 自动下发 `thinkingConfig.thinkingLevel`、Gemini 2.5 自动下发 `thinkingConfig.thinkingBudget`（避免 400 报错）；启用 `responseMimeType: 'application/json'`，过滤 `part.thought` 片段，遇到 `MAX_TOKENS` 截断或非 200 状态码时透出脱敏错误说明。 |
-| 回归、布局与双包桌面冒烟 | 四组 TypeScript 类型检查（shared / main / renderer / tests）0 错误；36 个测试文件共 386 项自动化测试全部通过（1 项联机 smoke 跳过）；生产构建、`test:layout` Chromium 三视口/动效/排版冒烟、以及 `test:desktop` `release/v0.2.2/win-unpacked/Gravity.exe` 与 `release/v0.2.2/Gravity.exe` 双包启动验收全部通过。 |
+| 跨版本更新与重启配置无损保留 | 外部复核 API Key 接入 Electron `safeStorage`（Windows DPAPI / macOS 钥匙串）以密文独立存于 `reviewer-secret.enc`（`approval-config.json` 保持零明文），更新重启自动恢复启用态与密钥并平滑迁移旧版 `reasoningEffort`；核心配置写入增加短暂占用重试与 `.bak` 影子备份自动恢复；自定义配色支持启动单键容错恢复、编辑自动防抖/关闭兜底落盘及主题页一键回切；检视器悬浮态、输入框高度、思考默认折叠与窗口位置尺寸全部持久化至稳定的 `userData` JSON，不再因便携版解包临时路径变化而丢失。 |
+| 回归、布局与双包桌面冒烟 | 四组 TypeScript 类型检查（shared / main / renderer / tests）0 错误；36 个测试文件共 389 项自动化测试全部通过（1 项联机 smoke 跳过）；生产构建、`test:layout` Chromium 三视口/动效/排版冒烟、以及 `test:desktop` `release/v0.2.2/win-unpacked/Gravity.exe` 与 `release/v0.2.2/Gravity.exe` 双包启动验收全部通过。 |
 
 ## 已发布的 Windows / macOS 版 v0.2.1
 

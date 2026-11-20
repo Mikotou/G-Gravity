@@ -88,7 +88,7 @@ export function ThemesPanel({
   preferences: ClientPreferences;
   onUpdatePreferences: (patch: Partial<ClientPreferences>) => Promise<void>;
 }): React.ReactElement {
-  const { dict } = useI18n();
+  const { locale, dict } = useI18n();
   const select = (id: ThemePreference) => void onUpdatePreferences({ theme: id });
   return (
     <div className="settings-section">
@@ -110,7 +110,26 @@ export function ThemesPanel({
         </button>
       </div>
 
-      {preferences.theme === 'custom' && <div className="notice">{dict.themeCustomActive}</div>}
+      {preferences.customTheme && (
+        <>
+          <h3 className="settings-group-title">{locale === 'zh-CN' ? '已保存的自定义配色' : 'Saved custom palette'}</h3>
+          <section className="theme-grid" data-testid="theme-group-custom">
+            <button
+              type="button"
+              className={`theme-card ${preferences.theme === 'custom' ? 'is-selected' : ''}`}
+              onClick={() => select('custom')}
+              title={preferences.customTheme.name}
+              data-testid="theme-card-custom"
+            >
+              <ThemePreview tokens={preferences.customTheme.tokens} />
+              <span className="theme-card-name">
+                <span className="truncate">{preferences.customTheme.name}</span>
+                {preferences.theme === 'custom' && <Check size={14} />}
+              </span>
+            </button>
+          </section>
+        </>
+      )}
 
       <h3 className="settings-group-title">{dict.themeDarkGroup}</h3>
       <section className="theme-grid" data-testid="theme-group-dark">
@@ -154,32 +173,85 @@ export function TokensPanel({
   const { locale, dict } = useI18n();
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [savedToast, setSavedToast] = useState(false);
   // 已有自定义主题时沿用其草稿，否则复制基础预设，使逐项编辑不会直接改动预设颜色表。
   const base = THEME_PRESETS.find((p) => p.id === preferences.theme) ?? THEME_PRESETS[0];
   const [draft, setDraft] = useState<CustomThemeConfig>(
     preferences.customTheme ?? { name: 'My Gravity Theme', polarity: base.polarity, baseThemeId: base.id, tokens: { ...base.tokens } }
   );
+  const dirtyRef = useRef(false);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const saveTimerRef = useRef<number | null>(null);
+  const onUpdateRef = useRef(onUpdatePreferences);
+  onUpdateRef.current = onUpdatePreferences;
 
   useEffect(() => {
-    if (preferences.customTheme) setDraft(preferences.customTheme);
+    if (preferences.customTheme && !dirtyRef.current) setDraft(preferences.customTheme);
   }, [preferences.customTheme]);
+
+  // 自动防抖保存合法配色改动，并在关闭设置页时兜底落盘，避免用户调完颜色直接按 Esc 导致丢失。
+  const scheduleAutoSave = (nextDraft: CustomThemeConfig) => {
+    dirtyRef.current = true;
+    setSavedToast(false);
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    const allValid = THEME_TOKEN_KEYS.every((key) => isValidCssColorToken(nextDraft.tokens[key]));
+    if (!allValid) return;
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      dirtyRef.current = false;
+      void onUpdateRef.current({ theme: 'custom', customTheme: nextDraft })
+        .then(() => setSavedToast(true))
+        .catch(() => {});
+    }, 450);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      if (dirtyRef.current) {
+        const latest = draftRef.current;
+        if (THEME_TOKEN_KEYS.every((key) => isValidCssColorToken(latest.tokens[key]))) {
+          dirtyRef.current = false;
+          void onUpdateRef.current({ theme: 'custom', customTheme: latest }).catch(() => {});
+        }
+      }
+    };
+  }, []);
 
   // 保证 23 个 Token 都被分组展示
   const grouped = new Set(TOKEN_GROUPS.flatMap((g) => g.tokens));
   const leftovers = THEME_TOKEN_KEYS.filter((k) => !grouped.has(k));
 
+  function updateDraft(updater: (prev: CustomThemeConfig) => CustomThemeConfig): void {
+    setDraft((prev) => {
+      const next = updater(prev);
+      scheduleAutoSave(next);
+      return next;
+    });
+  }
+
   function setToken(key: keyof ThemePaletteTokens, value: string): void {
-    setDraft((prev) => ({ ...prev, tokens: { ...prev.tokens, [key]: value } }));
+    updateDraft((prev) => ({ ...prev, tokens: { ...prev.tokens, [key]: value } }));
   }
 
   /** 整套颜色先在表单校验，通过后一次提交，并将偏好切到自定义主题。界面的错误可指出具体色键。 */
   async function apply(): Promise<void> {
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
     setError(null);
     try {
       for (const key of THEME_TOKEN_KEYS) {
         if (!isValidCssColorToken(draft.tokens[key])) throw new Error(`颜色格式无效 (${key})：请使用 #HEX 或 rgba(...)`);
       }
+      dirtyRef.current = false;
       await onUpdatePreferences({ theme: 'custom', customTheme: draft });
+      setSavedToast(true);
     } catch (err) {
       setError(formatActionError(err, dict));
     }
@@ -253,7 +325,7 @@ export function TokensPanel({
             className="input"
             style={{ width: 220 }}
             value={draft.name}
-            onChange={(e) => setDraft((prev) => ({ ...prev, name: e.target.value }))}
+            onChange={(e) => updateDraft((prev) => ({ ...prev, name: e.target.value }))}
             aria-label={dict.customThemeNameLabel}
           />
         </div>
@@ -267,7 +339,7 @@ export function TokensPanel({
                 key={p}
                 type="button"
                 className={`segmented-btn ${draft.polarity === p ? 'is-active' : ''}`}
-                onClick={() => setDraft((prev) => ({ ...prev, polarity: p }))}
+                onClick={() => updateDraft((prev) => ({ ...prev, polarity: p }))}
               >
                 {p}
               </button>
@@ -284,7 +356,7 @@ export function TokensPanel({
             value=""
             onChange={(e) => {
               const preset = THEME_PRESETS.find((p) => p.id === e.target.value);
-              if (preset) setDraft((prev) => ({ ...prev, polarity: preset.polarity, baseThemeId: preset.id, tokens: { ...preset.tokens } }));
+              if (preset) updateDraft((prev) => ({ ...prev, polarity: preset.polarity, baseThemeId: preset.id, tokens: { ...preset.tokens } }));
             }}
           >
             <option value="">…</option>
@@ -325,6 +397,11 @@ export function TokensPanel({
           <span>{dict.exportThemeJsonBtn}</span>
         </button>
         <span className="spacer" />
+        {savedToast && (
+          <span className="muted" style={{ alignSelf: 'center', fontSize: 12, color: 'var(--status-success)' }}>
+            {dict.savedHint}
+          </span>
+        )}
         <button type="button" className="btn btn-primary" onClick={() => void apply()} data-testid="apply-custom-theme-btn">
           {dict.applyCustomThemeBtn}
         </button>

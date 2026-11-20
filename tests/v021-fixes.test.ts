@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -10,8 +10,9 @@ import {
   DEFAULT_MODEL_RATE_CARDS,
   resolveModelCompactionLimit,
   stripTransientStreamInterruptions,
+  THEME_PRESETS,
 } from '../src/shared';
-import { CoreService } from '../src/main/core-service';
+import { CoreService, type SecretCipher } from '../src/main/core-service';
 import { ApprovalEngine, DEFAULT_APPROVAL_CONFIG } from '../src/main/approval/approval-engine';
 import {
   buildGeminiThinkingConfig,
@@ -850,5 +851,166 @@ describe('外部审查模型服务端发现、思考强度与默认参数（time
         truncatedFetcher
       )
     ).rejects.toThrow(/maxOutputTokens/);
+  });
+});
+
+describe('跨版本更新与重启配置无损保留（外部复核系统加密、自定义配色、布局与影子备份恢复）', () => {
+  function makeTestCipher(): SecretCipher {
+    return {
+      isAvailable: () => true,
+      encrypt: (plain) => Buffer.from(`ENCv1:${Buffer.from(plain, 'utf8').toString('base64')}`, 'utf8'),
+      decrypt: (buf) => {
+        const s = buf.toString('utf8');
+        if (!s.startsWith('ENCv1:')) throw new Error('corrupt cipher');
+        return Buffer.from(s.slice(6), 'base64').toString('utf8');
+      },
+    };
+  }
+
+  it('外部复核配置与 API Key 经系统级加密独立落盘，重启/升级后自动恢复启用态，且 JSON 零明文', async () => {
+    const dataDir = mkDir('gravity-v022-persist-reviewer-');
+    const cipher = makeTestCipher();
+
+    const core1 = new CoreService({ dataDir, secretCipher: cipher });
+    disposers.push(() => core1.dispose());
+    await core1.updateApprovalConfig({
+      mode: 'hybrid',
+      cacheTtlHours: 48,
+      allowPatterns: ['^git\\s+status$'],
+      externalReviewer: {
+        enabled: true,
+        provider: 'gemini-api-key',
+        endpoint: 'https://generativelanguage.googleapis.com',
+        model: 'gemini-3.5-flash-lite',
+        apiKey: 'AIza-test-persisted-secret-998877',
+        timeoutMs: 12000,
+        maxOutputTokens: 4096,
+        thinkingLevel: 'low',
+      },
+    });
+    // 修改其他审批模式字段时，不传 apiKey 也绝不能覆盖丢失原密钥
+    await core1.updateApprovalConfig({ enableSafeDownloadAutoApprove: true });
+    await core1.dispose();
+
+    // 验证明文配置 JSON 中绝对不含 API Key，密文单独存于 reviewer-secret.enc
+    const rawJson = readFileSync(path.join(dataDir, 'approval-config.json'), 'utf8');
+    expect(rawJson).not.toContain('AIza-test-persisted-secret-998877');
+    const rawEnc = readFileSync(path.join(dataDir, 'reviewer-secret.enc'), 'utf8');
+    expect(rawEnc).not.toContain('AIza-test-persisted-secret-998877');
+    expect(rawEnc.startsWith('ENCv1:')).toBe(true);
+
+    // 模拟升级后以新版本启动 CoreService
+    const core2 = new CoreService({ dataDir, secretCipher: cipher, appVersion: '0.2.3' });
+    disposers.push(() => core2.dispose());
+    const restored = core2.approval.getConfig();
+    expect(restored.mode).toBe('hybrid');
+    expect(restored.enableSafeDownloadAutoApprove).toBe(true);
+    expect(restored.cacheTtlHours).toBe(48);
+    expect(restored.allowPatterns).toEqual(['^git\\s+status$']);
+    expect(restored.externalReviewer).toMatchObject({
+      enabled: true,
+      provider: 'gemini-api-key',
+      model: 'gemini-3.5-flash-lite',
+      apiKey: 'AIza-test-persisted-secret-998877',
+      timeoutMs: 12000,
+      maxOutputTokens: 4096,
+      thinkingLevel: 'low',
+    });
+  });
+
+  it('旧版 approval-config.json 含遗留 reasoningEffort 与单个损坏正则时平滑迁移，不重置用户其余规则', async () => {
+    const dataDir = mkDir('gravity-v022-migrate-legacy-');
+    const cipher = makeTestCipher();
+    writeFileSync(
+      path.join(dataDir, 'approval-config.json'),
+      JSON.stringify({
+        mode: 'hybrid',
+        cacheTtlHours: 12,
+        allowPatterns: ['^git\\s+diff$', '[unclosed-regex('],
+        askPatterns: ['^npm\\s+publish$'],
+        denyPatterns: [],
+        externalReviewer: {
+          enabled: true,
+          provider: 'openai-compatible',
+          endpoint: 'https://api.openai.com',
+          model: 'o4-mini',
+          timeoutMs: 9000,
+          reasoningEffort: 'low',
+        },
+      }),
+      'utf8'
+    );
+    writeFileSync(path.join(dataDir, 'reviewer-secret.enc'), cipher.encrypt('sk-legacy-migrated-key'));
+
+    const core = new CoreService({ dataDir, secretCipher: cipher });
+    disposers.push(() => core.dispose());
+    const cfg = core.approval.getConfig();
+    expect(cfg.mode).toBe('hybrid');
+    expect(cfg.cacheTtlHours).toBe(12);
+    expect(cfg.allowPatterns).toEqual(['^git\\s+diff$']);
+    expect(cfg.askPatterns).toEqual(['^npm\\s+publish$']);
+    expect(cfg.externalReviewer.enabled).toBe(true);
+    expect(cfg.externalReviewer.thinkingLevel).toBe('low');
+    expect(cfg.externalReviewer.apiKey).toBe('sk-legacy-migrated-key');
+    expect(cfg.externalReviewer.maxOutputTokens).toBe(4096);
+  });
+
+  it('自定义配色、布局悬浮态/输入框高度、思考默认折叠均跨更新保留，且支持 .bak 影子备份自动恢复与单键容错', async () => {
+    const dataDir = mkDir('gravity-v022-persist-theme-');
+    const baseTokens = { ...THEME_PRESETS[0].tokens, accentPrimary: '#2277aa', bgApp: '#11161d' };
+
+    const core1 = new CoreService({ dataDir });
+    disposers.push(() => core1.dispose());
+    await core1.updatePreferences({
+      theme: 'custom',
+      customTheme: {
+        name: 'My Midnight Blue',
+        polarity: 'dark',
+        baseThemeId: 'claude-code-dark',
+        tokens: baseTokens,
+      },
+      thoughtExpandedByDefault: false,
+      uiScale: 1.15,
+    });
+    await core1.saveWorkspaceLayout({
+      inspectorFloating: true,
+      composerMinHeight: 148,
+      leftSidebarWidth: 310,
+    });
+    await core1.dispose();
+
+    // 1. 模拟主 preferences.json 在异常断电/升级瞬间损坏 -> 自动从 preferences.json.bak 无损恢复
+    writeFileSync(path.join(dataDir, 'preferences.json'), '{ truncated-broken-json', 'utf8');
+    const core2 = new CoreService({ dataDir });
+    disposers.push(() => core2.dispose());
+    const prefs2 = core2.getPreferences();
+    expect(prefs2.theme).toBe('custom');
+    expect(prefs2.customTheme?.name).toBe('My Midnight Blue');
+    expect(prefs2.customTheme?.tokens.accentPrimary).toBe('#2277aa');
+    expect(prefs2.customTheme?.tokens.bgApp).toBe('#11161d');
+    expect(prefs2.thoughtExpandedByDefault).toBe(false);
+    expect(prefs2.uiScale).toBe(1.15);
+    const boot2 = await core2.getBootstrap();
+    expect(boot2.layout.inspectorFloating).toBe(true);
+    expect(boot2.layout.composerMinHeight).toBe(148);
+    expect(boot2.layout.leftSidebarWidth).toBe(310);
+    await core2.dispose();
+
+    // 2. 模拟旧版 customTheme 里个别色键格式非法 -> 仅修复该单键，绝不清零其余 22 个自定义色值
+    const brokenSingleToken = {
+      ...prefs2,
+      customTheme: {
+        ...prefs2.customTheme!,
+        tokens: { ...prefs2.customTheme!.tokens, syntaxComment: 'not-a-color' },
+      },
+    };
+    writeFileSync(path.join(dataDir, 'preferences.json'), JSON.stringify(brokenSingleToken), 'utf8');
+    const core3 = new CoreService({ dataDir });
+    disposers.push(() => core3.dispose());
+    const prefs3 = core3.getPreferences();
+    expect(prefs3.theme).toBe('custom');
+    expect(prefs3.customTheme?.tokens.accentPrimary).toBe('#2277aa');
+    expect(prefs3.customTheme?.tokens.bgApp).toBe('#11161d');
+    expect(prefs3.customTheme?.tokens.syntaxComment).toBe(THEME_PRESETS[0].tokens.syntaxComment);
   });
 });

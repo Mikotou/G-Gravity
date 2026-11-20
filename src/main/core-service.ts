@@ -5,19 +5,20 @@ import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AcpConfigOption, AcpRequestPermissionParams, AcpSessionNewResult, AcpSessionUpdateNotification, AcpPromptContentBlock, AgentExecutionMode, AgentReasoningEffort } from '../shared/acp-protocol';
-import type { ApprovalAuditEntry, ApprovalDecisionSubmission, ApprovalMode, ApproveForMeConfig, ExternalReviewerModelsDiscoveryInput } from '../shared/approval-contract';
+import { EXTERNAL_REVIEWER_DEFAULTS, type ApprovalAuditEntry, type ApprovalDecisionSubmission, type ApprovalMode, type ApproveForMeConfig, type ExternalReviewerModelsDiscoveryInput, type ExternalReviewerThinkingLevel } from '../shared/approval-contract';
 import type { AppBootstrapPayload, AcpConnectionStatus, AppUpdateState, CreateSessionInput, OpenLinkOrFileInput, OpenLinkOrFileResult, SendPromptInput } from '../shared/ipc-channels';
 import { isForbiddenCredentialOrStatePath } from '../shared/accounts-history-contract';
 import type { ChatMessageItem, ManagedSessionSummary, TitleOrganizeRequest, TitleOrganizeResult, WorkspaceLayoutState } from '../shared/session-contract';
 import { clampSplitRatio, containsTransientStreamInterruption, generateStructuredChineseTitle, isLegacyPollutionSessionTitle, isRightInspectorTab, LAYOUT_LIMITS, normalizeWorkspacePath, stripTransientStreamInterruptions, TITLE_ORGANIZE_MODEL_LABEL, TITLE_ORGANIZE_RATE_LIMIT } from '../shared/session-contract';
 import type { ClientPreferences, GravityIconId, WorkspaceProjectConfig } from '../shared/theme-i18n-contract';
-import { APP_BRAND, THEME_PRESETS, GRAVITY_ICON_VARIANTS, UI_SCALE_LIMITS, clampUiScale, validateCustomThemeConfig } from '../shared/theme-i18n-contract';
+import { APP_BRAND, THEME_PRESETS, GRAVITY_ICON_VARIANTS, UI_SCALE_LIMITS, clampUiScale, sanitizeCustomThemeConfig, validateCustomThemeConfig } from '../shared/theme-i18n-contract';
 import type { ModelRateCard } from '../shared/telemetry-contract';
 import type { CreateAccountProfileInput, ContinueHistoryInGravityInput } from '../shared/accounts-history-contract';
 import type { PluginActionInput, McpActionInput } from '../shared/plugins-contract';
 import { AcpClient, type AcpClientOptions } from './acp/acp-client';
 import { ApprovalEngine, DEFAULT_APPROVAL_CONFIG, type ApprovalGuardActivityEvent } from './approval/approval-engine';
-import { discoverExternalModels, type Reviewer } from './approval/external-reviewer';
+import { discoverExternalModels, validateExternalEndpoint, type Reviewer } from './approval/external-reviewer';
+import { compileSafePattern } from './approval/shell-screening';
 import { ClientStore } from './storage/client-store';
 import { SessionMultiplexer } from './session/session-multiplexer';
 import { TitleOrganizer } from './organizer/title-organizer';
@@ -42,9 +43,83 @@ import { appendImage } from './session/message-images';
 import { LocalTranslator } from './translation/local-translator';
 import { GitHubUpdater, type GitHubUpdaterOptions } from './updater/github-updater';
 
+export interface SecretCipher {
+  isAvailable(): boolean;
+  encrypt(plaintext: string): Buffer;
+  decrypt(ciphertext: Buffer): string;
+}
+
+const REVIEWER_SECRET_FILE = 'reviewer-secret.enc';
+const VALID_THINKING_LEVELS = new Set<ExternalReviewerThinkingLevel>(['auto', 'off', 'minimal', 'low', 'medium', 'high']);
+
+function sanitizeStoredApprovalConfig(raw: unknown, restoredApiKey?: string): ApproveForMeConfig {
+  const base = structuredClone(DEFAULT_APPROVAL_CONFIG);
+  if (!raw || typeof raw !== 'object') {
+    if (restoredApiKey) base.externalReviewer.apiKey = restoredApiKey;
+    return base;
+  }
+  const rec = raw as Record<string, unknown>;
+  if (rec.mode === 'manual' || rec.mode === 'rules-only' || rec.mode === 'hybrid') base.mode = rec.mode;
+  if (typeof rec.enableSafeDownloadAutoApprove === 'boolean') base.enableSafeDownloadAutoApprove = rec.enableSafeDownloadAutoApprove;
+  if (typeof rec.maxDownloadSizeMB === 'number' && Number.isFinite(rec.maxDownloadSizeMB) && rec.maxDownloadSizeMB >= 0) {
+    base.maxDownloadSizeMB = rec.maxDownloadSizeMB;
+  }
+  if (typeof rec.cacheTtlHours === 'number' && Number.isFinite(rec.cacheTtlHours)) {
+    base.cacheTtlHours = Math.min(168, Math.max(0, rec.cacheTtlHours));
+  }
+  for (const field of ['allowPatterns', 'askPatterns', 'denyPatterns'] as const) {
+    if (Array.isArray(rec[field])) {
+      const valid: string[] = [];
+      for (const item of rec[field] as unknown[]) {
+        if (typeof item !== 'string' || valid.length >= 50) continue;
+        try { compileSafePattern(item); valid.push(item); } catch { /* 跳过损坏的旧正则，保留其余全部规则 */ }
+      }
+      base[field] = valid;
+    }
+  }
+  if (rec.externalReviewer && typeof rec.externalReviewer === 'object') {
+    const ext = rec.externalReviewer as Record<string, unknown>;
+    if (ext.provider === 'gemini-api-key' || ext.provider === 'openai-compatible' || ext.provider === 'local-ollama') {
+      base.externalReviewer.provider = ext.provider;
+    }
+    if (typeof ext.endpoint === 'string' && ext.endpoint.trim()) base.externalReviewer.endpoint = ext.endpoint.trim();
+    if (typeof ext.model === 'string' && ext.model.trim()) base.externalReviewer.model = ext.model.trim();
+    if (typeof ext.timeoutMs === 'number' && Number.isFinite(ext.timeoutMs)) {
+      base.externalReviewer.timeoutMs = Math.min(60_000, Math.max(100, Math.round(ext.timeoutMs)));
+    }
+    if (typeof ext.maxOutputTokens === 'number' && Number.isFinite(ext.maxOutputTokens)) {
+      base.externalReviewer.maxOutputTokens = Math.min(65_536, Math.max(64, Math.round(ext.maxOutputTokens)));
+    } else {
+      base.externalReviewer.maxOutputTokens = EXTERNAL_REVIEWER_DEFAULTS.maxOutputTokens;
+    }
+    // 兼容旧版保存的 reasoningEffort 字段，平滑迁移到 thinkingLevel
+    const rawLevel = typeof ext.thinkingLevel === 'string'
+      ? ext.thinkingLevel
+      : typeof ext.reasoningEffort === 'string'
+        ? ext.reasoningEffort
+        : undefined;
+    if (rawLevel && VALID_THINKING_LEVELS.has(rawLevel.toLowerCase() as ExternalReviewerThinkingLevel)) {
+      base.externalReviewer.thinkingLevel = rawLevel.toLowerCase() as ExternalReviewerThinkingLevel;
+    }
+    const effectiveKey = restoredApiKey || (typeof ext.apiKey === 'string' && ext.apiKey.trim() ? ext.apiKey.trim() : undefined);
+    if (effectiveKey) base.externalReviewer.apiKey = effectiveKey;
+    const wantsEnabled = Boolean(ext.enabled);
+    if (wantsEnabled) {
+      try {
+        validateExternalEndpoint({ ...base.externalReviewer, enabled: true });
+        base.externalReviewer.enabled = true;
+      } catch {
+        // 仅当远端服务缺少可恢复密钥或地址无效时自动回落关闭，其余字段原样保留
+        base.externalReviewer.enabled = false;
+      }
+    }
+  }
+  return base;
+}
+
 export const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'gravity-claude-dark', defaultThoughtTrack: 'zh', translationEngine: 'local', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [], autoCheckUpdates: true };
 export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context', splitRatio: 0.5 };
-export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; modelDiscoveryFetcher?: typeof fetch; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; now?: () => number; appVersion?: string; enableAutoUpdateCheck?: boolean; updaterOptions?: Partial<GitHubUpdaterOptions>; windowChrome?: 'win-overlay' | 'mac-inset' | 'standard'; setIcon?: (iconId: GravityIconId) => void | Promise<void>; setZoom?: (factor: number) => void; onThemeChanged?: (preferences: ClientPreferences) => void; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
+export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; modelDiscoveryFetcher?: typeof fetch; secretCipher?: SecretCipher; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; now?: () => number; appVersion?: string; enableAutoUpdateCheck?: boolean; updaterOptions?: Partial<GitHubUpdaterOptions>; windowChrome?: 'win-overlay' | 'mac-inset' | 'standard'; setIcon?: (iconId: GravityIconId) => void | Promise<void>; setZoom?: (factor: number) => void; onThemeChanged?: (preferences: ClientPreferences) => void; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
 /** 主进程的业务入口。窗口请求进入此处，ACP 更新按会话分发给消息、审批、统计和检视器，再由事件通知渲染层。 */
 export class CoreService extends EventEmitter {
   readonly store: ClientStore; readonly client: AcpClient; readonly sessions: SessionMultiplexer; readonly approval: ApprovalEngine;
@@ -96,7 +171,15 @@ export class CoreService extends EventEmitter {
     }
     if (!THEME_PRESETS.some(theme => theme.id === this.preferences.theme) && !['custom', 'system'].includes(this.preferences.theme)) this.preferences.theme = DEFAULT_PREFERENCES.theme;
     if (!GRAVITY_ICON_VARIANTS.some(icon => icon.id === this.preferences.appIcon)) this.preferences.appIcon = DEFAULT_PREFERENCES.appIcon;
-    if (this.preferences.customTheme) { try { this.preferences.customTheme = validateCustomThemeConfig(this.preferences.customTheme); } catch { delete this.preferences.customTheme; this.preferences.theme = DEFAULT_PREFERENCES.theme; } }
+    if (this.preferences.customTheme) {
+      const rescued = sanitizeCustomThemeConfig(this.preferences.customTheme);
+      if (rescued) this.preferences.customTheme = rescued;
+      else { delete this.preferences.customTheme; if (this.preferences.theme === 'custom') this.preferences.theme = DEFAULT_PREFERENCES.theme; }
+    }
+    if (this.preferences.theme === 'custom' && !this.preferences.customTheme) this.preferences.theme = DEFAULT_PREFERENCES.theme;
+    if (this.preferences.thoughtExpandedByDefault !== undefined && typeof this.preferences.thoughtExpandedByDefault !== 'boolean') {
+      delete this.preferences.thoughtExpandedByDefault;
+    }
     const stored = this.store.read<Partial<Omit<WorkspaceLayoutState, 'layoutMode'>> & {
       layoutMode?: WorkspaceLayoutState['layoutMode'] | 'grid-4'; tertiarySessionId?: string; quaternarySessionId?: string;
     }>('layout.json', {});
@@ -114,12 +197,23 @@ export class CoreService extends EventEmitter {
     this.layout.leftSidebarWidth = fitWidth(this.layout.leftSidebarWidth, 'leftSidebarWidth');
     this.layout.rightInspectorWidth = fitWidth(this.layout.rightInspectorWidth, 'rightInspectorWidth');
     this.layout.splitRatio = clampSplitRatio(this.layout.splitRatio);
+    if (this.layout.inspectorFloating !== undefined && typeof this.layout.inspectorFloating !== 'boolean') {
+      delete this.layout.inspectorFloating;
+    }
+    if (this.layout.composerMinHeight !== undefined) {
+      const { min, max } = LAYOUT_LIMITS.composerMinHeight;
+      if (typeof this.layout.composerMinHeight === 'number' && Number.isFinite(this.layout.composerMinHeight)) {
+        this.layout.composerMinHeight = Math.min(max, Math.max(min, Math.round(this.layout.composerMinHeight)));
+      } else {
+        delete this.layout.composerMinHeight;
+      }
+    }
     if (this.preferences.uiScale !== undefined) this.preferences.uiScale = clampUiScale(this.preferences.uiScale);
     this.client = options.acp || new AcpClient({ ...options.acpOptions, args: options.acpOptions?.args || ['acp', ...(this.preferences.processPerSession ? ['--process-per-session'] : [])] });
     this.sessions = new SessionMultiplexer(this.client, this.store);
-    let config = this.store.read<ApproveForMeConfig>('approval-config.json', structuredClone(DEFAULT_APPROVAL_CONFIG));
-    // 公开 API 密钥不落盘；重启后需要用户重新配置才可开启联网复核。
-    if (config.externalReviewer?.provider !== 'local-ollama') config = { ...config, externalReviewer: { ...config.externalReviewer, enabled: false } };
+    const rawApproval = this.store.read<unknown>('approval-config.json', null);
+    const restoredApiKey = this.loadStoredReviewerApiKey();
+    const config = sanitizeStoredApprovalConfig(rawApproval, restoredApiKey);
     try { this.approval = new ApprovalEngine({ store: this.store, config, reviewer: options.reviewer }); }
     catch { this.approval = new ApprovalEngine({ store: this.store, reviewer: options.reviewer }); }
     this.telemetry = new TelemetryStore({ store: this.store });
@@ -213,9 +307,7 @@ export class CoreService extends EventEmitter {
       }
     });
     this.approval.on('config-updated', (cfg: ApproveForMeConfig) => {
-      const persisted = structuredClone(cfg);
-      delete persisted.externalReviewer.apiKey;
-      this.store.write('approval-config.json', persisted);
+      this.persistApprovalConfig(cfg);
     });
     this.approval.on('guard-activity', (ev: ApprovalGuardActivityEvent) => {
       this.guardActiveSessions.set(ev.sessionId, { count: ev.autoApprovedCount, modelLabel: ev.modelLabel });
@@ -599,6 +691,9 @@ export class CoreService extends EventEmitter {
     }
     if (next.autoCheckUpdates !== undefined && typeof next.autoCheckUpdates !== 'boolean') {
       throw new Error('自动检查更新设置无效');
+    }
+    if (next.thoughtExpandedByDefault !== undefined && typeof next.thoughtExpandedByDefault !== 'boolean') {
+      throw new Error('思考区默认展开设置无效');
     }
     if (next.appIcon !== this.preferences.appIcon) await this.options.setIcon?.(next.appIcon);
     if ((next.uiScale ?? 1) !== (this.preferences.uiScale ?? 1)) this.options.setZoom?.(next.uiScale ?? 1);
@@ -1021,6 +1116,11 @@ export class CoreService extends EventEmitter {
     if (!Array.isArray(next.openTabSessionIds) || !next.openTabSessionIds.every(id => typeof id === 'string') || !['single', 'split-2'].includes(next.layoutMode) || typeof next.hideLegacyPollutionSessions !== 'boolean') throw new Error('工作台布局无效');
     if (typeof next.leftSidebarCollapsed !== 'boolean' || typeof next.rightInspectorCollapsed !== 'boolean' || !Number.isFinite(next.leftSidebarWidth) || next.leftSidebarWidth < LAYOUT_LIMITS.leftSidebarWidth.min || next.leftSidebarWidth > LAYOUT_LIMITS.leftSidebarWidth.max || !Number.isFinite(next.rightInspectorWidth) || next.rightInspectorWidth < LAYOUT_LIMITS.rightInspectorWidth.min || next.rightInspectorWidth > LAYOUT_LIMITS.rightInspectorWidth.max || !isRightInspectorTab(next.activeInspectorTab)) throw new Error('Inspector 布局或栏宽无效');
     if (next.splitRatio !== undefined && (typeof next.splitRatio !== 'number' || !Number.isFinite(next.splitRatio) || next.splitRatio < LAYOUT_LIMITS.splitRatio.min || next.splitRatio > LAYOUT_LIMITS.splitRatio.max)) throw new Error('分屏比例无效');
+    if (next.inspectorFloating !== undefined && typeof next.inspectorFloating !== 'boolean') throw new Error('检视器悬浮状态无效');
+    if (next.composerMinHeight !== undefined) {
+      if (typeof next.composerMinHeight !== 'number' || !Number.isFinite(next.composerMinHeight) || next.composerMinHeight < LAYOUT_LIMITS.composerMinHeight.min || next.composerMinHeight > LAYOUT_LIMITS.composerMinHeight.max) throw new Error('输入框高度无效');
+      next.composerMinHeight = Math.round(next.composerMinHeight);
+    }
     this.layout = next; this.store.write('layout.json', next); return structuredClone(next);
   }
   async renameSession(sessionId: string, newTitle: string) { const session = this.titles.rename(this.sessions.get(sessionId), newTitle); this.sessions.updateSessionRecord(session); this.emit('session-updated', session); return session; }
@@ -1266,11 +1366,54 @@ export class CoreService extends EventEmitter {
       this.organizingTitles = false;
     }
   }
+  private loadStoredReviewerApiKey(): string | undefined {
+    const cipher = this.options.secretCipher;
+    if (!cipher?.isAvailable()) return undefined;
+    const blob = this.store.readEncryptedBlob(REVIEWER_SECRET_FILE);
+    if (!blob || blob.length === 0) return undefined;
+    try {
+      const plain = cipher.decrypt(blob).trim();
+      return plain || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  private persistApprovalConfig(config: ApproveForMeConfig): void {
+    // approval-config.json 永不存明文密钥；系统支持 safeStorage 时将密文单独存入 reviewer-secret.enc，更新重启自动恢复。
+    const persisted = structuredClone(config);
+    delete persisted.externalReviewer.apiKey;
+    this.store.write('approval-config.json', persisted);
+    const cipher = this.options.secretCipher;
+    if (!cipher?.isAvailable()) return;
+    try {
+      const apiKey = config.externalReviewer.apiKey;
+      if (typeof apiKey === 'string' && apiKey.trim()) {
+        this.store.writeEncryptedBlob(REVIEWER_SECRET_FILE, cipher.encrypt(apiKey.trim()));
+      } else if (apiKey === '') {
+        this.store.deleteEncryptedBlob(REVIEWER_SECRET_FILE);
+      }
+    } catch {
+      /* 系统密钥库不可用时不阻塞配置保存 */
+    }
+  }
   async setApprovalMode(mode: ApprovalMode) { return this.updateApprovalConfig({ mode }); }
   async updateApprovalConfig(patch: Partial<ApproveForMeConfig>) {
-    // 外部复审配置分为内存和磁盘两份。持久化副本在写入前剔除密钥，当前进程仍可使用已配置的复审服务。
-    const config = this.approval.updateConfig(patch); const persisted = structuredClone(config); delete persisted.externalReviewer.apiKey;
-    this.store.write('approval-config.json', persisted); return config;
+    const current = this.approval.getConfig();
+    const mergedPatch: Partial<ApproveForMeConfig> = patch.externalReviewer
+      ? {
+          ...patch,
+          externalReviewer: {
+            ...patch.externalReviewer,
+            // 修改其他字段时若未覆盖 apiKey，保留已恢复的系统加密密钥
+            ...(patch.externalReviewer.apiKey === undefined && current.externalReviewer.apiKey !== undefined
+              ? { apiKey: current.externalReviewer.apiKey }
+              : {}),
+          },
+        }
+      : patch;
+    const config = this.approval.updateConfig(mergedPatch);
+    this.persistApprovalConfig(config);
+    return config;
   }
   async submitApprovalDecision(submission: ApprovalDecisionSubmission): Promise<void> { await this.approval.submitDecision(submission); }
   async listApprovalAudit(limit?: number) { return this.approval.listAudit(limit); }

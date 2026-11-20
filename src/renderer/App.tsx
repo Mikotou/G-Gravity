@@ -271,6 +271,20 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         document.documentElement.dataset.windowChrome = boot.windowChrome || 'standard';
         const initScale = clampUiScale(boot.preferences.uiScale);
         document.documentElement.style.setProperty('--win-controls-w', `${Math.round(138 / initScale)}px`);
+        // 将主进程持久化偏好镜像回 localStorage，避免便携版每次更新解包到新临时路径时丢失界面习惯。
+        try {
+          if (boot.preferences.thoughtExpandedByDefault !== undefined) {
+            window.localStorage.setItem('gravity.thoughts.expanded', boot.preferences.thoughtExpandedByDefault ? 'true' : 'false');
+          }
+          if (boot.layout.inspectorFloating !== undefined) {
+            window.localStorage.setItem('gravity.inspector.floating', boot.layout.inspectorFloating ? 'true' : 'false');
+          }
+          if (boot.layout.composerMinHeight !== undefined) {
+            window.localStorage.setItem('gravity.composer.minHeight', String(Math.round(boot.layout.composerMinHeight)));
+          }
+        } catch {
+          /* ignore storage unavailable */
+        }
 
         // 恢复上次打开的标签前，先与本次取得的会话列表取交集。
         // 单个关闭会话恢复失败时保留摘要，继续处理其他标签。
@@ -1125,6 +1139,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           profileId={preferences.activeProfileId}
           collapsed={layout.rightInspectorCollapsed}
           width={layout.rightInspectorWidth}
+          floating={layout.inspectorFloating}
           activeTab={layout.activeInspectorTab}
           focusedDiffFile={focusedDiffFile}
           sessionId={stageSessionId}
@@ -1135,6 +1150,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           onSelectTab={(tab) => void patchLayout({ activeInspectorTab: tab })}
           onFocusDiffFile={(fp) => setFocusedDiffFile(fp)}
           onCommitWidth={(w) => void patchLayout({ rightInspectorWidth: w })}
+          onToggleFloating={(v) => void patchLayout({ inspectorFloating: v })}
           onCollapse={() => void patchLayout({ rightInspectorCollapsed: true })}
           onLaunchSwarmTask={handleLaunchSwarmTask}
           onOpenRateCardsSettings={() => setSettingsSection('rates')}

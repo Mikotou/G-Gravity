@@ -373,6 +373,40 @@ export function validateCustomThemeConfig(input: unknown): CustomThemeConfig {
 }
 
 /**
+ * 启动期迁移/恢复专用：尽量保留用户已保存的每个合法自定义色键，仅对个别损坏或过时色值回退基础预设，
+ * 绝不因单个字段异常而清空整套自定义配色。
+ */
+export function sanitizeCustomThemeConfig(input: unknown): CustomThemeConfig | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const obj = input as Record<string, unknown>;
+  const polarity: ThemePolarity = obj.polarity === 'light' ? 'light' : 'dark';
+  const baseIdRaw = typeof obj.baseThemeId === 'string' ? obj.baseThemeId : '';
+  const fallbackPreset =
+    THEME_PRESETS.find((p) => p.id === baseIdRaw) ??
+    (polarity === 'light' ? THEME_PRESETS[1] : THEME_PRESETS[0]);
+  const rawTokens =
+    obj.tokens && typeof obj.tokens === 'object'
+      ? (obj.tokens as Record<string, unknown>)
+      : {};
+  const tokens = { ...fallbackPreset.tokens };
+  for (const key of THEME_TOKEN_KEYS) {
+    if (isValidCssColorToken(rawTokens[key])) {
+      tokens[key] = rawTokens[key].trim();
+    }
+  }
+  const name =
+    typeof obj.name === 'string' && obj.name.trim()
+      ? obj.name.trim().slice(0, 40)
+      : 'Custom Gravity Theme';
+  return {
+    name,
+    polarity,
+    baseThemeId: fallbackPreset.id,
+    tokens,
+  };
+}
+
+/**
  * 原创 Gravity 应用图标变体定义（100% 原创引力轨道 + `>_` 终端徽标，提供 SVG + PNG + .ico）
  */
 export type GravityIconId =
@@ -598,6 +632,8 @@ export interface ClientPreferences {
   uiScale?: number;
   /** 启动时自动从 GitHub Releases 检查更新（默认 true） */
   autoCheckUpdates?: boolean;
+  /** 思考块默认展开或折叠（持久化至 preferences.json，跨便携版更新不丢失） */
+  thoughtExpandedByDefault?: boolean;
 }
 
 /** 界面缩放的允许区间与步进。快捷键 Ctrl+= / Ctrl+- / Ctrl+0 与设置页共用。 */

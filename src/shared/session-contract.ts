@@ -402,6 +402,10 @@ export interface WorkspaceLayoutState {
   activeInspectorTab: RightInspectorTab;
   /** 左右分屏时左侧窗格所占比例（0.25–0.75，拖动分隔条调整，缺省 0.5） */
   splitRatio?: number;
+  /** 右侧检视器是否以悬浮模式展开（持久化至 layout.json，跨便携版更新保留） */
+  inspectorFloating?: boolean;
+  /** 输入框自定义最小高度像素值（46–520，持久化至 layout.json，跨便携版更新保留） */
+  composerMinHeight?: number;
 }
 
 /** 可拖拽栏宽与分屏比例的统一边界。主进程按此校验，渲染层在更窄的区间内钳制。 */
@@ -409,6 +413,7 @@ export const LAYOUT_LIMITS = {
   leftSidebarWidth: { min: 160, max: 600 },
   rightInspectorWidth: { min: 240, max: 1000 },
   splitRatio: { min: 0.25, max: 0.75 },
+  composerMinHeight: { min: 46, max: 520 },
 } as const;
 
 /** 把分屏比例钳制到允许区间。非数字回到对半分。 */

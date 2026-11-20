@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { DualTrackThoughtBlock, ThoughtDisplayTrack } from '@shared';
 import { useFluidStreamText } from '../hooks/useFluidStreamText';
 import { useI18n } from '../i18n/I18nContext';
+import { getDesktopBridge, isUsingNativeDesktopBridge } from '../services/desktop-bridge';
 import { Markdown } from './Markdown';
 
 const expansionKey = 'gravity.thoughts.expanded';
@@ -13,6 +14,9 @@ function readExpanded(): boolean {
 function rememberCollapsedDefault(): void {
   fallbackExpanded = false;
   try { window.localStorage.setItem(expansionKey, 'false'); } catch { /* Keep the preference for this window. */ }
+  if (isUsingNativeDesktopBridge()) {
+    void getDesktopBridge().updatePreferences({ thoughtExpandedByDefault: false }).catch(() => {});
+  }
 }
 
 export interface ThinkingBlockProps {

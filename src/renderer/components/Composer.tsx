@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { useI18n } from '../i18n/I18nContext';
 import { formatActionError } from '../i18n/locales';
+import { getDesktopBridge, isUsingNativeDesktopBridge } from '../services/desktop-bridge';
 import { MessageImage } from './MessageImage';
 import { ContextStatusBar } from './ContextStatusBar';
 import { AccountQuotaFooter } from './AccountQuotaView';
@@ -103,7 +104,11 @@ function readComposerMinHeight(): number {
   }
 }
 function saveComposerMinHeight(v: number): void {
-  try { window.localStorage.setItem(COMPOSER_MIN_HEIGHT_KEY, String(Math.round(v))); } catch { /* 本次窗口内保持即可 */ }
+  const rounded = Math.round(v);
+  try { window.localStorage.setItem(COMPOSER_MIN_HEIGHT_KEY, String(rounded)); } catch { /* 本次窗口内保持即可 */ }
+  if (isUsingNativeDesktopBridge()) {
+    void getDesktopBridge().saveWorkspaceLayout({ composerMinHeight: rounded }).catch(() => {});
+  }
 }
 
 const TEXT_FILE_EXT_RE =

@@ -776,7 +776,7 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
     approvalModeLabel: '审批模式',
     approvalModeDesc: '也可以在输入框左下角随时切换',
     reviewerComplianceBanner:
-      '外部复核只使用你单独填写的公开 API Key 或本机 127.0.0.1 模型，绝不调用 agy 订阅会话；超时或出错一律转人工确认。API Key 只保存在内存中。',
+      '外部复核只使用你单独填写的公开 API Key 或本机 127.0.0.1 模型，绝不调用 agy 订阅会话；超时或出错一律转人工确认。API Key 使用操作系统级加密（DPAPI / 钥匙串）独立存储，明文不落盘，版本更新自动保留。',
     reviewerEnableToggle: '启用外部模型复核',
     reviewerEnableDesc: '仅在 AI 代审模式下，对本地规则无法判定的命令生效',
     reviewerProviderLabel: '服务商',
@@ -1225,7 +1225,7 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
     approvalModeLabel: 'Approval mode',
     approvalModeDesc: 'Also switchable from the composer at any time',
     reviewerComplianceBanner:
-      'External review only uses your separate public API key or a 127.0.0.1 model — never an agy subscription session. Timeouts and errors fall back to you. The key is kept in memory only.',
+      'External review only uses your separate public API key or a 127.0.0.1 model — never an agy subscription session. Timeouts and errors fall back to you. The API key is stored with OS-level encryption (DPAPI / Keychain), never plaintext JSON, and persists across updates.',
     reviewerEnableToggle: 'Enable external review',
     reviewerEnableDesc: 'Only in AI review mode, for commands local rules cannot decide',
     reviewerProviderLabel: 'Provider',

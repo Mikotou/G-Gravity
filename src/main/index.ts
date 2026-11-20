@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, safeStorage, screen, shell } from 'electron';
 import { accessSync, constants, existsSync, promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
@@ -282,6 +282,13 @@ async function createWindow(): Promise<void> {
     acpOptions: { binaryPath: process.env.AGY_BINARY_PATH, loginLauncher: launchLogin },
     appVersion: app.getVersion(),
     enableAutoUpdateCheck: app.isPackaged,
+    secretCipher: {
+      isAvailable: () => {
+        try { return safeStorage.isEncryptionAvailable(); } catch { return false; }
+      },
+      encrypt: (plaintext: string) => safeStorage.encryptString(plaintext),
+      decrypt: (ciphertext: Buffer) => safeStorage.decryptString(ciphertext),
+    },
     updaterOptions: {
       canInstallDirectly: canInstallUpdateDirectly(),
       installHandler: installDownloadedUpdate,
@@ -328,12 +335,48 @@ async function createWindow(): Promise<void> {
   });
   const preferences = service.getPreferences();
   const initialAppearance = resolveWindowAppearance(preferences);
-  // 首次窗口尺寸按主显示器可用区域取比例，在 2K/4K 屏上不会显得过小，在小屏上也不会超出屏幕。
-  const work = screen.getPrimaryDisplay().workAreaSize;
-  const width = Math.max(960, Math.min(1760, Math.round(work.width * 0.86)));
-  const height = Math.max(640, Math.min(1120, Math.round(work.height * 0.88)));
+  // 优先恢复上次保存的窗口位置、尺寸与最大化状态；若显示器配置变更导致越界，则安全回退到主屏工作区。
+  const primaryWork = screen.getPrimaryDisplay().workArea;
+  const fallbackWidth = Math.max(960, Math.min(1760, Math.round(primaryWork.width * 0.86)));
+  const fallbackHeight = Math.max(640, Math.min(1120, Math.round(primaryWork.height * 0.88)));
+  interface SavedWindowState {
+    bounds?: { x?: number; y?: number; width?: number; height?: number };
+    maximized?: boolean;
+  }
+  const savedWindowState = service.store.read<SavedWindowState>('window-state.json', {});
+  let winWidth = fallbackWidth;
+  let winHeight = fallbackHeight;
+  let winX: number | undefined;
+  let winY: number | undefined;
+  const sb = savedWindowState?.bounds;
+  if (
+    sb &&
+    typeof sb.width === 'number' && Number.isFinite(sb.width) &&
+    typeof sb.height === 'number' && Number.isFinite(sb.height)
+  ) {
+    const displays = screen.getAllDisplays();
+    const hasCoords = typeof sb.x === 'number' && Number.isFinite(sb.x) && typeof sb.y === 'number' && Number.isFinite(sb.y);
+    const matchingDisplay = hasCoords
+      ? displays.find((d) => {
+          const wa = d.workArea;
+          const overlapX = Math.min(sb.x! + sb.width!, wa.x + wa.width) - Math.max(sb.x!, wa.x);
+          const overlapY = Math.min(sb.y! + sb.height!, wa.y + wa.height) - Math.max(sb.y!, wa.y);
+          return overlapX >= 120 && overlapY >= 80;
+        })
+      : undefined;
+    const targetWork = matchingDisplay?.workArea ?? primaryWork;
+    winWidth = Math.max(960, Math.min(targetWork.width, Math.round(sb.width)));
+    winHeight = Math.max(640, Math.min(targetWork.height, Math.round(sb.height)));
+    if (matchingDisplay && hasCoords) {
+      winX = Math.round(Math.min(targetWork.x + targetWork.width - 120, Math.max(targetWork.x, sb.x!)));
+      winY = Math.round(Math.min(targetWork.y + targetWork.height - 80, Math.max(targetWork.y, sb.y!)));
+    }
+  }
   window = new BrowserWindow({
-    width, height, minWidth: 960, minHeight: 640, title: 'Gravity', backgroundColor: initialAppearance.backgroundColor, icon: iconPath(preferences.appIcon),
+    width: winWidth,
+    height: winHeight,
+    ...(winX !== undefined && winY !== undefined ? { x: winX, y: winY } : {}),
+    minWidth: 960, minHeight: 640, title: 'Gravity', backgroundColor: initialAppearance.backgroundColor, icon: iconPath(preferences.appIcon),
     ...(process.platform === 'win32'
       ? {
           titleBarStyle: 'hidden' as const,
@@ -350,6 +393,33 @@ async function createWindow(): Promise<void> {
           }
         : {}),
     webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
+  });
+  if (savedWindowState?.maximized) {
+    window.maximize();
+  }
+  let windowStateTimer: NodeJS.Timeout | undefined;
+  const saveWindowStateNow = () => {
+    if (!window || window.isDestroyed() || !service) return;
+    try {
+      const maximized = window.isMaximized();
+      const bounds = maximized ? window.getNormalBounds() : window.getBounds();
+      service.store.write('window-state.json', { bounds, maximized });
+    } catch {
+      /* 忽略窗口关闭瞬间的状态保存错误 */
+    }
+  };
+  const scheduleSaveWindowState = () => {
+    if (windowStateTimer) clearTimeout(windowStateTimer);
+    windowStateTimer = setTimeout(() => { windowStateTimer = undefined; saveWindowStateNow(); }, 250);
+    windowStateTimer.unref();
+  };
+  window.on('resize', scheduleSaveWindowState);
+  window.on('move', scheduleSaveWindowState);
+  window.on('maximize', scheduleSaveWindowState);
+  window.on('unmaximize', scheduleSaveWindowState);
+  window.on('close', () => {
+    if (windowStateTimer) { clearTimeout(windowStateTimer); windowStateTimer = undefined; }
+    saveWindowStateNow();
   });
   const onNativeThemeUpdated = () => { if (service) syncWindowChrome(service.getPreferences()); };
   nativeTheme.on('updated', onNativeThemeUpdated);

@@ -508,7 +508,7 @@ export function ApprovalsPanel({
             </div>
             <div className="muted">
               • <strong>第一层（默认内置、0ms、零额度消耗）</strong>：本地多段 AST 语义引擎 + 密集命令批量守卫，自动放行只读文件/代码检索、多级管道筛选（如 <code>Get-ChildItem | Select-String</code>）及会话托管下的低风险构建测试命令。<br />
-              • <strong>第二层（可选开启）</strong>：对接本机 <code>127.0.0.1:11434</code> Ollama 或自备公开 API Key 模型复核灰区命令（绝不调用隐藏订阅会话，API Key 仅驻留内存不落盘）。
+              • <strong>第二层（可选开启）</strong>：对接本机 <code>127.0.0.1:11434</code> Ollama 或自备公开 API Key 模型复核灰区命令（绝不调用隐藏订阅会话；API Key 通过系统级加密存储——Windows DPAPI / macOS 钥匙串——保存密文，配置文件永不留明文，版本更新与重启自动保留）。
             </div>
           </div>
           <div className="settings-group">
@@ -595,7 +595,9 @@ export function ApprovalsPanel({
                         ? <span style={{ color: 'var(--status-danger)' }}>{discoverError}</span>
                         : discoveredModels.length > 0
                           ? <span style={{ color: 'var(--status-success)' }}>{dict.reviewerDiscoveredCount(discoveredModels.length)}</span>
-                          : dict.reviewerDiscoverPromptHint}
+                          : reviewer.apiKey?.trim()
+                            ? <span style={{ color: 'var(--status-success)' }}>已系统加密保存，更新与重启自动保留</span>
+                            : dict.reviewerDiscoverPromptHint}
                   </span>
                 </span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

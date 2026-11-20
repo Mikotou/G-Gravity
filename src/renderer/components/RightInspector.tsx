@@ -34,6 +34,7 @@ import { terminalCommand } from '../../shared/session-contract';
 export interface RightInspectorProps {
   collapsed: boolean;
   width: number;
+  floating?: boolean;
   activeTab: RightInspectorTab;
   focusedDiffFile: string | null;
   sessionId: string | null;
@@ -45,6 +46,7 @@ export interface RightInspectorProps {
   onSelectTab: (tab: RightInspectorTab) => void;
   onFocusDiffFile: (filePath: string) => void;
   onCommitWidth: (width: number) => void;
+  onToggleFloating?: (floating: boolean) => void;
   onCollapse?: () => void;
   onLaunchSwarmTask?: (sessionId: string, taskBrief: string) => Promise<void>;
   onOpenRateCardsSettings: () => void;
@@ -85,6 +87,7 @@ function maxInspectorWidth(): number {
 export function RightInspector({
   collapsed,
   width,
+  floating: floatingProp,
   activeTab,
   focusedDiffFile,
   sessionId,
@@ -96,6 +99,7 @@ export function RightInspector({
   onSelectTab,
   onFocusDiffFile,
   onCommitWidth,
+  onToggleFloating,
   onCollapse,
   onLaunchSwarmTask,
   onOpenRateCardsSettings,
@@ -103,16 +107,26 @@ export function RightInspector({
   const { dict } = useI18n();
   const ui = dict.ui;
   const [liveWidth, setLiveWidth] = useState<number>(width || DEFAULT_WIDTH);
-  const [floating, setFloating] = useState<boolean>(readInspectorFloating);
+  const [floating, setFloating] = useState<boolean>(() =>
+    floatingProp !== undefined ? floatingProp : readInspectorFloating()
+  );
 
   useEffect(() => {
     if (width) setLiveWidth(width);
   }, [width]);
 
+  useEffect(() => {
+    if (floatingProp !== undefined) {
+      setFloating(floatingProp);
+      saveInspectorFloating(floatingProp);
+    }
+  }, [floatingProp]);
+
   function toggleFloating(): void {
     setFloating((prev) => {
       const next = !prev;
       saveInspectorFloating(next);
+      onToggleFloating?.(next);
       return next;
     });
   }
