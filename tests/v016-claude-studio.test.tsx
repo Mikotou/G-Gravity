@@ -64,9 +64,9 @@ describe('v0.1.6 Claude Code Studio 前端架构', () => {
     expect(inspector.getAttribute('data-inspector-mode')).toBe('docked');
     expect(inspector.className).not.toContain('is-floating');
 
-    // 验证 tablist 内部仅有 5 个一级页签，操作按钮位于独立的 inspector-head-actions 中
+    // 验证 tablist 内部仅有 6 个一级页签（含 v0.2.3 新增的分支树页签），操作按钮位于独立的 inspector-head-actions 中
     const head = inspector.querySelector('.inspector-head') as HTMLElement;
-    expect(within(head).getAllByRole('tab')).toHaveLength(5);
+    expect(within(head).getAllByRole('tab')).toHaveLength(6);
     expect(within(head).queryAllByRole('button')).toHaveLength(0);
 
     const floatBtn = screen.getByTestId('inspector-float-toggle');

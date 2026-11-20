@@ -36,6 +36,8 @@ export function registerIpcRouter(ipcMain: IpcMain, service: CoreService, truste
     [IPC_CHANNELS.SESSION_GET_INSPECTOR]: id => service.getSessionInspector(id),
     [IPC_CHANNELS.SESSION_LIST_WORKSPACE_FILES]: (cwd, query) => service.listWorkspaceFiles(cwd, query),
     [IPC_CHANNELS.SESSION_REVISE_MESSAGE]: input => service.reviseMessage(input),
+    [IPC_CHANNELS.SESSION_GET_TREE]: id => service.getConversationTree(id),
+    [IPC_CHANNELS.SESSION_SWITCH_BRANCH]: input => service.switchConversationBranch(input),
     [IPC_CHANNELS.SESSION_SEND_PROMPT]: input => service.sendPrompt(input),
     [IPC_CHANNELS.SESSION_CANCEL_PROMPT]: id => service.cancelPrompt(id),
     [IPC_CHANNELS.SESSION_COMPACT_CONTEXT]: id => service.compactSessionContext(id),
@@ -71,7 +73,7 @@ export function registerIpcRouter(ipcMain: IpcMain, service: CoreService, truste
     });
   }
   // 请求由页面发起，服务事件沿相反方向推送。保存每个监听器的引用，便于成对注销。
-  const events: Record<string, string> = { 'session-updated': IPC_CHANNELS.EVENT_SESSION_UPDATED, 'message-upserted': IPC_CHANNELS.EVENT_MESSAGE_UPSERTED, 'inspector-updated': IPC_CHANNELS.EVENT_INSPECTOR_UPDATED, 'history-updated': IPC_CHANNELS.EVENT_HISTORY_UPDATED, 'account-updated': IPC_CHANNELS.EVENT_ACCOUNT_UPDATED, 'approval-requested': IPC_CHANNELS.EVENT_APPROVAL_REQUESTED, 'approval-resolved': IPC_CHANNELS.EVENT_APPROVAL_RESOLVED, 'telemetry-updated': IPC_CHANNELS.EVENT_TELEMETRY_UPDATED, 'swarm-updated': IPC_CHANNELS.EVENT_SWARM_UPDATED, 'update-state': IPC_CHANNELS.EVENT_UPDATE_STATE };
+  const events: Record<string, string> = { 'session-updated': IPC_CHANNELS.EVENT_SESSION_UPDATED, 'message-upserted': IPC_CHANNELS.EVENT_MESSAGE_UPSERTED, 'inspector-updated': IPC_CHANNELS.EVENT_INSPECTOR_UPDATED, 'history-updated': IPC_CHANNELS.EVENT_HISTORY_UPDATED, 'account-updated': IPC_CHANNELS.EVENT_ACCOUNT_UPDATED, 'approval-requested': IPC_CHANNELS.EVENT_APPROVAL_REQUESTED, 'approval-resolved': IPC_CHANNELS.EVENT_APPROVAL_RESOLVED, 'telemetry-updated': IPC_CHANNELS.EVENT_TELEMETRY_UPDATED, 'swarm-updated': IPC_CHANNELS.EVENT_SWARM_UPDATED, 'update-state': IPC_CHANNELS.EVENT_UPDATE_STATE, 'tree-updated': IPC_CHANNELS.EVENT_TREE_UPDATED };
   const listeners = Object.entries(events).map(([event, channel]) => {
     const listener = (payload: unknown) => { if (!trustedContents.isDestroyed()) trustedContents.send(channel, payload); };
     service.on(event, listener); return { event, listener };

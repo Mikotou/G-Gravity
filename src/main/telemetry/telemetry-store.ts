@@ -1318,6 +1318,11 @@ export class TelemetryStore extends EventEmitter {
     };
   }
 
+  getSessionTelemetry(sessionId: string): SessionContextTelemetry | undefined {
+    const state = this.states.get(sessionId);
+    return state ? structuredClone(state) : undefined;
+  }
+
   flush(): void {
     // 小时账本按 UTC 小时键裁剪至近 30 天。会话详情和已报告的窗口数据另存，供下次恢复会话时使用。
     const cutoff = new Date(this.now() - 30 * 86400000).toISOString().slice(0, 13);

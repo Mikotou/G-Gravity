@@ -20,7 +20,9 @@ import {
   isSafePluginTarget,
   MAX_PARALLEL_ACTIVE_SESSIONS,
   normalizeWorkspacePath,
+  resolveModelCompactionLimit,
   resolveModelRateCard,
+  summarizeBranchSnippet,
   THEME_PRESETS,
   validateCustomThemeConfig,
   type AccountsStateSnapshot,
@@ -38,6 +40,9 @@ import {
   type ConfiguredMcpServerItem,
   type ContextCompactionRecord,
   type ContinueHistoryInGravityInput,
+  type ConversationBranchRecord,
+  type ConversationTreeNode,
+  type ConversationTreeState,
   type CreateAccountProfileInput,
   type CreateSessionInput,
   type DailyCalendarHeatmapCell,
@@ -65,7 +70,10 @@ import {
   type SendPromptInput,
   type SessionContextTelemetry,
   type SessionInspectorData,
+  type StoredConversationTree,
   type SwarmTopologyState,
+  type SwitchConversationBranchInput,
+  type SwitchConversationBranchResult,
   type TelemetryDashboardSnapshot,
   type TitleOrganizeRequest,
   type TitleOrganizeResult,
@@ -151,6 +159,9 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
   const historyEvents = createEventChannel<ImportedHistorySessionRecord[]>();
   const accountEvents = createEventChannel<AccountsStateSnapshot>();
   const updateEvents = createEventChannel<AppUpdateState>();
+  const treeEvents = createEventChannel<ConversationTreeState>();
+  const treesByRoot = new Map<string, StoredConversationTree>();
+  const branchToRoot = new Map<string, string>();
 
   let updateState: AppUpdateState = {
     status: 'idle',
@@ -1208,7 +1219,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
   function getVisibleSessions(includeHiddenPollution = false): ManagedSessionSummary[] {
     return sessions
       .filter((s) => s.profileId === accounts.activeProfileId && (includeHiddenPollution || !s.isLegacyApprovalPollution))
-      .map((s) => ({ ...s }));
+      .map((s) => applyFallbackTreeMetadata(s));
   }
 
   const organizeTimestamps: number[] = [];
@@ -1271,6 +1282,150 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     messageEvents.emit({ sessionId: targetSession.sessionId, message: structuredClone(msg) });
     approvalReqEvents.emit({ ...newReq });
     return newReq;
+  }
+
+  function resolveFallbackRootId(sessionId: string): string {
+    return branchToRoot.get(sessionId) || sessionId;
+  }
+
+  function listFallbackBranchIds(sessionId: string): string[] {
+    const rootId = resolveFallbackRootId(sessionId);
+    const tree = treesByRoot.get(rootId);
+    return tree ? Object.keys(tree.branches) : [sessionId];
+  }
+
+  function applyFallbackTreeMetadata(session: ManagedSessionSummary): ManagedSessionSummary {
+    const rootId = branchToRoot.get(session.sessionId);
+    if (!rootId) return { ...session };
+    const tree = treesByRoot.get(rootId);
+    if (!tree) return { ...session };
+    const node = tree.branches[session.sessionId];
+    const branchCount = Object.keys(tree.branches).length;
+    if (!node || branchCount <= 1) return { ...session };
+    const rootSession = sessions.find((s) => s.sessionId === rootId);
+    return {
+      ...session,
+      title: rootSession?.title || session.title,
+      rootSessionId: rootId,
+      parentBranchId: node.parentBranchId,
+      forkAfterMessageId: node.forkAfterMessageId,
+      branchCount,
+      activeBranchId: tree.activeBranchId,
+    };
+  }
+
+  function buildFallbackTreeState(sessionId: string): ConversationTreeState {
+    const rootId = resolveFallbackRootId(sessionId);
+    const stored = treesByRoot.get(rootId);
+    const rootSession = sessions.find((s) => s.sessionId === rootId);
+    const rootTitle = rootSession?.title || '新建对话';
+    const teleSnap = buildTelemetrySnapshot();
+    const records: Record<string, ConversationBranchRecord> = stored
+      ? structuredClone(stored.branches)
+      : {
+          [rootId]: {
+            branchId: rootId,
+            parentBranchId: null,
+            forkAfterMessageId: null,
+            forkUserTurnIndex: -1,
+            forkPromptPreview: summarizeBranchSnippet((messagesBySession[rootId] || []).find((m) => m.role === 'user')?.content, 72),
+            createdAt: rootSession?.updatedAt || new Date().toISOString(),
+            updatedAt: rootSession?.updatedAt || new Date().toISOString(),
+          },
+        };
+    const activeBranchId = stored?.activeBranchId && records[stored.activeBranchId] ? stored.activeBranchId : rootId;
+    const childrenMap = new Map<string, string[]>();
+    for (const id of Object.keys(records)) childrenMap.set(id, []);
+    for (const rec of Object.values(records)) {
+      if (rec.parentBranchId && childrenMap.has(rec.parentBranchId)) {
+        childrenMap.get(rec.parentBranchId)!.push(rec.branchId);
+      }
+    }
+    const activePath = new Set<string>();
+    let cur: string | null | undefined = activeBranchId;
+    while (cur && !activePath.has(cur)) {
+      activePath.add(cur);
+      cur = records[cur]?.parentBranchId ?? null;
+    }
+    const forkGroupMap = new Map<string, string[]>();
+    for (const rec of Object.values(records)) {
+      if (!rec.parentBranchId) continue;
+      const key = `${rec.parentBranchId}\x00${rec.forkAfterMessageId ?? 'ROOT'}\x00${rec.forkUserTurnIndex}`;
+      const list = forkGroupMap.get(key) || [];
+      list.push(rec.branchId);
+      forkGroupMap.set(key, list);
+    }
+    const depthOf = (id: string): number => {
+      let d = 0;
+      const seen = new Set<string>([id]);
+      let p = records[id]?.parentBranchId ?? null;
+      while (p && !seen.has(p)) { seen.add(p); d++; p = records[p]?.parentBranchId ?? null; }
+      return d;
+    };
+    const nodesById: Record<string, ConversationTreeNode> = {};
+    for (const rec of Object.values(records)) {
+      const sess = sessions.find((s) => s.sessionId === rec.branchId);
+      const msgs = messagesBySession[rec.branchId] || [];
+      const tele = teleSnap.activeSessions[rec.branchId];
+      const nonSys = msgs.filter((m) => m.role !== 'system');
+      const users = nonSys.filter((m) => m.role === 'user');
+      const assistants = nonSys.filter((m) => m.role === 'assistant');
+      const own = nonSys.filter((m) => !m.revisionHistory);
+      let siblingIndex = 1;
+      let siblingCount = 1;
+      if (rec.parentBranchId) {
+        const key = `${rec.parentBranchId}\x00${rec.forkAfterMessageId ?? 'ROOT'}\x00${rec.forkUserTurnIndex}`;
+        const siblings = forkGroupMap.get(key) || [rec.branchId];
+        siblingCount = siblings.length + 1;
+        siblingIndex = Math.max(0, siblings.indexOf(rec.branchId)) + 2;
+      } else {
+        const rootTurn0 = forkGroupMap.get(`${rootId}\x00ROOT\x000`) || [];
+        siblingCount = rootTurn0.length + 1;
+      }
+      const modelId = tele?.modelId || sess?.modelId || '';
+      const maxContextTokens = tele?.maxContextTokens || resolveModelCompactionLimit(modelId);
+      const usedContextTokens = tele?.usedContextTokens || 0;
+      nodesById[rec.branchId] = {
+        ...rec,
+        forkPromptPreview: rec.forkPromptPreview || summarizeBranchSnippet(own.find((m) => m.role === 'user')?.content || users[0]?.content, 72),
+        rootSessionId: rootId,
+        childrenIds: childrenMap.get(rec.branchId) || [],
+        depth: depthOf(rec.branchId),
+        siblingIndex,
+        siblingCount,
+        isActiveBranch: rec.branchId === activeBranchId,
+        isOnActivePath: activePath.has(rec.branchId),
+        userTurnCount: users.length,
+        ownMessageCount: own.length,
+        latestUserPreview: summarizeBranchSnippet(users.at(-1)?.content, 72),
+        latestAssistantPreview: summarizeBranchSnippet([...assistants].reverse().find((m) => m.content?.trim())?.content, 84),
+        status: sess?.status || 'closed',
+        modelId,
+        usedContextTokens,
+        maxContextTokens,
+        usageRatio: tele?.usageRatio ?? Math.min(1, usedContextTokens / Math.max(1, maxContextTokens)),
+        totalCostUsd: tele?.costSummary?.totalCostUsd || 0,
+      };
+    }
+    const ordered: ConversationTreeNode[] = [];
+    const visited = new Set<string>();
+    const visit = (id: string): void => {
+      if (visited.has(id) || !nodesById[id]) return;
+      visited.add(id);
+      ordered.push(nodesById[id]);
+      for (const cid of nodesById[id].childrenIds) visit(cid);
+    };
+    visit(rootId);
+    for (const id of Object.keys(nodesById)) visit(id);
+    return {
+      rootSessionId: rootId,
+      rootTitle,
+      activeBranchId,
+      totalBranches: ordered.length,
+      nodes: ordered,
+      nodesById,
+      updatedAt: stored?.updatedAt || new Date().toISOString(),
+    };
   }
 
   return {
@@ -1481,16 +1636,39 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     },
 
     async manageSession(id, action) {
-      const index = sessions.findIndex(s => s.sessionId === id && s.profileId === accounts.activeProfileId);
-      if (index < 0) throw new Error('会话不存在');
-      const target = sessions[index];
-      if (target.status === 'streaming' || target.status === 'waiting_approval') throw new Error('请等回合结束');
-      if (action !== 'restore') { layout = withoutSession(layout, id); target.status = 'closed'; }
+      const rootId = resolveFallbackRootId(id);
+      const branchIds = [...new Set([id, ...listFallbackBranchIds(rootId)])];
+      const targets = branchIds
+        .map((bid) => sessions.find((s) => s.sessionId === bid && s.profileId === accounts.activeProfileId))
+        .filter((s): s is ManagedSessionSummary => Boolean(s));
+      if (!targets.length) throw new Error('会话不存在');
+      if (targets.some((t) => t.status === 'streaming' || t.status === 'waiting_approval')) throw new Error('请等回合结束');
+      if (action !== 'restore') {
+        for (const t of targets) {
+          layout = withoutSession(layout, t.sessionId);
+          t.status = 'closed';
+        }
+      }
       if (action === 'delete') {
-        sessions.splice(index, 1);
-        delete messagesBySession[id]; delete inspectorBySession[id]; delete swarmBySession[id];
-      } else { target.archivedAt = action === 'archive' ? new Date().toISOString() : undefined; }
-      return { sessions: structuredClone(sessions.filter(s => s.profileId === accounts.activeProfileId)), layout: structuredClone(layout) };
+        treesByRoot.delete(rootId);
+        for (const bid of branchIds) {
+          branchToRoot.delete(bid);
+          const idx = sessions.findIndex((s) => s.sessionId === bid);
+          if (idx >= 0) sessions.splice(idx, 1);
+          delete messagesBySession[bid];
+          delete inspectorBySession[bid];
+          delete swarmBySession[bid];
+        }
+      } else {
+        const stamp = new Date().toISOString();
+        for (const t of targets) {
+          t.archivedAt = action === 'archive' ? t.archivedAt || stamp : undefined;
+        }
+      }
+      return {
+        sessions: structuredClone(sessions.filter((s) => s.profileId === accounts.activeProfileId).map(applyFallbackTreeMetadata)),
+        layout: structuredClone(layout),
+      };
     },
     async answerQuestion() { throw new Error('这条提问已结束'); },
     async getAccountQuota() { throw new Error('请在 Gravity 桌面端查看官方账户额度。'); },
@@ -1564,14 +1742,151 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     async reviseMessage(input) {
       const origin = sessions.find(s => s.sessionId === input.sessionId && s.profileId === accounts.activeProfileId);
       if (!origin || origin.status !== 'idle') throw new Error('请等当前回合结束后再编辑');
-      const revision = prepareRevision(messagesBySession[origin.sessionId] || [], input);
-      const branch = await this.createSession({ cwd: origin.cwd, title: origin.title + ' · 修订', modelId: origin.modelId,
-        executionMode: origin.executionMode, reasoningEffort: origin.reasoningEffort });
-      messagesBySession[branch.sessionId] = revision.prefix.map(m => ({ ...structuredClone(m),
-        id: crypto.randomUUID(), sessionId: branch.sessionId, revisionHistory: true, isStreaming: false }));
-      await this.closeSession(origin.sessionId);
+      const originMessages = messagesBySession[origin.sessionId] || [];
+      const revision = prepareRevision(originMessages, input);
+      const rootId = resolveFallbackRootId(origin.sessionId);
+      const rootSession = sessions.find(s => s.sessionId === rootId) || origin;
+      const forkUserTurnIndex = revision.prefix.filter(m => m.role === 'user').length;
+      const lastPrefix = revision.prefix.at(-1);
+      const forkAfterMessageId = lastPrefix ? (lastPrefix.originMessageId || lastPrefix.id) : null;
+      let parentBranchId = origin.sessionId;
+      if (!forkAfterMessageId) {
+        parentBranchId = rootId;
+      } else {
+        for (const bid of listFallbackBranchIds(rootId)) {
+          const list = messagesBySession[bid] || [];
+          if (list.some(m => !m.revisionHistory && (m.originMessageId === forkAfterMessageId || m.id === forkAfterMessageId))) {
+            parentBranchId = bid;
+            break;
+          }
+        }
+      }
+      const branch = await this.createSession({
+        cwd: origin.cwd,
+        title: rootSession.title,
+        modelId: origin.modelId,
+        executionMode: origin.executionMode,
+        reasoningEffort: origin.reasoningEffort,
+      });
+      for (const m of revision.prefix) {
+        if (!m.originMessageId) m.originMessageId = m.id;
+      }
+      messagesBySession[branch.sessionId] = revision.prefix.map(m => ({
+        ...structuredClone(m),
+        originMessageId: m.originMessageId || m.id,
+        id: crypto.randomUUID(),
+        sessionId: branch.sessionId,
+        revisionHistory: true,
+        isStreaming: false,
+      }));
+      const now = new Date().toISOString();
+      let tree = treesByRoot.get(rootId);
+      if (!tree) {
+        tree = {
+          rootSessionId: rootId,
+          activeBranchId: rootId,
+          branches: {
+            [rootId]: {
+              branchId: rootId,
+              parentBranchId: null,
+              forkAfterMessageId: null,
+              forkUserTurnIndex: -1,
+              forkPromptPreview: summarizeBranchSnippet((messagesBySession[rootId] || []).find(m => m.role === 'user')?.content, 72),
+              createdAt: rootSession.updatedAt || now,
+              updatedAt: now,
+            },
+          },
+          updatedAt: now,
+        };
+        treesByRoot.set(rootId, tree);
+        branchToRoot.set(rootId, rootId);
+      }
+      tree.branches[branch.sessionId] = {
+        branchId: branch.sessionId,
+        parentBranchId,
+        forkAfterMessageId,
+        forkUserTurnIndex,
+        forkPromptPreview: summarizeBranchSnippet(input.text, 72),
+        createdAt: now,
+        updatedAt: now,
+      };
+      tree.activeBranchId = branch.sessionId;
+      tree.updatedAt = now;
+      branchToRoot.set(branch.sessionId, rootId);
+
+      // 让新分支在演示数据下也拥有独立的 Context 起始基线
+      const originStat = sessionRawTokenCounts[origin.sessionId];
+      if (originStat) {
+        const prefixRatio = originMessages.length > 0 ? Math.max(0.2, revision.prefix.length / originMessages.length) : 0.3;
+        sessionRawTokenCounts[branch.sessionId] = {
+          modelId: originStat.modelId,
+          usedContextTokens: Math.round(originStat.usedContextTokens * prefixRatio),
+          maxContextTokens: originStat.maxContextTokens,
+          counts: {
+            inputTokens: Math.round(originStat.counts.inputTokens * prefixRatio),
+            cachedInputTokens: Math.round(originStat.counts.cachedInputTokens * prefixRatio),
+            outputTokens: Math.round(originStat.counts.outputTokens * prefixRatio),
+            thinkingTokens: Math.round(originStat.counts.thinkingTokens * prefixRatio),
+          },
+        };
+      }
+
+      origin.status = 'closed';
       await this.sendPrompt({ sessionId: branch.sessionId, text: input.text, references: revision.references, attachments: revision.attachments, annotations: revision.annotations });
-      return branch;
+      const enrichedRoot = applyFallbackTreeMetadata(rootSession);
+      const enrichedBranch = applyFallbackTreeMetadata(sessions.find(s => s.sessionId === branch.sessionId) || branch);
+      sessionEvents.emit(enrichedRoot);
+      sessionEvents.emit(enrichedBranch);
+      treeEvents.emit(buildFallbackTreeState(rootId));
+      return enrichedBranch;
+    },
+    async getConversationTree(sessionId: string): Promise<ConversationTreeState> {
+      return buildFallbackTreeState(sessionId);
+    },
+    async switchConversationBranch(input: SwitchConversationBranchInput): Promise<SwitchConversationBranchResult> {
+      const rootId = resolveFallbackRootId(input.sessionId);
+      const branchIds = listFallbackBranchIds(rootId);
+      if (!branchIds.includes(input.targetBranchId)) throw new Error('目标分支不属于当前会话树');
+      const target = sessions.find(s => s.sessionId === input.targetBranchId);
+      if (!target) throw new Error('目标分支不存在');
+      const prev = sessions.find(s => branchIds.includes(s.sessionId) && s.sessionId !== input.targetBranchId && s.status !== 'closed');
+      if (prev) prev.status = 'closed';
+      target.status = 'idle';
+      target.updatedAt = new Date().toISOString();
+      const tree = treesByRoot.get(rootId);
+      if (tree) {
+        tree.activeBranchId = input.targetBranchId;
+        tree.updatedAt = target.updatedAt;
+      }
+      const treeSet = new Set(branchIds);
+      if (layout.openTabSessionIds.some(id => treeSet.has(id))) {
+        const replaceId = (id: string | null) => (id && treeSet.has(id) ? input.targetBranchId : id);
+        layout = {
+          ...layout,
+          openTabSessionIds: [...new Set(layout.openTabSessionIds.map(id => (treeSet.has(id) ? input.targetBranchId : id)))],
+          activePrimarySessionId: replaceId(layout.activePrimarySessionId),
+          splitSecondarySessionId: replaceId(layout.splitSecondarySessionId),
+        };
+      }
+      const rootSession = sessions.find(s => s.sessionId === rootId);
+      if (rootSession) sessionEvents.emit(applyFallbackTreeMetadata(rootSession));
+      if (prev) sessionEvents.emit(applyFallbackTreeMetadata(prev));
+      const enriched = applyFallbackTreeMetadata(target);
+      sessionEvents.emit(enriched);
+      const treeState = buildFallbackTreeState(rootId);
+      const telemetry = buildTelemetrySnapshot();
+      treeEvents.emit(treeState);
+      telemetryEvents.emit(telemetry);
+      return {
+        session: enriched,
+        previousBranchId: prev?.sessionId ?? null,
+        messages: structuredClone(messagesBySession[input.targetBranchId] ?? []),
+        inspector: structuredClone(inspectorBySession[input.targetBranchId] ?? { sessionId: input.targetBranchId, diffs: [], todos: [], terminals: [] }),
+        swarm: structuredClone(swarmBySession[input.targetBranchId] ?? emptySwarmState(input.targetBranchId)),
+        tree: treeState,
+        telemetry,
+        layout: structuredClone(layout),
+      };
     },
     async sendPrompt(input: SendPromptInput): Promise<void> {
       const target = sessions.find((s) => s.sessionId === input.sessionId);
@@ -1579,8 +1894,10 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
         throw new Error('只读历史会话不可直接写入，请点击「在 Gravity 中继续」创建新会话');
       }
       const now = new Date().toISOString();
+      const userMsgId = `msg-u-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const userMsg: ChatMessageItem = {
-        id: `msg-u-${Date.now()}`,
+        id: userMsgId,
+        originMessageId: userMsgId,
         sessionId: input.sessionId,
         role: 'user',
         content: input.text,
@@ -1610,8 +1927,10 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
         sessionEvents.emit({ ...target });
       }
 
+      const replyMsgId = `msg-a-${Date.now() + 1}-${Math.random().toString(36).slice(2, 6)}`;
       const replyMsg: ChatMessageItem = {
-        id: `msg-a-${Date.now() + 1}`,
+        id: replyMsgId,
+        originMessageId: replyMsgId,
         sessionId: input.sessionId,
         role: 'assistant',
         content: `已在 Mode=${target?.executionMode ?? 'default'} · Effort=${
@@ -1650,7 +1969,10 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
         const hasPending = pendingApprovals.some((p) => p.sessionId === input.sessionId);
         target.status = hasPending ? 'waiting_approval' : 'idle';
         target.updatedAt = new Date().toISOString();
-        sessionEvents.emit({ ...target });
+        sessionEvents.emit(applyFallbackTreeMetadata(target));
+      }
+      if (treesByRoot.has(resolveFallbackRootId(input.sessionId))) {
+        treeEvents.emit(buildFallbackTreeState(input.sessionId));
       }
     },
 
@@ -2225,6 +2547,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     onHistoryUpdated: historyEvents.subscribe,
     onAccountUpdated: accountEvents.subscribe,
     onUpdateState: updateEvents.subscribe,
+    onTreeUpdated: treeEvents.subscribe,
   };
 }
 

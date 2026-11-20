@@ -64,7 +64,7 @@ export class TitleOrganizer {
     const targets: ManagedSessionSummary[] = [];
 
     for (const raw of sessions) {
-      if (raw.isLegacyApprovalPollution || raw.archivedAt) continue;
+      if (raw.isLegacyApprovalPollution || raw.archivedAt || raw.parentBranchId) continue;
       if (idSet && !idSet.has(raw.sessionId)) continue;
       if (normalizedProject) {
         const cwdNorm = normalizeWorkspacePath(raw.cwd || raw.rawCwd || '').toLowerCase();

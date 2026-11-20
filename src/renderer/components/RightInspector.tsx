@@ -8,6 +8,7 @@ import {
   CircleDot,
   FileCode2,
   FileDiff,
+  GitBranch,
   Layers,
   ListTodo,
   Network,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react';
 import type {
   ChatMessageItem,
+  ConversationTreeState,
   FileDiffEntry,
   RightInspectorTab,
   SessionInspectorData,
@@ -27,6 +29,7 @@ import type {
 } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { ContextCostInspectorView, type ContextInspectorViewMode } from './ContextCostInspectorView';
+import { ConversationTreePanel } from './ConversationTreePanel';
 import { ResizeHandle } from './ResizeHandle';
 import { SwarmPanel } from './SwarmPanel';
 import { UnifiedDiffBlock } from './UnifiedDiffBlock';
@@ -48,6 +51,10 @@ export interface RightInspectorProps {
   inspectorData?: SessionInspectorData;
   sessionMessages: ChatMessageItem[];
   telemetry: TelemetryDashboardSnapshot;
+  conversationTree?: ConversationTreeState;
+  sessionBusy?: boolean;
+  switchingBranch?: boolean;
+  onSwitchBranch?: (rootSessionId: string, targetBranchId: string) => void;
   swarmTopology?: SwarmTopologyState;
   onSelectTab: (tab: RightInspectorTab) => void;
   onFocusDiffFile: (filePath: string) => void;
@@ -79,6 +86,7 @@ const TABS: ReadonlyArray<{ id: RightInspectorTab; Icon: typeof FileDiff }> = [
   { id: 'plan', Icon: ListTodo },
   { id: 'terminal', Icon: SquareTerminal },
   { id: 'context', Icon: BarChart3 },
+  { id: 'tree', Icon: GitBranch },
   { id: 'swarm', Icon: Network },
 ];
 
@@ -105,6 +113,10 @@ export function RightInspector({
   inspectorData,
   sessionMessages,
   telemetry,
+  conversationTree,
+  sessionBusy,
+  switchingBranch,
+  onSwitchBranch,
   swarmTopology,
   onSelectTab,
   onFocusDiffFile,
@@ -292,17 +304,19 @@ export function RightInspector({
   const totalAdded = diffs.reduce((s, d) => s + d.addedLines, 0);
   const totalRemoved = diffs.reduce((s, d) => s + d.removedLines, 0);
 
-  // 标签徽标各自表示不同数量。终端有失败时优先显示失败数，协作面板显示正在工作的成员数。
+  // 标签徽标各自表示不同数量。终端有失败时优先显示失败数，协作面板显示正在工作的成员数，分支树在存在分叉时显示分支总数。
   const counts: Partial<Record<RightInspectorTab, number>> = {
     diff: diffs.length,
     plan: todos.length,
     terminal: unread.length,
+    tree: conversationTree && conversationTree.totalBranches > 1 ? conversationTree.totalBranches : 0,
     swarm: swarmTopology?.isActive ? swarmTopology.stats.working : 0,
   };
   const countTone: Partial<Record<RightInspectorTab, 'danger' | 'accent' | 'muted'>> = {
     diff: 'accent',
     plan: 'muted',
     terminal: failedTerminals ? 'danger' : 'muted',
+    tree: 'accent',
     swarm: 'accent',
   };
   const doneTodos = todos.filter((t) => t.status === 'completed').length;
@@ -550,14 +564,52 @@ export function RightInspector({
           )}
 
           {activeTab === 'context' && (
-            <ContextCostInspectorView
+            <>
+              {conversationTree && conversationTree.totalBranches > 1 && sessionId && (
+                <div className="ctx-branch-banner" data-testid="context-branch-banner">
+                  <GitBranch size={12} />
+                  <span className="truncate">
+                    {(() => {
+                      const activeNode = conversationTree.nodesById[sessionId];
+                      if (!activeNode || activeNode.parentBranchId === null) {
+                        return locale === 'zh-CN' ? '当前视角：主对话分支' : 'Active branch: Main';
+                      }
+                      return locale === 'zh-CN'
+                        ? `当前视角：第 ${activeNode.forkUserTurnIndex + 1} 轮分叉 (${activeNode.siblingIndex}/${activeNode.siblingCount})`
+                        : `Active branch: Turn ${activeNode.forkUserTurnIndex + 1} (${activeNode.siblingIndex}/${activeNode.siblingCount})`;
+                    })()}
+                  </span>
+                  <button
+                    type="button"
+                    className="ctx-branch-banner-btn"
+                    onClick={() => onSelectTab('tree')}
+                    data-testid="context-banner-open-tree"
+                  >
+                    {locale === 'zh-CN' ? '分支树' : 'Tree'}
+                  </button>
+                </div>
+              )}
+              <ContextCostInspectorView
+                sessionId={sessionId}
+                dashboard={telemetry}
+                viewMode={contextViewMode}
+                onChangeViewMode={onChangeContextViewMode}
+                reviewerConnected={reviewerConnected}
+                onOpenExternalReviewerSettings={onOpenExternalReviewerSettings}
+                onOpenRateCardsSettings={onOpenRateCardsSettings}
+              />
+            </>
+          )}
+
+          {activeTab === 'tree' && (
+            <ConversationTreePanel
               sessionId={sessionId}
-              dashboard={telemetry}
-              viewMode={contextViewMode}
-              onChangeViewMode={onChangeContextViewMode}
-              reviewerConnected={reviewerConnected}
-              onOpenExternalReviewerSettings={onOpenExternalReviewerSettings}
-              onOpenRateCardsSettings={onOpenRateCardsSettings}
+              tree={conversationTree}
+              telemetry={telemetry}
+              busy={sessionBusy}
+              switchingBranch={switchingBranch}
+              onSwitchBranch={onSwitchBranch}
+              onOpenContextTab={() => onSelectTab('context')}
             />
           )}
 

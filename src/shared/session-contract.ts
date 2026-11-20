@@ -290,6 +290,8 @@ export interface ChatMessageItem {
   question?: import('./user-question').UserQuestion;
   annotations?: MessageAnnotation[];
   id: string;
+  /** 跨分支稳定的原始消息标识；继承自父分支前缀时保留原消息的 originMessageId || id，用于精确匹配同分叉点 */
+  originMessageId?: string;
   sessionId: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -343,6 +345,16 @@ export interface ManagedSessionSummary {
   readOnly: boolean;
   profileId: string;
   updatedAt: string;
+  /** 所属主对话（根会话）ID；未分叉时可省略 */
+  rootSessionId?: string;
+  /** 拓扑父分支会话 ID；非空表示该会话属于主对话树内的子分支，不在左侧历史会话栏重复列出 */
+  parentBranchId?: string | null;
+  /** 分叉发生在其后的稳定消息 ID（originMessageId），null 表示首条用户消息分叉 */
+  forkAfterMessageId?: string | null;
+  /** 所属主对话树的分支总数（> 1 时左侧栏显示分支数徽标） */
+  branchCount?: number;
+  /** 所属主对话树当前激活的分支会话 ID */
+  activeBranchId?: string;
 }
 
 export type SessionAction = 'archive' | 'restore' | 'delete';
@@ -378,7 +390,7 @@ export function withoutSession(layout: WorkspaceLayoutState, id: string): Worksp
     splitSecondarySessionId: secondary };
 }
 
-const inspectorTabs = ['diff', 'files', 'plan', 'terminal', 'context', 'swarm'] as const;
+const inspectorTabs = ['diff', 'files', 'plan', 'terminal', 'context', 'tree', 'swarm'] as const;
 export type RightInspectorTab = (typeof inspectorTabs)[number];
 export function isRightInspectorTab(value: unknown): value is RightInspectorTab {
   return inspectorTabs.some(tab => tab === value);

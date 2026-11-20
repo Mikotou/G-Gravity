@@ -820,8 +820,8 @@ describe('v0.2.2 Approve for me 完整逻辑修复（无外部复核 + 有外部
 
     const inspector = screen.getByTestId('right-inspector');
     const head = inspector.querySelector('.inspector-head') as HTMLDivElement;
-    // 严格保持 tablist 语义纯净：5 个 tab、0 个多余 button
-    expect(within(head).getAllByRole('tab')).toHaveLength(5);
+    // 严格保持 tablist 语义纯净：6 个 tab（含分支树）、0 个多余 button
+    expect(within(head).getAllByRole('tab')).toHaveLength(6);
     expect(within(head).queryAllByRole('button')).toHaveLength(0);
 
     // 模拟窄栏溢出（例如右侧栏压缩至 280px，可用页签区仅 80px，5 个页签总宽 220px）

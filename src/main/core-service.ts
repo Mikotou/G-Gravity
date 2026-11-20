@@ -35,8 +35,15 @@ import { WorkspaceFiles } from './workspace/workspace-files';
 import { InspectorStore } from './session/inspector-store';
 
 import { prepareRevision, revisionContext } from '../shared/message-revision';
+import {
+  summarizeBranchSnippet,
+  type ConversationTreeState,
+  type SwitchConversationBranchInput,
+  type SwitchConversationBranchResult,
+} from '../shared/conversation-tree';
 import type { ReviseMessageInput } from '../shared/ipc-channels';
 import { withoutSession, type SessionAction } from '../shared/session-contract';
+import { ConversationTreeStore } from './session/conversation-tree-store';
 import { AgentQuestions } from './session/agent-questions';
 import type { QuestionSubmission } from '../shared/user-question';
 import { modelMessage, restoreAnnotatedMessage } from './session/annotation-prompt';
@@ -136,7 +143,7 @@ export class CoreService extends EventEmitter {
   readonly store: ClientStore; readonly client: AcpClient; readonly sessions: SessionMultiplexer; readonly approval: ApprovalEngine;
   readonly telemetry: TelemetryStore; readonly titles: TitleOrganizer; readonly thoughts: ThoughtTranslator; readonly swarm: SwarmTracker;
   readonly accounts: AccountManager; readonly history: HistoryImporter; readonly plugins: PluginsManager;
-  readonly inspector: InspectorStore; readonly updater: GitHubUpdater; readonly workspaceFiles = new WorkspaceFiles();
+  readonly inspector: InspectorStore; readonly trees: ConversationTreeStore; readonly updater: GitHubUpdater; readonly workspaceFiles = new WorkspaceFiles();
   private preferences: ClientPreferences;
   private layout: WorkspaceLayoutState;
   private messages = new Map<string, ChatMessageItem[]>();
@@ -230,6 +237,7 @@ export class CoreService extends EventEmitter {
     this.telemetry = new TelemetryStore({ store: this.store });
     this.swarm = new SwarmTracker(this.store);
     this.inspector = new InspectorStore(this.store);
+    this.trees = new ConversationTreeStore(this.store);
     this.titles = new TitleOrganizer(this.store);
     this.thoughts =
       options.translator ||
@@ -288,7 +296,13 @@ export class CoreService extends EventEmitter {
     this.client.on('rateLimited', (warning: string) => {
       for (const session of this.sessions.sessions.values()) if (this.sessions.isActive(session.sessionId)) this.upsert({ id: randomUUID(), sessionId: session.sessionId, role: 'system', content: warning, createdAt: new Date().toISOString() });
     });
-    this.sessions.on('session', (session: ManagedSessionSummary) => this.emit('session-updated', this.titles.apply(session)));
+    this.sessions.on('session', (session: ManagedSessionSummary) => {
+      const enriched = this.enrichSession(session);
+      this.emit('session-updated', enriched);
+      if (this.trees.hasTree(session.sessionId)) {
+        this.emitTreeUpdate(session.sessionId);
+      }
+    });
     this.sessions.on('update', (payload: AcpSessionUpdateNotification) => this.consumeUpdate(payload));
     this.sessions.on('localPreference', ({ sessionId, text }) => this.upsert({ id: randomUUID(), sessionId, role: 'system', content: text, createdAt: new Date().toISOString() }));
     this.sessions.on('cancelled', (id: string) => { this.questions.cancel(id); this.customAnswers.delete(id); this.approval.cancelSession(id); this.feedback.delete(id); });
@@ -355,8 +369,49 @@ export class CoreService extends EventEmitter {
     const owned = new Set(this.sessions.sessions.keys());
     this.inspector.setProfile(profileId, owned);
     this.swarm.setProfile(profileId, owned);
+    this.trees.setProfile(profileId, owned);
     const pending = this.store.read<string[]>('pending-session-deletes-' + profileId + '.json', []);
     for (const id of pending) this.finishDeletion(id);
+  }
+  private enrichSession(session: ManagedSessionSummary): ManagedSessionSummary {
+    const titled = this.titles.apply(session);
+    const rootId = this.trees.resolveRootId(titled.sessionId);
+    const rootSession = rootId !== titled.sessionId ? this.sessions.sessions.get(rootId) : undefined;
+    const rootTitle = rootSession ? this.titles.apply(rootSession).title : titled.title;
+    return this.trees.applyMetadata(titled, rootTitle);
+  }
+  private findCanonicalBranchForMessage(rootId: string, originMessageId: string | null, fallbackBranchId: string): string {
+    if (!originMessageId) return rootId;
+    for (const bid of this.trees.listBranchIds(rootId)) {
+      const list = this.messages.get(bid) || [];
+      if (list.some(m => !m.revisionHistory && (m.originMessageId === originMessageId || m.id === originMessageId))) {
+        return bid;
+      }
+    }
+    return fallbackBranchId;
+  }
+  private buildTreeState(sessionId: string): ConversationTreeState {
+    const rootId = this.trees.resolveRootId(sessionId);
+    for (const bid of this.trees.listBranchIds(rootId)) {
+      const sess = this.sessions.sessions.get(bid);
+      if (sess && !this.telemetry.getSessionTelemetry(bid)) {
+        this.telemetry.hydrateFromMessages(bid, sess.modelId, this.messages.get(bid) || []);
+      }
+    }
+    return this.trees.buildTreeState(rootId, {
+      getSession: id => this.sessions.sessions.get(id),
+      getMessages: id => this.messages.get(id) || [],
+      getTelemetry: id => this.telemetry.getSessionTelemetry(id),
+      getRootTitle: id => {
+        const root = this.sessions.sessions.get(id);
+        return root ? this.titles.apply(root).title : '新建对话';
+      },
+    });
+  }
+  private emitTreeUpdate(sessionId: string): void {
+    const rootId = this.trees.resolveRootId(sessionId);
+    if (!this.sessions.sessions.has(rootId) && !this.trees.hasTree(rootId)) return;
+    this.emit('tree-updated', this.buildTreeState(rootId));
   }
   getPreferences(): ClientPreferences { return structuredClone(this.preferences); }
   private saveMessages(): void { this.store.write(this.messagesFile(), Object.fromEntries(this.messages)); }
@@ -399,7 +454,7 @@ export class CoreService extends EventEmitter {
   }
   private assistant(sessionId: string): ChatMessageItem {
     let message = this.assistantMessages.get(sessionId);
-    if (!message) { message = { id: randomUUID(), sessionId, role: 'assistant', content: '', isStreaming: true, createdAt: new Date().toISOString() }; this.assistantMessages.set(sessionId, message); }
+    if (!message) { const id = randomUUID(); message = { id, originMessageId: id, sessionId, role: 'assistant', content: '', isStreaming: true, createdAt: new Date().toISOString() }; this.assistantMessages.set(sessionId, message); }
     return message;
   }
   private clearTransientStreamWarning(sessionId: string, message: ChatMessageItem): boolean {
@@ -628,7 +683,7 @@ export class CoreService extends EventEmitter {
         sessions = await this.listSessions(true);
       } catch (error) {
         this.client.lastError = error instanceof Error ? error.message : 'ACP 连接失败';
-        sessions = [...this.sessions.sessions.values()].map(item => this.titles.apply({ ...item }));
+        sessions = [...this.sessions.sessions.values()].map(item => this.enrichSession({ ...item }));
       }
       for (const s of sessions) {
         this.telemetry.hydrateFromMessages(s.sessionId, s.modelId, this.messages.get(s.sessionId) || []);
@@ -729,7 +784,7 @@ export class CoreService extends EventEmitter {
   async downloadUpdate(): Promise<AppUpdateState> { return this.updater.downloadUpdate(); }
   async installUpdate(): Promise<{ launched: boolean; message: string }> { return this.updater.installUpdate(); }
   async launchOfficialLogin(profileId?: string) { return this.accounts.login(profileId); }
-  async listSessions(includeHiddenPollution = false) { this.accounts.assertReady(); return (await this.sessions.listSessions(includeHiddenPollution)).map(item => this.titles.apply(item)); }
+  async listSessions(includeHiddenPollution = false) { this.accounts.assertReady(); return (await this.sessions.listSessions(includeHiddenPollution)).map(item => this.enrichSession(item)); }
   private hasAntigravityOptions(sessionId?: string): boolean {
     const agentName = this.client.initializeResult?.agentInfo?.name || '';
     return agentName.toLowerCase().includes('antigravity') || Boolean(sessionId && this.sessions.hasConfigOptions(sessionId));
@@ -781,12 +836,12 @@ export class CoreService extends EventEmitter {
     this.approval.setSessionExecutionMode(session.sessionId, session.executionMode);
     this.telemetry.hydrateFromMessages(session.sessionId, session.modelId, this.messages.get(session.sessionId) || []);
     this.syncSessionCheckpointWindow(session.sessionId);
-    return this.titles.apply(session);
+    return this.enrichSession(session);
   }
   async resumeSession(sessionId: string, cwd: string) {
     this.accounts.assertReady();
     if (this.managing.has(sessionId) || this.sessions.get(sessionId).archivedAt) throw new Error('请先从归档恢复会话');
-    if (this.sessions.isActive(sessionId)) return this.titles.apply(this.sessions.get(sessionId));
+    if (this.sessions.isActive(sessionId)) return this.enrichSession(this.sessions.get(sessionId));
     if (this.sessions.isResuming(sessionId)) throw new Error('此会话正在恢复');
     const hadLocalMessages = Boolean(this.messages.get(sessionId)?.length);
     if (hadLocalMessages) this.skipReplayedMessages.add(sessionId);
@@ -815,7 +870,7 @@ export class CoreService extends EventEmitter {
     this.telemetry.hydrateFromMessages(sessionId, session.modelId, this.messages.get(sessionId) || []);
     this.syncSessionCheckpointWindow(sessionId);
     this.finishMessage(sessionId);
-    return this.titles.apply(session);
+    return this.enrichSession(session);
   }
   async closeSession(sessionId: string): Promise<void> { this.questions.cancel(sessionId); this.customAnswers.delete(sessionId); this.clearReactiveTurnTimer(sessionId); this.swarm.markWorkingSubagentsCompleted(sessionId, '会话已关闭'); this.approval.cancelSession(sessionId); await this.sessions.closeSession(sessionId); this.finishMessage(sessionId); }
   private finishDeletion(id: string): void {
@@ -854,31 +909,55 @@ export class CoreService extends EventEmitter {
     const journal = 'pending-session-deletes-' + this.accounts.activeProfileId + '.json';
     const pendingDelete = this.store.read<string[]>(journal, []).includes(id);
     if (pendingDelete && action !== 'delete') throw new Error('会话删除尚未完成');
-    const session = pendingDelete ? this.sessions.sessions.get(id) : this.sessions.get(id);
-    if (this.sessions.isBusy(id) || this.sessions.isResuming(id) || this.revising.has(id) || this.managing.has(id) ||
-        session?.status === 'waiting_approval' || session?.status === 'streaming') throw new Error('请等待当前回合结束后再管理会话');
-    this.managing.add(id);
-    try {
-      if (action !== 'restore' && this.sessions.isActive(id)) await this.closeSession(id);
-      if (action === 'delete') {
-        this.store.write(journal, [...new Set([...this.store.read<string[]>(journal, []), id])]);
-        this.finishDeletion(id);
-      } else {
-        if (action === 'archive') {
-          this.layout = withoutSession(this.layout, id);
-          this.store.write('layout.json', this.layout);
-        }
-        const updated = { ...this.sessions.get(id), archivedAt: action === 'archive' ? session?.archivedAt || new Date().toISOString() : undefined };
-        this.sessions.updateSessionRecord(updated);
-        this.emit('session-updated', this.titles.apply(updated));
+    const rootId = this.trees.resolveRootId(id);
+    const branchIds = [...new Set([id, ...this.trees.listBranchIds(rootId)])].filter(
+      bid => pendingDelete || this.sessions.sessions.has(bid)
+    );
+    if (!pendingDelete && !this.sessions.sessions.has(id)) {
+      this.sessions.get(id);
+    }
+    for (const bid of branchIds) {
+      const s = this.sessions.sessions.get(bid);
+      if (this.sessions.isBusy(bid) || this.sessions.isResuming(bid) || this.revising.has(bid) || this.managing.has(bid) ||
+          s?.status === 'waiting_approval' || s?.status === 'streaming') {
+        throw new Error('请等待当前回合结束后再管理会话');
       }
-      return { sessions: [...this.sessions.sessions.values()].map(s => this.titles.apply(s)), layout: structuredClone(this.layout) };
-    } finally { this.managing.delete(id); }
+    }
+    for (const bid of branchIds) this.managing.add(bid);
+    try {
+      if (action !== 'restore') {
+        for (const bid of branchIds) {
+          if (this.sessions.isActive(bid)) await this.closeSession(bid);
+        }
+      }
+      if (action === 'delete') {
+        this.trees.removeBranchOrTree(rootId);
+        this.store.write(journal, [...new Set([...this.store.read<string[]>(journal, []), ...branchIds])]);
+        for (const bid of branchIds) this.finishDeletion(bid);
+      } else {
+        const archiveStamp = new Date().toISOString();
+        for (const bid of branchIds) {
+          if (action === 'archive') {
+            this.layout = withoutSession(this.layout, bid);
+          }
+          const existing = this.sessions.sessions.get(bid);
+          if (!existing) continue;
+          const updated = { ...existing, archivedAt: action === 'archive' ? existing.archivedAt || archiveStamp : undefined };
+          this.sessions.updateSessionRecord(updated);
+          this.emit('session-updated', this.enrichSession(updated));
+        }
+        if (action === 'archive') this.store.write('layout.json', this.layout);
+      }
+      return { sessions: [...this.sessions.sessions.values()].map(s => this.enrichSession(s)), layout: structuredClone(this.layout) };
+    } finally {
+      for (const bid of branchIds) this.managing.delete(bid);
+    }
   }
   async getSessionMessages(sessionId: string): Promise<ChatMessageItem[]> { return structuredClone(this.messages.get(sessionId) || []); }
   private userMessage(input: SendPromptInput): ChatMessageItem {
+    const id = randomUUID();
     return {
-      id: randomUUID(), sessionId: input.sessionId, role: 'user', content: input.text, annotations: input.annotations,
+      id, originMessageId: id, sessionId: input.sessionId, role: 'user', content: input.text, annotations: input.annotations,
       references: input.references, createdAt: new Date().toISOString(),
       attachments: (input.attachments || []).map(item => ({
         id: randomUUID(), name: item.name, mimeType: item.mimeType, sizeBytes: item.sizeBytes, uri: item.uri,
@@ -895,7 +974,24 @@ export class CoreService extends EventEmitter {
         this.sessions.isBusy(origin.sessionId) || this.revising.has(origin.sessionId) || this.managing.has(origin.sessionId)) {
       throw new Error('请等当前回合结束后再编辑');
     }
-    const { prefix, references, attachments, annotations } = prepareRevision(this.messages.get(origin.sessionId) || [], input);
+    const originMessages = this.messages.get(origin.sessionId) || [];
+    const { prefix, references, attachments, annotations } = prepareRevision(originMessages, input);
+    const rootId = this.trees.resolveRootId(origin.sessionId);
+    const rootSession = this.sessions.sessions.get(rootId) || origin;
+    const rootTitle = this.titles.apply(rootSession).title;
+    const forkUserTurnIndex = prefix.filter(m => m.role === 'user').length;
+    const lastPrefix = prefix.at(-1);
+    const forkAfterMessageId = lastPrefix ? (lastPrefix.originMessageId || lastPrefix.id) : null;
+    const canonicalParentBranchId = this.findCanonicalBranchForMessage(rootId, forkAfterMessageId, origin.sessionId);
+    const rootFirstUser = (this.messages.get(rootId) || originMessages).find(m => m.role === 'user');
+    const rootPromptPreview = summarizeBranchSnippet(
+      rootFirstUser?.content || rootFirstUser?.annotations?.[0]?.comment || rootFirstUser?.annotations?.[0]?.excerpt,
+      72
+    );
+    const forkPromptPreview = summarizeBranchSnippet(
+      input.text.trim() || annotations?.[0]?.comment || annotations?.[0]?.excerpt || attachments?.[0]?.name || '',
+      72
+    );
     let branch: ManagedSessionSummary | undefined;
     this.revising.add(origin.sessionId);
     try {
@@ -903,13 +999,22 @@ export class CoreService extends EventEmitter {
       await this.closeSession(origin.sessionId);
       this.accounts.assertReady();
       if (profile !== this.accounts.activeProfileId) throw new Error('账号资料已切换');
-      branch = await this.createSession({ cwd: origin.cwd, title: origin.title + ' · ' + (this.preferences.locale === 'en-US' ? 'Revision' : '修订'),
-        executionMode: origin.executionMode, reasoningEffort: origin.availableEfforts?.length === 0 ? undefined : origin.reasoningEffort,
-        modelId: origin.modelId || undefined });
+      branch = await this.createSession({
+        cwd: origin.cwd,
+        title: rootTitle,
+        executionMode: origin.executionMode,
+        reasoningEffort: origin.availableEfforts?.length === 0 ? undefined : origin.reasoningEffort,
+        modelId: origin.modelId || undefined,
+      });
       const id = branch.sessionId;
       if (profile !== this.accounts.activeProfileId) throw new Error('账号资料已切换');
+      // 保留前缀消息的稳定 originMessageId，以便同一分叉点多次修订及更深层嵌套分支精确归组。
+      for (const m of prefix) {
+        if (!m.originMessageId) m.originMessageId = m.id;
+      }
       const history = prefix.map(m => {
         const copy = structuredClone(m);
+        copy.originMessageId = m.originMessageId || m.id;
         copy.id = randomUUID(); copy.sessionId = id; copy.revisionHistory = true; copy.isStreaming = false;
         delete copy.pendingApprovalId;
         for (const thought of copy.thoughts || []) { thought.id = randomUUID(); thought.isStreaming = false; thought.isTranslating = false; }
@@ -917,6 +1022,32 @@ export class CoreService extends EventEmitter {
       });
       this.messages.set(id, [...history, ...(this.messages.get(id) || [])]);
       this.saveMessages();
+      this.trees.recordBranch({
+        rootSessionId: rootId,
+        rootPromptPreview,
+        rootCreatedAt: rootSession.updatedAt,
+        branchId: id,
+        parentBranchId: canonicalParentBranchId,
+        forkAfterMessageId,
+        forkUserTurnIndex,
+        forkPromptPreview,
+      });
+      if (this.layout.openTabSessionIds.includes(origin.sessionId)) {
+        const replaceId = (val: string | null) => (val === origin.sessionId ? id : val);
+        this.layout = {
+          ...this.layout,
+          openTabSessionIds: [...new Set(this.layout.openTabSessionIds.map(t => (t === origin.sessionId ? id : t)))],
+          activePrimarySessionId: replaceId(this.layout.activePrimarySessionId),
+          splitSecondarySessionId: replaceId(this.layout.splitSecondarySessionId),
+        };
+        this.store.write('layout.json', this.layout);
+      }
+      this.telemetry.hydrateFromMessages(id, branch.modelId, this.messages.get(id) || []);
+      const enrichedRoot = this.sessions.sessions.get(rootId) ? this.enrichSession(this.sessions.get(rootId)) : undefined;
+      if (enrichedRoot) this.emit('session-updated', enrichedRoot);
+      const enrichedBranch = this.enrichSession(this.sessions.get(id));
+      this.emit('session-updated', enrichedBranch);
+      this.emitTreeUpdate(rootId);
       const revision = { sessionId: id, text: input.text, references, attachments, annotations };
       void this.sendPrompt(revision).catch(error => {
         if (this.disposed || this.accounts.activeProfileId !== profile || !this.sessions.sessions.has(id)) return;
@@ -926,8 +1057,9 @@ export class CoreService extends EventEmitter {
         this.upsert({ id: randomUUID(), sessionId: id, role: 'system', createdAt: new Date().toISOString(),
           content: '修订消息发送失败。' + (error instanceof Error ? error.message : String(error)) });
         this.saveMessages();
+        this.emitTreeUpdate(rootId);
       });
-      return branch;
+      return enrichedBranch;
     } catch (error) {
       if (profile === this.accounts.activeProfileId) {
         if (branch) await this.closeSession(branch.sessionId).catch(() => {});
@@ -935,6 +1067,100 @@ export class CoreService extends EventEmitter {
       }
       throw error;
     } finally { this.revising.delete(origin.sessionId); }
+  }
+  async getConversationTree(sessionId: string): Promise<ConversationTreeState> {
+    this.accounts.assertReady();
+    return this.buildTreeState(sessionId);
+  }
+  async switchConversationBranch(input: SwitchConversationBranchInput): Promise<SwitchConversationBranchResult> {
+    this.accounts.assertReady();
+    const profile = this.accounts.activeProfileId;
+    const rootId = this.trees.resolveRootId(input.sessionId);
+    const targetBranchId = input.targetBranchId;
+    const treeBranches = this.trees.listBranchIds(rootId);
+    if (!treeBranches.includes(targetBranchId)) {
+      throw new Error('目标分支不属于当前会话树');
+    }
+    const targetSession = this.sessions.get(targetBranchId);
+    if (targetSession.profileId !== profile || targetSession.archivedAt) {
+      throw new Error('目标分支不可用或已归档');
+    }
+    for (const bid of treeBranches) {
+      const s = this.sessions.sessions.get(bid);
+      if (this.sessions.isBusy(bid) || this.sessions.isResuming(bid) || this.revising.has(bid) || this.managing.has(bid) ||
+          s?.status === 'streaming' || s?.status === 'waiting_approval') {
+        throw new Error('请等当前分支回合结束后再切换分支');
+      }
+    }
+    const previousActive = treeBranches.find(bid => bid !== targetBranchId && this.sessions.isActive(bid)) || null;
+    const previousSession = previousActive ? this.sessions.sessions.get(previousActive) : undefined;
+    for (const bid of treeBranches) this.revising.add(bid);
+    try {
+      // 关闭同棵对话树下的旧活跃分支，保证切换分支不突破最多 4 路并行会话上限。
+      if (previousActive) {
+        await this.closeSession(previousActive);
+      }
+      let activeSession: ManagedSessionSummary;
+      try {
+        activeSession = this.sessions.isActive(targetBranchId)
+          ? this.enrichSession(this.sessions.get(targetBranchId))
+          : await this.resumeSession(targetBranchId, targetSession.cwd);
+      } catch (error) {
+        if (previousActive && previousSession && profile === this.accounts.activeProfileId) {
+          await this.resumeSession(previousActive, previousSession.cwd).catch(() => {});
+        }
+        throw error;
+      }
+      if (profile !== this.accounts.activeProfileId) throw new Error('账号资料已切换');
+      if (this.trees.hasTree(rootId)) {
+        this.trees.setActiveBranch(rootId, targetBranchId);
+      }
+      this.telemetry.hydrateFromMessages(targetBranchId, activeSession.modelId, this.messages.get(targetBranchId) || []);
+
+      // 原地替换工作台布局中属于同一对话树的旧分支 ID，保持标签位与分屏位稳定不变。
+      const treeSet = new Set(treeBranches);
+      const hasTreeTab = this.layout.openTabSessionIds.some(id => treeSet.has(id));
+      if (hasTreeTab) {
+        const replaceId = (id: string | null) => (id && treeSet.has(id) ? targetBranchId : id);
+        const nextTabs = [...new Set(this.layout.openTabSessionIds.map(id => (treeSet.has(id) ? targetBranchId : id)))];
+        const nextPrimary = replaceId(this.layout.activePrimarySessionId);
+        const rawSecondary = replaceId(this.layout.splitSecondarySessionId);
+        const nextSecondary = rawSecondary && rawSecondary !== nextPrimary ? rawSecondary : null;
+        this.layout = {
+          ...this.layout,
+          openTabSessionIds: nextTabs,
+          activePrimarySessionId: nextPrimary,
+          splitSecondarySessionId: nextSecondary,
+        };
+        this.store.write('layout.json', this.layout);
+      }
+
+      const enrichedActive = this.enrichSession(this.sessions.get(targetBranchId));
+      const enrichedRoot = this.sessions.sessions.get(rootId) ? this.enrichSession(this.sessions.get(rootId)) : undefined;
+      if (enrichedRoot) this.emit('session-updated', enrichedRoot);
+      if (previousActive && this.sessions.sessions.has(previousActive)) {
+        this.emit('session-updated', this.enrichSession(this.sessions.get(previousActive)));
+      }
+      this.emit('session-updated', enrichedActive);
+
+      const tree = this.buildTreeState(rootId);
+      const telemetry = this.telemetry.snapshot();
+      this.emit('tree-updated', tree);
+      this.emit('telemetry-updated', telemetry);
+
+      return {
+        session: enrichedActive,
+        previousBranchId: previousActive,
+        messages: structuredClone(this.messages.get(targetBranchId) || []),
+        inspector: this.inspector.get(targetBranchId),
+        swarm: this.swarm.getState(targetBranchId),
+        tree,
+        telemetry,
+        layout: structuredClone(this.layout),
+      };
+    } finally {
+      for (const bid of treeBranches) this.revising.delete(bid);
+    }
   }
   async sendPrompt(input: SendPromptInput): Promise<void> {
     this.accounts.assertReady();
@@ -990,13 +1216,13 @@ export class CoreService extends EventEmitter {
     // 准备文件引用会让出执行权。送出提示前再检查一次 Profile 和会话占用，避免把准备好的内容发到错误的上下文。
     if (profileId !== this.accounts.activeProfileId || this.managing.has(input.sessionId) || this.revising.has(input.sessionId) || this.sessions.isBusy(input.sessionId) || !this.sessions.isActive(input.sessionId)) throw new Error('文件准备期间会话状态已改变，请重试');
     const titleText = input.text.trim() || input.annotations?.find(item => item.comment)?.comment || input.annotations?.[0]?.excerpt;
-    if (!isManualCompact && titleText && (!session.title || session.title === '新建对话' || session.title === 'New Session')) {
+    if (!isManualCompact && !this.trees.isChildBranch(session.sessionId) && titleText && (!session.title || session.title === '新建对话' || session.title === 'New Session')) {
       // 仅提取首句摘要作为初始显示名，不自动触发标题整理；分类整理仅在用户主动点击按钮时使用内置模型执行。
       const plain = titleText.replace(/\s+/g, ' ').trim().slice(0, 36);
       if (plain) {
         session.title = plain;
         this.sessions.updateSessionRecord(session);
-        this.emit('session-updated', this.titles.apply(session));
+        this.emit('session-updated', this.enrichSession(session));
       }
     }
     const submitted = this.userMessage(input);
@@ -1027,6 +1253,10 @@ export class CoreService extends EventEmitter {
       this.telemetry.endTurn(input.sessionId);
       this.syncSessionCheckpointWindow(input.sessionId);
       if (isManualCompact) this.telemetry.finishManualCompaction(input.sessionId);
+      if (this.trees.hasTree(input.sessionId)) {
+        this.trees.touchBranch(input.sessionId);
+        this.emitTreeUpdate(input.sessionId);
+      }
     }
     const custom = this.customAnswers.get(input.sessionId);
     this.customAnswers.delete(input.sessionId);
@@ -1137,8 +1367,32 @@ export class CoreService extends EventEmitter {
     }
     this.layout = next; this.store.write('layout.json', next); return structuredClone(next);
   }
-  async renameSession(sessionId: string, newTitle: string) { const session = this.titles.rename(this.sessions.get(sessionId), newTitle); this.sessions.updateSessionRecord(session); this.emit('session-updated', session); return session; }
-  async togglePinSession(sessionId: string) { const session = this.titles.togglePin(this.sessions.get(sessionId)); this.sessions.updateSessionRecord(session); this.emit('session-updated', session); return session; }
+  async renameSession(sessionId: string, newTitle: string) {
+    const rootId = this.trees.resolveRootId(sessionId);
+    const root = this.sessions.get(rootId);
+    const renamed = this.titles.rename(root, newTitle);
+    this.sessions.updateSessionRecord(renamed);
+    const branches = this.trees.listBranchIds(rootId);
+    for (const bid of branches) {
+      const s = this.sessions.sessions.get(bid);
+      if (!s) continue;
+      if (bid !== rootId) {
+        s.title = renamed.title;
+        this.sessions.updateSessionRecord(s);
+      }
+      this.emit('session-updated', this.enrichSession(s));
+    }
+    if (this.trees.hasTree(rootId)) this.emitTreeUpdate(rootId);
+    return this.enrichSession(this.sessions.get(sessionId));
+  }
+  async togglePinSession(sessionId: string) {
+    const rootId = this.trees.resolveRootId(sessionId);
+    const session = this.titles.togglePin(this.sessions.get(rootId));
+    this.sessions.updateSessionRecord(session);
+    const enriched = this.enrichSession(session);
+    this.emit('session-updated', enriched);
+    return sessionId === rootId ? enriched : this.enrichSession(this.sessions.get(sessionId));
+  }
   private nowMs(): number { return this.options.now ? this.options.now() : Date.now(); }
   private pruneOrganizeTimestamps(now = this.nowMs()): number[] {
     const cutoff = now - TITLE_ORGANIZE_RATE_LIMIT.windowMs;
@@ -1327,7 +1581,7 @@ export class CoreService extends EventEmitter {
       const waitSec = Math.max(1, Math.ceil((recent[0] + TITLE_ORGANIZE_RATE_LIMIT.windowMs - now) / 1000));
       throw new Error(`标题整理触发冷却限制：1 分钟内最多整理 ${TITLE_ORGANIZE_RATE_LIMIT.maxCalls} 次，请 ${waitSec} 秒后再试`);
     }
-    const allSessions = [...this.sessions.sessions.values()];
+    const allSessions = [...this.sessions.sessions.values()].map(s => this.enrichSession(s));
     const selected = this.titles.selectTargets(allSessions, request);
     if (selected.targets.length === 0) {
       return {
@@ -1366,7 +1620,7 @@ export class CoreService extends EventEmitter {
         });
       }
       for (const session of this.sessions.sessions.values()) {
-        const applied = this.titles.apply(session);
+        const applied = this.enrichSession(session);
         this.sessions.updateSessionRecord(applied);
         this.emit('session-updated', applied);
       }
@@ -1573,9 +1827,9 @@ export class CoreService extends EventEmitter {
     this.accounts.assertReady();
     const updated = await this.sessions.setSessionMode(sessionId, mode);
     this.approval.setSessionExecutionMode(sessionId, updated.executionMode);
-    return updated;
+    return this.enrichSession(updated);
   }
-  async setSessionEffort(sessionId: string, effort: AgentReasoningEffort) { this.accounts.assertReady(); return this.sessions.setSessionEffort(sessionId, effort); }
+  async setSessionEffort(sessionId: string, effort: AgentReasoningEffort) { this.accounts.assertReady(); return this.enrichSession(await this.sessions.setSessionEffort(sessionId, effort)); }
   async setSessionModel(sessionId: string, modelId: string) {
     this.accounts.assertReady();
     const session = await this.sessions.setSessionModel(sessionId, modelId);
@@ -1583,7 +1837,7 @@ export class CoreService extends EventEmitter {
     this.telemetry.clearSessionCheckpointLimit(sessionId, modelId);
     this.checkpointResolvedModel.delete(sessionId);
     this.syncSessionCheckpointWindow(sessionId);
-    return session;
+    return this.enrichSession(session);
   }
   async getSessionInspector(sessionId: string) { return this.inspector.get(sessionId); }
   async listWorkspaceFiles(cwd: string, query?: string) { return this.workspaceFiles.list(cwd, query); }

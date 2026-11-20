@@ -1,7 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowDown, FolderGit2, Info, Network, Plus, RotateCw, X } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ChevronLeft, ChevronRight, FolderGit2, GitBranch, Info, Network, Plus, RotateCw, X } from 'lucide-react';
 import {
   containsTransientStreamInterruption,
+  getMessageForkControl,
   stripTransientStreamInterruptions,
   type AcpModelOption,
   type AgentExecutionMode,
@@ -11,8 +12,10 @@ import {
   type ApprovalMode,
   type ApproveForMeConfig,
   type ChatMessageItem,
+  type ConversationTreeState,
   type GravityIconId,
   type ManagedSessionSummary,
+  type MessageForkControl,
   type PendingApprovalRequest,
   type SendPromptInput,
   type SwarmTopologyState,
@@ -61,6 +64,8 @@ export interface SessionPaneProps {
   approvalConfig: ApproveForMeConfig;
   defaultThoughtTrack: ThoughtDisplayTrack;
   telemetryDashboard: TelemetryDashboardSnapshot;
+  conversationTree?: ConversationTreeState;
+  switchingBranch?: boolean;
   swarmState?: SwarmTopologyState;
   scrollMemoryRef: React.MutableRefObject<Record<string, number>>;
   canTriggerDemoApproval: boolean;
@@ -69,6 +74,8 @@ export interface SessionPaneProps {
   onBindSlotSession: (slotIndex: number, sessionId: string) => void;
   onOpenNewSession: () => void;
   onReviseMessage?: (input: ReviseMessageInput) => Promise<void>;
+  onSwitchBranch?: (rootSessionId: string, targetBranchId: string) => void;
+  onOpenTreeInspector?: (sessionId: string) => void;
   onSendPrompt: (input: SendPromptInput) => Promise<void>;
   onCancelPrompt: (sessionId: string) => Promise<void>;
   onCompactContext: (sessionId: string) => Promise<void>;
@@ -111,7 +118,10 @@ function WelcomePane({
 }): React.ReactElement {
   const { dict } = useI18n();
   const icon = resolveGravityIconVariant(appIcon);
-  const recent = [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, compact ? 3 : 5);
+  const recent = [...sessions]
+    .filter((s) => !s.parentBranchId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, compact ? 3 : 5);
   return (
     <div className="pane" data-testid={`empty-pane-${slotIndex}`}>
       <div className={`welcome ${compact ? 'welcome-compact' : ''}`}>
@@ -134,7 +144,7 @@ function WelcomePane({
                 key={s.sessionId}
                 type="button"
                 className="recent-item"
-                onClick={() => onBindSlotSession(slotIndex, s.sessionId)}
+                onClick={() => onBindSlotSession(slotIndex, s.activeBranchId || s.sessionId)}
                 title={s.cwd}
                 data-testid={`recent-thread-${slotIndex}-${s.sessionId}`}
               >
@@ -172,6 +182,10 @@ function MessageTurn({
   turnStartedAt,
   onRevise,
   onContinueInterrupted,
+  forkControl,
+  switchingBranch,
+  onSwitchBranch,
+  onOpenTreeInspector,
   editRequest, latest,
   busy,
   onInspectDiff,
@@ -182,6 +196,10 @@ function MessageTurn({
   latest?: boolean; editRequest?: number;
   onRevise?: SessionPaneProps['onReviseMessage'];
   onContinueInterrupted?: () => void;
+  forkControl?: MessageForkControl | null;
+  switchingBranch?: boolean;
+  onSwitchBranch?: (rootSessionId: string, targetBranchId: string) => void;
+  onOpenTreeInspector?: (sessionId: string) => void;
   busy: boolean;
   onInspectDiff: (filePath: string) => void;
 }): React.ReactElement | null {
@@ -212,7 +230,58 @@ function MessageTurn({
         </div>
       </div>
     );
-    return onRevise ? <div className="editable-turn"><EditUserMessage message={message} editRequest={editRequest} latest={latest} busy={busy} submit={onRevise}>{body}</EditUserMessage></div> : body;
+    const branchBar = forkControl ? (
+      <div className="branch-switcher" data-testid={`branch-switcher-${message.id}`}>
+        <button
+          type="button"
+          className="branch-switch-btn"
+          disabled={busy || switchingBranch || !forkControl.prevBranchId}
+          onClick={() => forkControl.prevBranchId && onSwitchBranch?.(forkControl.rootSessionId, forkControl.prevBranchId)}
+          aria-label={locale === 'zh-CN' ? '上一个分支' : 'Previous branch'}
+          title={locale === 'zh-CN' ? '切换到上一个分支' : 'Switch to previous branch'}
+          data-testid={`branch-prev-${message.id}`}
+        >
+          <ChevronLeft size={12} />
+        </button>
+        <span className="branch-switch-counter" data-testid={`branch-counter-${message.id}`}>
+          {forkControl.currentIndex + 1} / {forkControl.totalCount}
+        </span>
+        <button
+          type="button"
+          className="branch-switch-btn"
+          disabled={busy || switchingBranch || !forkControl.nextBranchId}
+          onClick={() => forkControl.nextBranchId && onSwitchBranch?.(forkControl.rootSessionId, forkControl.nextBranchId)}
+          aria-label={locale === 'zh-CN' ? '下一个分支' : 'Next branch'}
+          title={locale === 'zh-CN' ? '切换到下一个分支' : 'Switch to next branch'}
+          data-testid={`branch-next-${message.id}`}
+        >
+          <ChevronRight size={12} />
+        </button>
+        {onOpenTreeInspector && (
+          <button
+            type="button"
+            className="branch-tree-jump-btn"
+            onClick={() => onOpenTreeInspector(message.sessionId)}
+            title={locale === 'zh-CN' ? '在右侧检视器查看完整分支树' : 'View full branch tree in right panel'}
+            data-testid={`branch-open-tree-${message.id}`}
+          >
+            <GitBranch size={11} />
+            <span>{locale === 'zh-CN' ? '分支树' : 'Tree'}</span>
+          </button>
+        )}
+      </div>
+    ) : null;
+    if (onRevise) {
+      return (
+        <div className="editable-turn">
+          <EditUserMessage message={message} editRequest={editRequest} latest={latest} busy={busy} submit={onRevise}>
+            {body}
+          </EditUserMessage>
+          {branchBar}
+        </div>
+      );
+    }
+    return branchBar ? <div className="editable-turn is-readonly">{body}{branchBar}</div> : body;
   }
 
   if (message.role === 'system') {
@@ -324,11 +393,15 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
     pendingApprovals,
     defaultThoughtTrack,
     telemetryDashboard,
+    conversationTree,
+    switchingBranch,
     swarmState,
     scrollMemoryRef,
     onFocusPane,
     onBindSlotSession,
     onSubmitApproval,
+    onSwitchBranch,
+    onOpenTreeInspector,
     onOpenSwarmInspector,
     onInspectDiffFile,
   } = props;
@@ -584,6 +657,23 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
           pendingApprovals={sessionApprovals.length}
           turnStartedAt={lastUserAt}
         />
+        {conversationTree && conversationTree.totalBranches > 1 && (
+          <button
+            type="button"
+            className="badge badge-branch"
+            style={{ cursor: 'pointer' }}
+            onClick={() => onOpenTreeInspector?.(session.sessionId)}
+            title={locale === 'zh-CN' ? '查看并切换对话分支树' : 'View and switch conversation branch tree'}
+            data-testid={`pane-branch-pill-${session.sessionId}`}
+          >
+            <GitBranch size={11} />
+            <span>
+              {locale === 'zh-CN'
+                ? `分支 ${Math.max(1, conversationTree.nodes.findIndex((n) => n.branchId === session.sessionId) + 1)}/${conversationTree.totalBranches}`
+                : `Branch ${Math.max(1, conversationTree.nodes.findIndex((n) => n.branchId === session.sessionId) + 1)}/${conversationTree.totalBranches}`}
+            </span>
+          </button>
+        )}
         {swarmState?.isActive && (
           <button
             type="button"
@@ -596,18 +686,24 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
             <span>{dict.swarmActivePill(swarmState.stats.total, swarmState.stats.working)}</span>
           </button>
         )}
-        {layoutMode !== 'single' && availableSessions.length > 1 && (
+        {layoutMode !== 'single' && availableSessions.filter((s) => !s.parentBranchId).length > 1 && (
           <select
             className="select-chip pane-switch"
             aria-label={dict.switchPaneSession}
             value={session.sessionId}
             onChange={(e) => onBindSlotSession(slotIndex, e.target.value)}
           >
-            {availableSessions.map((s) => (
-              <option key={s.sessionId} value={s.sessionId}>
-                {s.title}
-              </option>
-            ))}
+            {availableSessions
+              .filter((s) => !s.parentBranchId)
+              .map((s) => {
+                const currentRootId = session.rootSessionId || session.sessionId;
+                const optionValue = s.sessionId === currentRootId ? session.sessionId : (s.activeBranchId || s.sessionId);
+                return (
+                  <option key={s.sessionId} value={optionValue}>
+                    {s.title}
+                  </option>
+                );
+              })}
           </select>
         )}
       </header>
@@ -657,12 +753,20 @@ export function SessionPane(props: SessionPaneProps): React.ReactElement {
                 : undefined;
               if (linked) renderedApprovalIds.add(linked.requestId);
               const turnNotations = sessionNotations.filter((n) => n.messageId === msg.id);
+              const forkControl =
+                msg.role === 'user'
+                  ? getMessageForkControl(conversationTree, session.sessionId, messages, msg.id)
+                  : null;
               const turn = (
                 <ImageSessionContext.Provider value={session.sessionId}><ImageWorkspace.Provider value={session.cwd}><MessageTurn
                   message={msg}
                   latest={msg.id === lastUserId}
                   editRequest={editRequest.id === msg.id ? editRequest.seq : 0}
                   onRevise={session.readOnly ? undefined : props.onReviseMessage}
+                  forkControl={forkControl}
+                  switchingBranch={switchingBranch}
+                  onSwitchBranch={onSwitchBranch}
+                  onOpenTreeInspector={onOpenTreeInspector}
                   onContinueInterrupted={
                     session.readOnly
                       ? undefined

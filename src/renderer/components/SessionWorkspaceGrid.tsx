@@ -6,6 +6,7 @@ import { ResizeHandle } from './ResizeHandle';
 import type {
   ApprovalAuditEntry,
   ChatMessageItem,
+  ConversationTreeState,
   ManagedSessionSummary,
   SwarmTopologyState,
   WorkspaceLayoutState,
@@ -14,7 +15,7 @@ import { SessionPane, type SessionPaneProps } from './SessionPane';
 
 type SharedPaneProps = Omit<
   SessionPaneProps,
-  'slotIndex' | 'layoutMode' | 'isFocused' | 'session' | 'messages' | 'latestAudit' | 'swarmState'
+  'slotIndex' | 'layoutMode' | 'isFocused' | 'session' | 'messages' | 'latestAudit' | 'swarmState' | 'conversationTree'
 >;
 
 export interface SessionWorkspaceGridProps extends Omit<SharedPaneProps, 'availableSessions'> {
@@ -26,6 +27,7 @@ export interface SessionWorkspaceGridProps extends Omit<SharedPaneProps, 'availa
   messagesBySession: Record<string, ChatMessageItem[]>;
   auditLog: ApprovalAuditEntry[];
   swarmBySession: Record<string, SwarmTopologyState>;
+  treeByRoot?: Record<string, ConversationTreeState>;
   onCommitSplitRatio?: (ratio: number) => void;
 }
 
@@ -38,6 +40,7 @@ export function SessionWorkspaceGrid({
   auditLog,
   historyIds = [], renderHistory,
   swarmBySession,
+  treeByRoot,
   onCommitSplitRatio,
   ...paneProps
 }: SessionWorkspaceGridProps): React.ReactElement {
@@ -89,6 +92,7 @@ export function SessionWorkspaceGrid({
           messages={slot ? messagesBySession[slot.sessionId] ?? [] : []}
           latestAudit={slot ? auditLog.find((entry) => entry.sessionId === slot.sessionId) : undefined}
           swarmState={slot ? swarmBySession[slot.sessionId] : undefined}
+          conversationTree={slot && treeByRoot ? treeByRoot[slot.rootSessionId || slot.sessionId] : undefined}
         />}
         {split && idx === 0 && onCommitSplitRatio && (
           // 分隔条挂在左栏右缘，网格仍只有两个子节点。

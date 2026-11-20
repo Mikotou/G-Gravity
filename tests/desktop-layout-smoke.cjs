@@ -212,9 +212,9 @@ async function checkActivitySeam(page) {
     await page.goto(pathToFileURL(path.join(dir, 'index.html')).href + '?keyboard-workspace');
     const welcome = page.getByTestId('empty-pane-0');
     await welcome.getByRole('heading').waitFor();
-    // v0.1.5：一级页签 5 个（Diff 与 Files 合并为 Changes 下的二级视图），二级视图为 2 个页签。
+    // v0.2.3：一级页签 6 个（变更、Plan、Terminal、Context、分支树、Swarm），变更下二级视图为 2 个页签。
     const inspectorHead = page.getByTestId('right-inspector').locator('.inspector-head');
-    assert.equal(await inspectorHead.getByRole('tab').count(), 5);
+    assert.equal(await inspectorHead.getByRole('tab').count(), 6);
     assert.equal(await inspectorHead.getByRole('button').count(), 0);
     assert.equal(await page.getByTestId('right-inspector').locator('.inspector-subnav').getByRole('tab').count(), 2);
     await page.getByTestId('toggle-right-inspector-btn').press('Enter');
@@ -249,27 +249,40 @@ async function checkActivitySeam(page) {
     const saved = await page.evaluate(async ([a, b]) => Promise.all([a, b].map(async sid => (await window.fixtureBridge.getSessionMessages(sid))
       .filter(m => m.role === 'user').map(m => m.content))), [id, newId]);
     assert.deepEqual(saved, [['First keyboard message'], ['Edited keyboard message']]);
+    // v0.2.3: 左侧历史仅保留主对话条目并展示分支角标，可在消息内联切换器及右侧「分支树」间原地切换
+    assert.equal(await page.locator('[data-testid="sidebar-session-' + newId + '"]').count(), 0);
+    await page.getByTestId('sidebar-branch-count-' + id).waitFor();
+    assert.equal((await page.getByTestId('sidebar-branch-count-' + id).textContent()).trim(), '2');
+    await page.getByTestId('inspector-tab-tree').click();
+    await page.getByTestId('conversation-tree-panel').waitFor();
+    await page.getByTestId('tree-node-' + id).click();
+    await page.getByTestId('session-pane-' + id).waitFor();
+    await page.getByTestId('tree-node-' + newId).click();
+    await page.getByTestId('session-pane-' + newId).waitFor();
+
+    // 使用侧栏另一条独立会话测试双栏拖放、互换窗格与未发送草稿保留
+    const secondSessionId = 'sess-ui-theme';
     await page.getByTestId('layout-btn-split-2').press('Enter');
     const left = page.getByTestId('workspace-slot-0'), right = page.getByTestId('workspace-slot-1');
     await left.getByTestId('session-pane-' + newId).waitFor();
-    await page.getByTestId('sidebar-session-' + id).dragTo(right);
-    await right.getByTestId('session-pane-' + id).waitFor();
+    await page.getByTestId('sidebar-session-' + secondSessionId).dragTo(right);
+    await right.getByTestId('session-pane-' + secondSessionId).waitFor();
     await page.getByTestId('tab-item-' + newId).dragTo(right);
     await right.getByTestId('session-pane-' + newId).waitFor();
-    await left.getByTestId('session-pane-' + id).waitFor();
-    assert.ok(await page.getByTestId('tab-item-' + id).isVisible());
+    await left.getByTestId('session-pane-' + secondSessionId).waitFor();
+    assert.ok(await page.getByTestId('tab-item-' + secondSessionId).isVisible());
     assert.ok(await page.getByTestId('tab-item-' + newId).isVisible());
-    await type(left.getByTestId('composer-input-' + id), 'My unsent draft survives a move');
+    await type(left.getByTestId('composer-input-' + secondSessionId), 'My unsent draft survives a move');
     const historyId = 'ag-history:conv-cli-002';
     await page.getByTestId('history-item-' + historyId).dragTo(left);
     await left.getByTestId('readonly-history-view-' + historyId).waitFor();
     await right.getByTestId('session-pane-' + newId).waitFor();
-    assert.ok(await page.getByTestId('tab-item-' + id).isVisible());
+    assert.ok(await page.getByTestId('tab-item-' + secondSessionId).isVisible());
     await page.getByTestId('tab-close-' + historyId).press('Enter');
-    await left.getByTestId('session-pane-' + id).waitFor();
-    assert.equal(await left.getByTestId('composer-input-' + id).inputValue(), 'My unsent draft survives a move');
+    await left.getByTestId('session-pane-' + secondSessionId).waitFor();
+    assert.equal(await left.getByTestId('composer-input-' + secondSessionId).inputValue(), 'My unsent draft survives a move');
     console.log('Imported read-only history: sidebar drag into a pane, displaced tab retained, close restored the chat.');
-    console.log('Local keyboard workspace: new chat from welcome, edit and resend, native sidebar drag into right pane, then tab drag to swap panes.');
+    console.log('Local keyboard workspace: new chat from welcome, in-place branch tree switching, native sidebar drag into right pane, then tab drag to swap panes.');
     assert.deepEqual(errors, []);
     console.log('Chromium: stable thought typography and paragraph gaps ' + settled.map(p => p[7]).join('/') +
       'px; 3 viewport sizes, both message roles, image tray and zoom, previous-message editing, highlights, reload and combined send passed.');

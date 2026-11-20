@@ -1,5 +1,17 @@
 # G-Gravity 整体验收记录
 
+## 本机 Windows 版 v0.2.3（待发布）
+
+2026-11-20，Windows x64。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.3/Gravity.exe`，大小为 121,594,669 字节；目录版位于 `release/v0.2.3/win-unpacked/Gravity.exe`；源码压缩包位于 `release/v0.2.3/G-Gravity-v0.2.3-source.zip`（对应本地 `main` 分支，尚未推送 GitHub）。
+
+| 项目 | 验证结果 |
+| --- | --- |
+| Codex 风格原地对话分支树与左侧单主对话 | 新增共享树状分支契约与纯函数算法 `src/shared/conversation-tree.ts`（`getMessageForkControl` / `buildConversationTreeRenderRows`）及 Profile 隔离持久化存储 `ConversationTreeStore`（`conversation-trees-${profileId}.json`）。修改任意历史用户消息并重发时，左侧历史栏与欢迎页仅保留唯一主对话条目（不再产生重复会话或 `· 修订` 后缀），主对话行显示分支数角标（`⎇ N`）并实时同步活跃分支状态；重命名、置顶、归档与删除均自动级联同步至整棵对话树。 |
+| 保留历史回复、内联 `‹ 1 / N ›` 切换与多级嵌套分叉 | 通过跨分支稳定标识 `originMessageId` 与 `forkUserTurnIndex` 精确归组同一分叉点的所有修订版本，原回复完整保留永不删除；每条分叉用户消息下方自动展示内联分支切换器（`‹ 1 / N ›` + 「分支树」快捷跳转）。切回原分支或切至任意修订分支后均可继续发送后续提示并正常获得模型回复，亦可在修订后的回复之后继续编辑消息产生任意深度的嵌套子分支（N 叉树）；`switchConversationBranch` 在切换前自动释放同树旧活跃 ACP 槽位并恢复目标分支，满 4 路并行会话时仍严守 `MAX_PARALLEL_ACTIVE_SESSIONS = 4` 上限。 |
+| 右侧检视器专属「分支树 (Tree)」页面 | 在 `RightInspector` 新增第 6 个一级页签「分支树 / Tree」（含分支数角标）与专用组件 `ConversationTreePanel.tsx`：以拓扑缩进与连接轨线清晰呈现主对话、分叉轮次、同级序号、嵌套深度、当前活跃路径高亮、提示/回复摘要以及各分支实时 Context 占用，支持一键点击节点切换分支。 |
+| Context 窗口随分支切换实时同步 | 每条分支由独立 ACP 会话与独立 `TelemetryStore` 遥测状态支撑；切换分支时一次性原子同步 `messages`、`inspector`、`swarm`、`tree`、`layout` 与 `telemetry`，右侧 `Context` 窗口（含当前分支视角横幅）、Token 细分、费用构成与输入框 `ContextStatusBar` 立即随活跃分支实时切换，冷启动重启后整棵分支树与各分支 Context 均无损恢复。 |
+| 回归、布局与双包桌面冒烟 | 四组 TypeScript 类型检查（shared / main / renderer / tests）0 错误；38 个测试文件共 406 项自动化测试全部通过（1 项联机 smoke 跳过，含新增 `v023-conversation-tree.test.tsx` 6 项真实内核与 UI 全链路专项测试）；生产构建、`test:layout` Chromium 布局/动效/分支树交互冒烟、以及 `test:desktop` `release/v0.2.3/win-unpacked/Gravity.exe` 与 `release/v0.2.3/Gravity.exe` 双包启动验收全部通过。 |
+
 ## 已发布的 Windows / macOS 版 v0.2.2
 
 2026-11-20，Windows x64 & macOS (Apple Silicon `arm64` / Intel `x64`)。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.2/Gravity.exe`，大小为 121,573,222 字节；目录版位于 `release/v0.2.2/win-unpacked/Gravity.exe`；源码压缩包位于 `release/v0.2.2/G-Gravity-v0.2.2-source.zip`（对应 `main` 分支与 `v0.2.2` 标签，由 GitHub Actions `.github/workflows/release.yml` 自动产出 Windows + macOS `arm64`/`x64` `.dmg`/`.zip` Release）。

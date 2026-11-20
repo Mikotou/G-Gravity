@@ -64,7 +64,7 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
     {message.attachments?.map(a => <label key={a.id}><input type="checkbox" checked={attachments.includes(a.id)}
       disabled={pending || !canResendAttachment(a)} onChange={e => setAttachments(e.target.checked ? [...attachments, a.id] : attachments.filter(id => id !== a.id))} />
       {a.name}{!canResendAttachment(a) && (zh ? '（原文件不可用）' : ' (original unavailable)')}</label>)}
-    <small className="muted">{zh ? '从此处开始新的对话分支。原对话会保留，已有文件改动也会保留。' : 'Continue in a new branch from here. The original conversation and existing file changes are preserved.'}</small>
+    <small className="muted">{zh ? '从此处创建新分支。原回复与已有文件改动均会保留，可通过分支按钮或右侧「分支树」随时切换。' : 'Creates a new branch from here. Original replies and file changes are preserved — switch anytime via inline controls or the Tree tab.'}</small>
     {error && <div role="alert">{error}</div>}
     <div className="message-editor-actions">
       <button className="btn btn-sm" type="button" onClick={cancel} disabled={pending}>{zh ? '取消' : 'Cancel'}</button>

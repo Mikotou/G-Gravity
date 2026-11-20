@@ -36,6 +36,11 @@ import type {
   TitleOrganizeResult,
   WorkspaceLayoutState,
 } from './session-contract';
+import type {
+  ConversationTreeState,
+  SwitchConversationBranchInput,
+  SwitchConversationBranchResult,
+} from './conversation-tree';
 import type { SwarmTopologyState } from './swarm-contract';
 import type {
   ModelRateCard,
@@ -79,6 +84,8 @@ export const IPC_CHANNELS = {
   SESSION_ANSWER_QUESTION: 'gravity:session:answer-question',
   SESSION_CLOSE: 'gravity:session:close',
   SESSION_REVISE_MESSAGE: 'gravity:session:revise-message',
+  SESSION_GET_TREE: 'gravity:session:get-tree',
+  SESSION_SWITCH_BRANCH: 'gravity:session:switch-branch',
   SESSION_SEND_PROMPT: 'gravity:session:send-prompt',
   SESSION_CANCEL_PROMPT: 'gravity:session:cancel-prompt',
   SESSION_COMPACT_CONTEXT: 'gravity:session:compact-context',
@@ -131,6 +138,7 @@ export const IPC_CHANNELS = {
   EVENT_HISTORY_UPDATED: 'gravity:event:history-updated',
   EVENT_ACCOUNT_UPDATED: 'gravity:event:account-updated',
   EVENT_UPDATE_STATE: 'gravity:event:update-state',
+  EVENT_TREE_UPDATED: 'gravity:event:tree-updated',
 } as const;
 
 export interface AcpConnectionStatus {
@@ -284,6 +292,8 @@ export interface GravityDesktopBridge {
   getSessionInspector(sessionId: string): Promise<SessionInspectorData>;
   listWorkspaceFiles(cwd: string, query?: string): Promise<string[]>;
   reviseMessage(input: ReviseMessageInput): Promise<ManagedSessionSummary>;
+  getConversationTree(sessionId: string): Promise<ConversationTreeState>;
+  switchConversationBranch(input: SwitchConversationBranchInput): Promise<SwitchConversationBranchResult>;
   sendPrompt(input: SendPromptInput): Promise<void>;
   cancelPrompt(sessionId: string): Promise<void>;
   compactSessionContext(sessionId: string): Promise<void>;
@@ -341,6 +351,7 @@ export interface GravityDesktopBridge {
   ): () => void;
   onAccountUpdated(listener: (state: AccountsStateSnapshot) => void): () => void;
   onUpdateState(listener: (state: AppUpdateState) => void): () => void;
+  onTreeUpdated(listener: (tree: ConversationTreeState) => void): () => void;
 }
 
 /** 向后兼容类型别名 */

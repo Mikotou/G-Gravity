@@ -6,7 +6,7 @@ export function createCoreBridge(core: CoreService): AgyDesktopBridge {
   const methods = [
     'getBootstrap', 'updatePreferences', 'launchOfficialLogin', 'getConnectionStatus',
     'listSessions', 'createSession', 'resumeSession', 'manageSession', 'getAccountQuota', 'answerQuestion', 'closeSession', 'getSessionMessages',
-    'reviseMessage', 'sendPrompt', 'cancelPrompt', 'compactSessionContext', 'saveWorkspaceLayout',
+    'reviseMessage', 'getConversationTree', 'switchConversationBranch', 'sendPrompt', 'cancelPrompt', 'compactSessionContext', 'saveWorkspaceLayout',
     'renameSession', 'togglePinSession', 'organizeTitles', 'setApprovalMode',
     'updateApprovalConfig', 'submitApprovalDecision', 'listApprovalAudit', 'discoverExternalReviewerModels',
     'getTelemetryDashboard', 'getSwarmState',
@@ -26,7 +26,7 @@ export function createCoreBridge(core: CoreService): AgyDesktopBridge {
     onSessionUpdated: 'session-updated', onMessageUpserted: 'message-upserted',
     onApprovalRequested: 'approval-requested', onApprovalResolved: 'approval-resolved',
     onTelemetryUpdated: 'telemetry-updated', onSwarmUpdated: 'swarm-updated',
-    onInspectorUpdated: 'inspector-updated', onHistoryUpdated: 'history-updated', onAccountUpdated: 'account-updated', onUpdateState: 'update-state',
+    onInspectorUpdated: 'inspector-updated', onHistoryUpdated: 'history-updated', onAccountUpdated: 'account-updated', onUpdateState: 'update-state', onTreeUpdated: 'tree-updated',
   };
   for (const [method, event] of Object.entries(events)) result[method] = (listener: (...args: any[]) => void) => {
     core.on(event, listener); return () => { core.off(event, listener); };

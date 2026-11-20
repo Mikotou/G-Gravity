@@ -8,6 +8,7 @@ import {
   EyeOff,
   Folder,
   FolderKanban,
+  GitBranch,
   MoreHorizontal,
   PanelLeftClose,
   Pencil,
@@ -170,7 +171,48 @@ export function ProjectSidebar({
   }
 
   const q = search.trim().toLowerCase();
-  const openSet = new Set(openTabSessionIds);
+
+  // 将所有子分支折叠归属于主对话（rootSessionId），左侧栏只显示主对话并同步活跃分支状态。
+  const { sessionById, treeMetaByRoot, selectedRootId, openRootSet, archivedPrimary } = useMemo(() => {
+    const byId = new Map<string, ManagedSessionSummary>();
+    const metaByRoot = new Map<
+      string,
+      { branchCount: number; activeBranch?: ManagedSessionSummary; latestUpdatedAt: string; liveStatus: ManagedSessionSummary['status'] }
+    >();
+    for (const s of sessions) byId.set(s.sessionId, s);
+    for (const s of sessions) {
+      const rootId = s.rootSessionId || s.sessionId;
+      const entry = metaByRoot.get(rootId) || {
+        branchCount: 0,
+        activeBranch: undefined,
+        latestUpdatedAt: s.updatedAt,
+        liveStatus: s.status,
+      };
+      entry.branchCount += 1;
+      if (s.updatedAt > entry.latestUpdatedAt) entry.latestUpdatedAt = s.updatedAt;
+      if (s.status === 'waiting_approval' || (s.status === 'streaming' && entry.liveStatus !== 'waiting_approval')) {
+        entry.liveStatus = s.status;
+      } else if (s.status !== 'closed' && entry.liveStatus === 'closed') {
+        entry.liveStatus = s.status;
+      }
+      if (s.activeBranchId && byId.has(s.activeBranchId)) {
+        entry.activeBranch = byId.get(s.activeBranchId);
+      } else if (s.status !== 'closed' && !entry.activeBranch) {
+        entry.activeBranch = s;
+      }
+      metaByRoot.set(rootId, entry);
+    }
+    const selRoot = selectedSessionId ? (byId.get(selectedSessionId)?.rootSessionId || selectedSessionId) : null;
+    const openRoots = new Set(openTabSessionIds.map((id) => byId.get(id)?.rootSessionId || id));
+    const archived = sessions.filter((s) => Boolean(s.archivedAt) && !s.parentBranchId);
+    return {
+      sessionById: byId,
+      treeMetaByRoot: metaByRoot,
+      selectedRootId: selRoot,
+      openRootSet: openRoots,
+      archivedPrimary: archived,
+    };
+  }, [openTabSessionIds, selectedSessionId, sessions]);
 
   const projectByPath = useMemo(() => {
     const map = new Map<string, WorkspaceProjectConfig>();
@@ -196,6 +238,7 @@ export function ProjectSidebar({
 
     for (const s of sessions) {
       if (s.archivedAt) continue;
+      if (s.parentBranchId) continue;
       if (hideLegacyPollutionSessions && s.isLegacyApprovalPollution) continue;
       const rawKey = normalizeWorkspacePath(s.cwd || s.rawCwd || '');
       const matchedProj = projectByPath.get(rawKey.toLowerCase());
@@ -215,14 +258,18 @@ export function ProjectSidebar({
     }
 
     const entries = Array.from(map.entries()).map(([key, list]) => {
-      list.sort((a, b) => (a.pinned !== b.pinned ? (a.pinned ? -1 : 1) : b.updatedAt.localeCompare(a.updatedAt)));
+      const timeOf = (s: ManagedSessionSummary) => treeMetaByRoot.get(s.sessionId)?.latestUpdatedAt || s.updatedAt;
+      list.sort((a, b) => (a.pinned !== b.pinned ? (a.pinned ? -1 : 1) : timeOf(b).localeCompare(timeOf(a))));
       const proj = projectByPath.get(key.toLowerCase());
       return {
         key,
         list,
         project: proj,
         pinnedProject: Boolean(proj?.pinned),
-        latest: list.reduce((acc, s) => (s.updatedAt > acc ? s.updatedAt : acc), ''),
+        latest: list.reduce((acc, s) => {
+          const ts = timeOf(s);
+          return ts > acc ? ts : acc;
+        }, ''),
       };
     });
     entries.sort((a, b) => {
@@ -230,7 +277,7 @@ export function ProjectSidebar({
       return b.latest.localeCompare(a.latest);
     });
     return entries;
-  }, [sessions, hideLegacyPollutionSessions, q, projects, projectByPath]);
+  }, [sessions, hideLegacyPollutionSessions, q, projects, projectByPath, treeMetaByRoot]);
 
   const history = useMemo(() => {
     const liveIds = new Set(sessions.map((s) => s.sessionId));
@@ -508,7 +555,15 @@ export function ProjectSidebar({
 
                 {!isCollapsed &&
                   list.map((s) => {
-                    const selected = !selectedHistoryId && selectedSessionId === s.sessionId;
+                    const meta = treeMetaByRoot.get(s.sessionId);
+                    const branchCount = Math.max(s.branchCount || 1, meta?.branchCount || 1);
+                    const liveStatus = meta?.liveStatus || s.status;
+                    const displayUpdatedAt = meta?.latestUpdatedAt || s.updatedAt;
+                    const activeTarget =
+                      (s.activeBranchId && sessionById.get(s.activeBranchId)) ||
+                      meta?.activeBranch ||
+                      s;
+                    const selected = !selectedHistoryId && selectedRootId === s.sessionId;
                     const editing = editingId === s.sessionId;
                     return (
                       <div
@@ -516,30 +571,30 @@ export function ProjectSidebar({
                         className={[
                           'thread-item',
                           selected ? 'is-selected' : '',
-                          openSet.has(s.sessionId) && s.status !== 'closed' ? 'is-open' : '',
+                          openRootSet.has(s.sessionId) && liveStatus !== 'closed' ? 'is-open' : '',
                           s.isLegacyApprovalPollution ? 'is-dim' : '',
                         ]
                           .filter(Boolean)
                           .join(' ')}
                         onClick={() => {
-                          if (!editing) onSelectSession(s);
+                          if (!editing) onSelectSession(activeTarget);
                         }}
                         role="group"
                         draggable={!editing}
-                        onDragStart={(e) => startSessionDrag(e.dataTransfer, s.sessionId)}
+                        onDragStart={(e) => startSessionDrag(e.dataTransfer, activeTarget.sessionId)}
                         tabIndex={0}
                         aria-label={s.title}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && e.target === e.currentTarget && !editing) {
                             e.preventDefault();
-                            onSelectSession(s);
+                            onSelectSession(activeTarget);
                           }
                         }}
                         title={s.title}
                         data-testid={`sidebar-session-${s.sessionId}`}
                       >
-                        {s.status === 'streaming' || s.status === 'waiting_approval' || s.status === 'error' ? (
-                          <span className={`status-dot is-${s.status}`} />
+                        {liveStatus === 'streaming' || liveStatus === 'waiting_approval' || liveStatus === 'error' ? (
+                          <span className={`status-dot is-${liveStatus}`} />
                         ) : null}
                         <div className="thread-main">
                           {editing ? (
@@ -578,8 +633,18 @@ export function ProjectSidebar({
                             </span>
                           )}
                         </div>
+                        {branchCount > 1 && !editing && (
+                          <span
+                            className="thread-branch-pill"
+                            title={zh ? `包含 ${branchCount} 个对话分支` : `${branchCount} conversation branches`}
+                            data-testid={`sidebar-branch-count-${s.sessionId}`}
+                          >
+                            <GitBranch size={10} />
+                            <span>{branchCount}</span>
+                          </span>
+                        )}
                         {s.pinned && !editing && <Pin size={11} className="thread-pin" />}
-                        {!editing && <span className="thread-time">{formatRelativeTime(s.updatedAt, dict)}</span>}
+                        {!editing && <span className="thread-time">{formatRelativeTime(displayUpdatedAt, dict)}</span>}
                         {!editing && (
                           <div className="thread-actions" onClick={(e) => e.stopPropagation()}>
                             <button
@@ -648,13 +713,13 @@ export function ProjectSidebar({
             );
           })}
 
-          {sessions.some((s) => s.archivedAt) && (
+          {archivedPrimary.length > 0 && (
             <details className="archived-sessions" data-testid="archived-sessions">
               <summary>
-                <Archive size={12} /> {zh ? '已归档' : 'Archived'} · {sessions.filter((s) => s.archivedAt).length}
+                <Archive size={12} /> {zh ? '已归档' : 'Archived'} · {archivedPrimary.length}
               </summary>
-              {sessions
-                .filter((s) => s.archivedAt && (!q || (s.title + ' ' + s.cwd).toLowerCase().includes(q)))
+              {archivedPrimary
+                .filter((s) => !q || (s.title + ' ' + s.cwd).toLowerCase().includes(q))
                 .map((s) => (
                   <button
                     type="button"

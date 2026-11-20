@@ -24,6 +24,7 @@ import {
   type ChatMessageItem,
   type ClientLocale,
   type ClientPreferences,
+  type ConversationTreeState,
   type GravityIconId,
   type ImportedHistorySessionRecord,
   type ManagedSessionSummary,
@@ -193,6 +194,9 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     refreshedAt: '',
   });
   const [swarmBySession, setSwarmBySession] = useState<Record<string, SwarmTopologyState>>({});
+  const [treeByRoot, setTreeByRoot] = useState<Record<string, ConversationTreeState>>({});
+  const [switchingBranch, setSwitchingBranch] = useState(false);
+  const switchingBranchRef = useRef(false);
   const [updateState, setUpdateState] = useState<AppUpdateState>({
     status: 'idle',
     currentVersion: APP_BRAND.version,
@@ -335,17 +339,18 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         setPluginsSnap(boot.plugins);
         if (boot.updateState) setUpdateState(boot.updateState);
 
-        // 启动快照只列会话摘要。并行拉取已打开标签的消息、检视数据和协作看板，按会话号放回各自的缓存。
+        // 启动快照只列会话摘要。并行拉取已打开标签的消息、检视数据、分支树和协作看板，按会话号放回各自的缓存。
         const [audits, freshTele, ...bundles] = await Promise.all([
           bridge.listApprovalAudit(50),
           bridge.getTelemetryDashboard().catch(() => boot.telemetry),
           ...openSessions.map(async (s) => {
-            const [msgs, insp, sw] = await Promise.all([
+            const [msgs, insp, sw, tree] = await Promise.all([
               bridge.getSessionMessages(s.sessionId),
               bridge.getSessionInspector(s.sessionId),
               bridge.getSwarmState(s.sessionId),
+              bridge.getConversationTree(s.sessionId).catch(() => undefined),
             ]);
-            return { id: s.sessionId, msgs, insp, sw };
+            return { id: s.sessionId, msgs, insp, sw, tree };
           }),
         ]);
         if (cancelled) return;
@@ -354,6 +359,11 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         setMessagesBySession(Object.fromEntries(bundles.map((b) => [b.id, b.msgs])));
         setInspectorBySession(Object.fromEntries(bundles.map((b) => [b.id, b.insp])));
         setSwarmBySession(Object.fromEntries(bundles.map((b) => [b.id, b.sw])));
+        const initialTrees: Record<string, ConversationTreeState> = {};
+        for (const b of bundles) {
+          if (b.tree) initialTrees[b.tree.rootSessionId] = b.tree;
+        }
+        setTreeByRoot(initialTrees);
         setReady(true);
       } catch (err) {
         if (!cancelled) setBootstrapError(formatActionError(err, UI_DICTIONARIES['zh-CN']));
@@ -407,6 +417,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       bridge.onHistoryUpdated((records) => setImportedHistory(records)),
       bridge.onAccountUpdated((state) => setAccounts(state)),
       bridge.onUpdateState((next) => setUpdateState(next)),
+      bridge.onTreeUpdated((tree) => setTreeByRoot((prev) => ({ ...prev, [tree.rootSessionId]: tree }))),
     ];
     // 注销窗口事件的同时，让尚未完成的启动请求识别卸载状态，避免继续应用其最终结果。
     return () => {
@@ -456,15 +467,17 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
   const loadSessionData = useCallback(async (sessionId: string) => {
     const bridge = getDesktopBridge();
-    const [msgs, insp, sw, teleSnap] = await Promise.all([
+    const [msgs, insp, sw, teleSnap, tree] = await Promise.all([
       bridge.getSessionMessages(sessionId),
       bridge.getSessionInspector(sessionId),
       bridge.getSwarmState(sessionId),
       bridge.getTelemetryDashboard(),
+      bridge.getConversationTree(sessionId).catch(() => undefined),
     ]);
     setMessagesBySession((prev) => ({ ...prev, [sessionId]: msgs }));
     setInspectorBySession((prev) => ({ ...prev, [sessionId]: insp }));
     setSwarmBySession((prev) => ({ ...prev, [sessionId]: sw }));
+    if (tree) setTreeByRoot((prev) => ({ ...prev, [tree.rootSessionId]: tree }));
     setTelemetry(teleSnap);
   }, []);
 
@@ -608,15 +621,20 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   const handleManageSession = async (id: string, action: SessionAction) => {
     const result = await getDesktopBridge().manageSession(id, action);
     setSessions(result.sessions);
+    layoutRef.current = result.layout;
     setLayout(result.layout);
-    if (action !== 'restore' && focusedSessionId === id) setFocusedSessionId(result.layout.activePrimarySessionId);
+    const remainingIds = new Set(result.sessions.map(s => s.sessionId));
+    if (action !== 'restore' && focusedSessionId && (!remainingIds.has(focusedSessionId) || result.sessions.find(s => s.sessionId === focusedSessionId)?.archivedAt)) {
+      setFocusedSessionId(result.layout.activePrimarySessionId);
+    }
     if (action === 'delete') {
       composerDrafts.delete(id);
       clearAnnotationDraft(accounts.activeProfileId, id);
       try { localStorage.removeItem('gravity.terminal.read.' + accounts.activeProfileId + '.' + id); } catch { /* optional storage */ }
-      setMessagesBySession(prev => { const next = { ...prev }; delete next[id]; return next; });
-      setInspectorBySession(prev => { const next = { ...prev }; delete next[id]; return next; });
-      setSwarmBySession(prev => { const next = { ...prev }; delete next[id]; return next; });
+      setMessagesBySession(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => remainingIds.has(k))));
+      setInspectorBySession(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => remainingIds.has(k))));
+      setSwarmBySession(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => remainingIds.has(k))));
+      setTreeByRoot(prev => Object.fromEntries(Object.entries(prev).filter(([rootId]) => remainingIds.has(rootId))));
     }
   };
 
@@ -760,11 +778,60 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     const branch = await bridge.reviseMessage(input);
     replaceSession(branch);
     await loadSessionData(branch.sessionId);
-    const replace = (id: string | null) => id === input.sessionId ? branch.sessionId : id;
-    setLayout(await bridge.saveWorkspaceLayout({ openTabSessionIds: layout.openTabSessionIds.map(id => replace(id)!),
-      activePrimarySessionId: replace(layout.activePrimarySessionId), splitSecondarySessionId: replace(layout.splitSecondarySessionId) }));
+    const curLayout = layoutRef.current;
+    const replace = (id: string | null) => (id === input.sessionId ? branch.sessionId : id);
+    const nextTabs = [...new Set(curLayout.openTabSessionIds.map((id) => replace(id)!))];
+    const savedLayout = await bridge.saveWorkspaceLayout({
+      openTabSessionIds: nextTabs,
+      activePrimarySessionId: replace(curLayout.activePrimarySessionId),
+      splitSecondarySessionId: replace(curLayout.splitSecondarySessionId),
+    });
+    layoutRef.current = savedLayout;
+    setLayout(savedLayout);
     setFocusedSessionId(branch.sessionId);
-  }, [layout, loadSessionData, replaceSession]);
+  }, [loadSessionData, replaceSession]);
+
+  const handleSwitchBranch = useCallback(
+    async (rootSessionId: string, targetBranchId: string) => {
+      if (switchingBranchRef.current) return;
+      switchingBranchRef.current = true;
+      setSwitchingBranch(true);
+      try {
+        const res = await getDesktopBridge().switchConversationBranch({
+          sessionId: rootSessionId,
+          targetBranchId,
+        });
+        setSessions((prev) => {
+          const exists = prev.some((s) => s.sessionId === res.session.sessionId);
+          const updated = prev.map((s) => {
+            if (s.sessionId === res.session.sessionId) return res.session;
+            if (res.previousBranchId && s.sessionId === res.previousBranchId) {
+              return { ...s, status: 'closed' as const, activeBranchId: res.session.sessionId };
+            }
+            if ((s.rootSessionId || s.sessionId) === res.tree.rootSessionId) {
+              return { ...s, activeBranchId: res.session.sessionId, branchCount: res.tree.totalBranches };
+            }
+            return s;
+          });
+          return exists ? updated : [res.session, ...updated];
+        });
+        setMessagesBySession((prev) => ({ ...prev, [res.session.sessionId]: res.messages }));
+        setInspectorBySession((prev) => ({ ...prev, [res.session.sessionId]: res.inspector }));
+        setSwarmBySession((prev) => ({ ...prev, [res.session.sessionId]: res.swarm }));
+        setTreeByRoot((prev) => ({ ...prev, [res.tree.rootSessionId]: res.tree }));
+        setTelemetry(res.telemetry);
+        layoutRef.current = res.layout;
+        setLayout(res.layout);
+        setFocusedSessionId(res.session.sessionId);
+      } catch (err) {
+        reportError(err);
+      } finally {
+        switchingBranchRef.current = false;
+        setSwitchingBranch(false);
+      }
+    },
+    [reportError]
+  );
   const handleSendPrompt = useCallback(async (input: SendPromptInput) => getDesktopBridge().sendPrompt(input), []);
   const handleCancelPrompt = useCallback(async (id: string) => getDesktopBridge().cancelPrompt(id), []);
   const handleCompact = useCallback(async (id: string) => getDesktopBridge().compactSessionContext(id), []);
@@ -1060,6 +1127,10 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   const stageSessionId =
     focusedSessionId ?? layout.activePrimarySessionId ?? layout.openTabSessionIds[0] ?? null;
   const stageHistoryId = stageSessionId && historyIds.includes(stageSessionId) ? stageSessionId : null;
+  const stageSession = stageSessionId && !stageHistoryId ? sessions.find((s) => s.sessionId === stageSessionId) : undefined;
+  const stageRootId = stageSession ? (stageSession.rootSessionId || stageSession.sessionId) : null;
+  const stageTree = stageRootId ? treeByRoot[stageRootId] : undefined;
+  const stageSessionBusy = stageSession?.status === 'streaming' || stageSession?.status === 'waiting_approval';
   const activeCount = sessions.filter((s) => !s.archivedAt && s.status !== 'closed').length;
 
   return (
@@ -1145,6 +1216,8 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
               defaultThoughtTrack={preferences.defaultThoughtTrack}
               telemetryDashboard={telemetry}
               swarmBySession={swarmBySession}
+              treeByRoot={treeByRoot}
+              switchingBranch={switchingBranch}
               onCommitSplitRatio={(r) => void patchLayout({ splitRatio: r })}
               scrollMemoryRef={scrollMemoryRef}
               canTriggerDemoApproval={!isUsingNativeDesktopBridge()}
@@ -1153,6 +1226,8 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
               onBindSlotSession={(slot, id) => void handleBindSlotSession(slot, id)}
               onOpenNewSession={() => setNewSessionOpen(true)}
               onReviseMessage={handleReviseMessage}
+              onSwitchBranch={(rootId, targetId) => void handleSwitchBranch(rootId, targetId)}
+              onOpenTreeInspector={(id) => openInspectorAt(id, 'tree')}
               onSendPrompt={handleSendPrompt}
               onCancelPrompt={handleCancelPrompt}
               onCompactContext={handleCompact}
@@ -1194,6 +1269,10 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           inspectorData={stageSessionId ? inspectorBySession[stageSessionId] : undefined}
           sessionMessages={stageSessionId ? messagesBySession[stageSessionId] ?? [] : []}
           telemetry={telemetry}
+          conversationTree={stageTree}
+          sessionBusy={stageSessionBusy}
+          switchingBranch={switchingBranch}
+          onSwitchBranch={(rootId, targetId) => void handleSwitchBranch(rootId, targetId)}
           swarmTopology={stageSessionId ? swarmBySession[stageSessionId] : undefined}
           onSelectTab={(tab) => void patchLayout({ activeInspectorTab: tab })}
           onFocusDiffFile={(fp) => setFocusedDiffFile(fp)}

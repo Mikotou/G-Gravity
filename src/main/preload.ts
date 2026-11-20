@@ -42,6 +42,8 @@ const bridge: AgyDesktopBridge = {
   listWorkspaceFiles: (cwd, query) => invoke('gravity:session:list-workspace-files', cwd, query),
   getSessionMessages: id => invoke('gravity:session:get-messages', id),
   reviseMessage: input => invoke('gravity:session:revise-message', input),
+  getConversationTree: id => invoke('gravity:session:get-tree', id),
+  switchConversationBranch: input => invoke('gravity:session:switch-branch', input),
   sendPrompt: input => invoke('gravity:session:send-prompt', input),
   cancelPrompt: id => invoke('gravity:session:cancel-prompt', id),
   compactSessionContext: id => invoke('gravity:session:compact-context', id),
@@ -74,6 +76,7 @@ const bridge: AgyDesktopBridge = {
   onTelemetryUpdated: listener => subscribe('gravity:event:telemetry-updated', listener),
   onSwarmUpdated: listener => subscribe('gravity:event:swarm-updated', listener),
   onUpdateState: listener => subscribe('gravity:event:update-state', listener),
+  onTreeUpdated: listener => subscribe('gravity:event:tree-updated', listener),
 };
 // 两个全局名称指向同一组冻结的方法，旧版渲染代码也可以调用当前接口。
 contextBridge.exposeInMainWorld('agyDesktop', Object.freeze(bridge));

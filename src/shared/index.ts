@@ -8,6 +8,7 @@ export * from './approval-contract';
 export * from './telemetry-contract';
 export * from './swarm-contract';
 export * from './session-contract';
+export * from './conversation-tree';
 export * from './theme-i18n-contract';
 export * from './plugins-contract';
 export * from './accounts-history-contract';
