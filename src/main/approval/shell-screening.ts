@@ -451,6 +451,218 @@ export function isMutatingShellCommand(command: string): boolean {
   );
 }
 
+export function isShellToolName(toolName: string): boolean {
+  return /^(?:execute|run_command|bash|zsh|sh|powershell|pwsh|command|terminal)$/i.test((toolName || '').trim());
+}
+
+const READ_ONLY_QUERY_META_KEYS = new Set([
+  'query',
+  'queries',
+  'q',
+  'toolSummary',
+  'description',
+  'chunk_id',
+  'context',
+  'scope',
+  'source',
+  'api',
+  'language',
+  'limit',
+  'cursor',
+  'offset',
+  'page',
+  'pageSize',
+  'domain',
+  'url',
+  'uri',
+  'ServerName',
+  'Uri',
+  'kind',
+  'filter',
+  'sort',
+  'topic',
+  'search',
+  'keyword',
+  'keywords',
+  'maxResults',
+  'max_results',
+  'topK',
+  'top_k',
+  'include',
+  'format',
+  'version',
+]);
+
+const READ_ONLY_QUERY_PRIMARY_KEYS = new Set([
+  'query',
+  'queries',
+  'q',
+  'chunk_id',
+  'url',
+  'uri',
+  'Uri',
+  'domain',
+  'search',
+  'keyword',
+  'keywords',
+  'topic',
+  'ServerName',
+]);
+
+const MUTATING_OR_PAYLOAD_KEYS = new Set([
+  'Content',
+  'content',
+  'Replacement',
+  'newText',
+  'new_string',
+  'Target',
+  'oldText',
+  'old_string',
+  'CommandLine',
+  'command',
+  'cmd',
+  'Overwrite',
+  'Append',
+  'body',
+  'payload',
+  'data',
+  'sql',
+  'script',
+  'code',
+  'patch',
+  'diff',
+  'edits',
+  'files',
+  'env',
+  'method',
+]);
+
+const KNOWN_READ_ONLY_LOOKUP_TOOLS = new Set([
+  'search_web',
+  'web_search',
+  'read_url_content',
+  'fetch_url',
+  'search_marketplace',
+  'list_plugin_accounts',
+  'list_resources',
+  'read_resource',
+  'gemini_search_docs',
+  'gemini_get_doc',
+  'think',
+]);
+
+const READ_ONLY_TOOL_VERB_RE =
+  /(?:^|[_:/.-])(?:search|list|get|read|view|find|query|describe|inspect|lookup|fetch|docs?|status|info|check|schema|browse)(?:$|[_:/.-])/i;
+
+const MUTATING_OR_PRIVILEGED_VERB_RE =
+  /(?:^|[_:/.-])(?:write|edit|update|create|add|set|put|post|patch|delete|remove|rm|drop|destroy|truncate|wipe|purge|clear|reset|kill|terminate|exec|execute|run|eval|shell|bash|powershell|cmd|send|submit|publish|deploy|push|upload|transfer|pay|purchase|charge|withdraw|auth|login|grant|revoke|chmod|chown|sudo|su|install|uninstall)(?:$|[_:/.-])/i;
+
+const DESTRUCTIVE_OR_PRIVILEGED_TOOL_RE =
+  /(?:^|[_:/.-])(?:delete|remove|rm|drop|destroy|truncate|wipe|purge|kill|terminate|exec|execute|run_command|shell|bash|powershell|sudo|su|chmod|chown|format|shutdown|reboot|pay|purchase|transfer|charge|withdraw|grant|revoke)(?:$|[_:/.-])/i;
+
+/** 检测参数中的 url/uri/domain 是否指向内网/本机/云元数据/文件协议或带凭据地址（防 SSRF）。 */
+export function hasUnsafeNetworkOrLocalUrl(rawObj?: Record<string, unknown>): boolean {
+  if (!rawObj) return false;
+  for (const key of ['url', 'uri', 'Uri', 'URL', 'domain', 'endpoint', 'href']) {
+    const val = rawObj[key];
+    if (typeof val !== 'string' || !val.trim()) continue;
+    const trimmed = val.trim();
+    if (/^(?:file|ftp|gopher|dict|ldap|smb|javascript|data):/i.test(trimmed)) return true;
+    const probe = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    try {
+      const parsed = new URL(probe);
+      if (parsed.username || parsed.password) return true;
+      const host = parsed.hostname.toLowerCase();
+      if (
+        host === 'localhost' ||
+        host === '0.0.0.0' ||
+        host === '::1' ||
+        host === '[::1]' ||
+        host.endsWith('.localhost') ||
+        host.endsWith('.local') ||
+        host.endsWith('.internal') ||
+        /^127\./.test(host) ||
+        /^10\./.test(host) ||
+        /^169\.254\./.test(host) ||
+        /^192\.168\./.test(host) ||
+        /^172\.(?:1[6-9]|2\d|3[01])\./.test(host) ||
+        /^fc[0-9a-f]{2}:|^fd[0-9a-f]{2}:|^fe80:/i.test(host)
+      ) {
+        return true;
+      }
+    } catch {
+      // 非标准 URL 文本，若显式包含敏感内网 IP 仍拦截
+      if (/(?:127\.0\.0\.1|169\.254\.169\.254|localhost|0\.0\.0\.0)/i.test(trimmed)) return true;
+    }
+  }
+  return false;
+}
+
+export function isDestructiveOrPrivilegedToolName(toolName: string): boolean {
+  return DESTRUCTIVE_OR_PRIVILEGED_TOOL_RE.test((toolName || '').trim());
+}
+
+/**
+ * 识别纯只读文档/网络/MCP 查询类工具（不含文件写入、不含 Shell 命令、不含 SSRF 内网地址、不含敏感凭据）：
+ * - 命中内置只读检索工具名（如 search_web、gemini_search_docs、list_resources 等）；
+ * - 或 MCP / 扩展工具名明确为只读查询动词且不含任何修改/执行/外发字段；
+ * - 或 ACP `kind` 为 `other`/`fetch` 且参数字段 100% 属于只读查询元数据白名单（如 `{ query, toolSummary }`）。
+ */
+export function isPureReadOnlyLookupTool(
+  toolName: string,
+  declaredKind: string,
+  rawObj?: Record<string, unknown>
+): boolean {
+  const kind = (declaredKind || '').toLowerCase();
+  if (['edit', 'delete', 'move', 'execute'].includes(kind)) return false;
+  if (isShellToolName(toolName)) return false;
+  if (hasUnsafeNetworkOrLocalUrl(rawObj)) return false;
+  if (rawObj && Object.keys(rawObj).some((k) => MUTATING_OR_PAYLOAD_KEYS.has(k))) return false;
+
+  const trimmed = (toolName || '').trim();
+  const lower = trimmed.toLowerCase();
+  if (MUTATING_OR_PRIVILEGED_VERB_RE.test(trimmed)) return false;
+
+  if (KNOWN_READ_ONLY_LOOKUP_TOOLS.has(lower)) return true;
+
+  // call_mcp_tool 显式调用：仅当目标 ToolName 为明确只读动词且不含写入载荷时视作只读
+  if (lower === 'call_mcp_tool' && rawObj && typeof rawObj.ToolName === 'string') {
+    const targetTool = rawObj.ToolName.trim();
+    const argsObj =
+      rawObj.Arguments && typeof rawObj.Arguments === 'object' && !Array.isArray(rawObj.Arguments)
+        ? (rawObj.Arguments as Record<string, unknown>)
+        : undefined;
+    if (hasUnsafeNetworkOrLocalUrl(argsObj)) return false;
+    if (argsObj && Object.keys(argsObj).some((k) => MUTATING_OR_PAYLOAD_KEYS.has(k))) return false;
+    return READ_ONLY_TOOL_VERB_RE.test(targetTool) && !MUTATING_OR_PRIVILEGED_VERB_RE.test(targetTool);
+  }
+
+  // 含 mcp_ 前缀或结构化工具名且明确匹配只读动词
+  if (
+    (lower.startsWith('mcp_') || kind === 'other' || kind === 'fetch') &&
+    trimmed &&
+    lower !== 'other' &&
+    lower !== 'fetch' &&
+    READ_ONLY_TOOL_VERB_RE.test(trimmed)
+  ) {
+    return true;
+  }
+
+  // 当 ACP 只下发 kind="other"/"fetch" 而未附带工具名时，检查参数是否严格仅含只读查询键
+  if ((kind === 'other' || kind === 'fetch') && rawObj) {
+    const keys = Object.keys(rawObj);
+    if (
+      keys.length > 0 &&
+      keys.some((k) => READ_ONLY_QUERY_PRIMARY_KEYS.has(k)) &&
+      keys.every((k) => READ_ONLY_QUERY_META_KEYS.has(k))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * 为转交人工审理或审计的命令/工具调用生成清晰的人类可读「代码明确用意」与「作用范围」说明。
  */
@@ -530,6 +742,60 @@ export function describeOperationIntent(
     };
   }
 
+  // 1.5 删除 / 移动类工具的精确用意解析
+  if (/^(?:delete|remove|rm|unlink|move|rename)/i.test(toolName)) {
+    const targetDisplay = filePath || command.replace(/^\S+\s+/, '').trim() || cwd;
+    const summaryPart = declaredSummary ? `（任务目标：${declaredSummary}）` : '';
+    return {
+      meaning: `删除或移动文件/资源 \`${targetDisplay}\`${summaryPart}`,
+      target: `目标路径：${targetDisplay}`,
+    };
+  }
+
+  // 1.8 非 Shell 结构化 / MCP / 文档与网络检索工具（绝不再误报为“在终端执行命令”）
+  const hasShellCommandField =
+    typeof rec.command === 'string' || typeof rec.cmd === 'string' || typeof rec.CommandLine === 'string';
+  if (!isShellToolName(toolName) && !hasShellCommandField) {
+    const queryVal =
+      typeof rec.query === 'string'
+        ? rec.query
+        : typeof rec.q === 'string'
+          ? rec.q
+          : Array.isArray(rec.queries)
+            ? rec.queries.map(String).join(', ')
+            : typeof rec.chunk_id === 'string'
+              ? rec.chunk_id
+              : typeof rec.url === 'string'
+                ? rec.url
+                : typeof rec.uri === 'string'
+                  ? rec.uri
+                  : typeof rec.Uri === 'string'
+                    ? rec.Uri
+                    : typeof rec.domain === 'string'
+                      ? rec.domain
+                      : '';
+    const summaryPrefix = declaredSummary ? `【任务目标：${declaredSummary}】` : '';
+    if (isPureReadOnlyLookupTool(toolName, toolName === 'other' || toolName === 'fetch' ? toolName : 'other', rec)) {
+      const paramHint = queryVal ? `（检索目标：\`${queryVal.slice(0, 72)}\`）` : '';
+      return {
+        meaning: `${summaryPrefix}只读调用文档/检索工具 \`${toolName}\`${paramHint}，不修改本地文件`,
+        target: `工具目标：${queryVal ? queryVal.slice(0, 120) : toolName}`,
+      };
+    }
+    const argPairs = Object.entries(rec)
+      .filter(([k]) => k !== 'toolSummary' && k !== 'description' && k !== 'toolName')
+      .slice(0, 3)
+      .map(([k, v]) => {
+        const str = typeof v === 'string' ? v : JSON.stringify(v);
+        return `${k}=${(str || '').slice(0, 40)}`;
+      });
+    const argHint = argPairs.length > 0 ? `（参数：${argPairs.join(', ')}）` : '';
+    return {
+      meaning: `${summaryPrefix}调用外部/扩展工具 \`${toolName}\`${argHint}`,
+      target: `扩展工具：${toolName} · 工作目录：${cwd}`,
+    };
+  }
+
   // 2. Shell / PowerShell / 脚本命令的分步语义解析
   const parts = segments.length > 0 ? segments : [command.trim()];
   const stepDescriptions: string[] = [];
@@ -573,8 +839,10 @@ export function describeOperationIntent(
       stepDescriptions.push(`${prefixGuard}运行本地脚本文件（${clean.slice(0, 72)}）`);
     } else if (/^(?:get-childitem|gci|dir|ls|get-item|gi|test-path|resolve-path|select-string|sls|rg|grep|findstr|cat|get-content|gc|type|head|tail|wc|stat)\b/i.test(clean)) {
       stepDescriptions.push(`${prefixGuard}只读枚举本地目录或检索文本内容（${clean.slice(0, 64)}）`);
-    } else if (/^(?:select-object|select|where-object|where|sort-object|sort|group-object|measure-object|format-table|format-list|out-string)\b/i.test(clean)) {
-      stepDescriptions.push(`${prefixGuard}在内存中筛选/格式化输出字段（${clean.slice(0, 56)}）`);
+    } else if (/^\$[A-Za-z_]\w*\s*=\s*(?:get-content|gc|get-childitem|gci|import-csv|select-string|get-item)\b/i.test(clean)) {
+      stepDescriptions.push(`${prefixGuard}只读读取本地文件并存入变量用于内存分析（${clean.slice(0, 64)}）`);
+    } else if (/^(?:select-object|select|where-object|where|sort-object|sort|group-object|measure-object|format-table|format-list|out-string|foreach-object|convertfrom-json|convertto-json|write-host|write-output)\b/i.test(clean)) {
+      stepDescriptions.push(`${prefixGuard}在内存中筛选/统计/格式化输出字段（${clean.slice(0, 56)}）`);
     } else if (/^(?:get-process|gps|stop-process|taskkill|kill)\b/i.test(clean)) {
       stepDescriptions.push(lower.startsWith('get-process') || lower === 'gps' ? '只读查询当前运行中的系统进程状态' : `终止指定系统进程（${clean.slice(0, 60)}）`);
     } else {
@@ -639,6 +907,49 @@ const READ_ONLY_MEMORY_FILTERS = new Set([
   'format-table', 'ft', 'format-list', 'fl', 'out-string',
   'convertto-json', 'convertfrom-json', 'get-unique', 'compare-object',
 ]);
+
+const PWSH_READ_ONLY_ANALYSIS_CMDLET_RE =
+  /\b(?:get-content|get-childitem|select-string|import-csv|convertfrom-json|where-object|foreach-object|select-object|group-object|measure-object|sort-object|format-table|format-list|write-host|test-path|get-item|get-process)\b/i;
+
+const DANGEROUS_SCRIPT_API_RE =
+  /\b(?:invoke-expression|iex|invoke-webrequest|iwr|invoke-restmethod|irm|invoke-command|icm|start-process|saps|remove-item|set-content|add-content|out-file|new-item|move-item|copy-item|clear-content|stop-process|set-acl|set-executionpolicy|add-type|register-scheduledtask|start-bitstransfer|downloadstring|downloadfile|webclient|httpclient|net\.sockets|process\]::start|file\]::write|file\]::delete|file\]::move|file\]::copy|directory\]::delete)\b/i;
+
+/**
+ * 判断一段包含 PowerShell 变量/脚本块的命令是否属于「纯只读内存分析脚本候选」，
+ * 仅在用户显式启用了外部 AI 复核模型且处于 `hybrid` 模式时允许送交外部模型复审；
+ * 严格排除一切写入、重定向、反引号、POSIX 命令替换 `$(cmd)`、高危可执行命令、目录穿越与敏感目标。
+ */
+export function isReadOnlyScriptReviewCandidate(command: string): boolean {
+  if (!command || !command.trim() || command.length > 16_384) return false;
+  if (isMutatingShellCommand(command) || sensitiveTarget(command)) return false;
+
+  const unquoted = command.replace(/'[^']*'/g, "''").replace(/"(?:\\.|[^"\\])*"/g, '""');
+  // 排除反引号、文件输入/输出重定向、PowerShell `&` 动态调用运算符、跨级 `..` 及注册表驱动器
+  if (/`/.test(unquoted)) return false;
+  if (/(?:^|[^-=!<>])(?:[12*&]?)>{1,2}(?!\s*&)|(?:^|[^-=!<>])<(?![=<])/.test(unquoted)) return false;
+  if (/(?:^|[\s;|{(=])&(?!&)/.test(unquoted)) return false;
+  if (/(?:^|[\\/\s"'])\.\.(?:[\\/\s"']|$)|hk(?:lm|cu|cr|u|cc):/i.test(command)) return false;
+
+  // 允许 PowerShell 子表达式 `$($var...)`，但严格拒绝 POSIX 命令替换 `$(whoami)` 等非变量调用
+  for (const m of command.matchAll(/\$\(/g)) {
+    const after = command.slice((m.index || 0) + 2).trimStart();
+    if (!after.startsWith('$')) return false;
+  }
+
+  // 必须至少包含一个明确的 PowerShell 只读分析 cmdlet
+  if (!PWSH_READ_ONLY_ANALYSIS_CMDLET_RE.test(unquoted)) return false;
+  // 禁止脚本内任意位置出现高危 cmdlet / .NET 写入或网络执行 API
+  if (DANGEROUS_SCRIPT_API_RE.test(unquoted)) return false;
+
+  // 扫描每个语句/管道/脚本块起始位置的可执行名，命中 HIGH_RISK_EXECUTABLES 一律拒绝降级
+  const cmdPosRe = /(?:^|[;|{\r\n]|&&|=\s*)\s*([A-Za-z][A-Za-z0-9_.-]*)/g;
+  for (const m of unquoted.matchAll(cmdPosRe)) {
+    const exec = (m[1] || '').toLowerCase().replace(/\.exe$/i, '');
+    if (HIGH_RISK_EXECUTABLES.has(exec)) return false;
+  }
+
+  return true;
+}
 
 /** 对一个已分词的片段判定风险。输入是否来自管道会影响允许的类型，结论与可记忆前缀一并返回。 */
 function classifySegment(segTokens: string[], isPipeSink: boolean): SegmentTier {

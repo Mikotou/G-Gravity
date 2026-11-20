@@ -507,10 +507,38 @@ export function ApprovalsPanel({
               双层零配额守卫架构（严格遵循合规红线 #6）
             </div>
             <div className="muted">
-              • <strong>第一层（默认内置、0ms、零额度消耗）</strong>：本地多段 AST 语义引擎 + 密集命令批量守卫，自动放行只读文件/代码检索、多级管道筛选（如 <code>Get-ChildItem | Select-String</code>）及会话托管下的低风险构建测试命令。<br />
-              • <strong>第二层（可选开启）</strong>：对接本机 <code>127.0.0.1:11434</code> Ollama 或自备公开 API Key 模型复核灰区命令（绝不调用隐藏订阅会话；API Key 通过系统级加密存储——Windows DPAPI / macOS 钥匙串——保存密文，配置文件永不留明文，版本更新与重启自动保留）。
+              • <strong>第一层（默认内置、0ms、零额度消耗）</strong>：本地多段 AST 语义引擎 + 密集命令批量守卫，自动放行只读文件/代码/文档/MCP 查询、多级只读管道（如 <code>Get-ChildItem | Select-String</code>）及会话托管下的低风险构建测试与 <code>accept-edits</code> 工作区源码编辑。<br />
+              • <strong>第二层（可选开启）</strong>：对接本机 <code>127.0.0.1:11434</code> Ollama 或自备公开 API Key 模型，在 <strong>AI 代审</strong>模式下自动复核灰区开发命令、非只读 MCP 工具、默认模式源码编辑及只读 PowerShell 分析脚本（结果按 TTL 缓存；超时或失败严格回退人工并显示具体原因；API Key 经系统级加密存储，更新自动保留）。
             </div>
           </div>
+          {reviewer.enabled && config.mode !== 'hybrid' && (
+            <div
+              className="settings-group"
+              data-testid="reviewer-mode-mismatch-banner"
+              style={{
+                padding: '9px 14px',
+                fontSize: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                borderColor: 'color-mix(in srgb, var(--status-warning) 45%, transparent)',
+                background: 'color-mix(in srgb, var(--status-warning) 10%, transparent)',
+              }}
+            >
+              <span style={{ flex: 1 }}>
+                当前审批模式为「<strong>{dict.approvalModes[config.mode].label}</strong>」，外部模型复核仅在「<strong>{dict.approvalModes.hybrid.label}</strong>」模式下触发。
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={busy}
+                onClick={() => void run(() => onUpdateConfig({ mode: 'hybrid' }))}
+                data-testid="switch-to-hybrid-mode-btn"
+              >
+                切至{dict.approvalModes.hybrid.label}
+              </button>
+            </div>
+          )}
           <div className="settings-group">
             <div className="setting-row" title={dict.reviewerComplianceBanner}>
               <span className="setting-label">{dict.reviewerEnableToggle}</span>
@@ -871,7 +899,15 @@ export function ApprovalsPanel({
                   ),
                 };
                 setReviewer(sanitized);
-                void run(() => onUpdateConfig({ cacheTtlHours, externalReviewer: sanitized }));
+                const shouldAutoUpgradeMode =
+                  sanitized.enabled && !config.externalReviewer.enabled && config.mode !== 'hybrid';
+                void run(() =>
+                  onUpdateConfig({
+                    ...(shouldAutoUpgradeMode ? { mode: 'hybrid' as const } : {}),
+                    cacheTtlHours,
+                    externalReviewer: sanitized,
+                  })
+                );
               }}
               data-testid="save-reviewer-config-btn"
             >

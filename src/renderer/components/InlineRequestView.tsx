@@ -38,6 +38,9 @@ export function InlineRequestView({
   const options = buildClaudeStyleApprovalOptions(request, locale);
   const prefixCandidate = request.commandPrefix?.trim() || undefined;
   const canonicalTool = getCanonicalToolName(request.toolName);
+  const isShellCommand =
+    /^(?:execute|run_command|bash|zsh|sh|powershell|pwsh|command|terminal)$/i.test(request.toolName) ||
+    canonicalTool === 'Bash';
 
   const riskBadgeClass =
     request.riskLevel === 'high' || request.riskLevel === 'critical'
@@ -52,8 +55,23 @@ export function InlineRequestView({
       : request.screeningSource === 'regex-rule'
         ? dict.screeningRegexRule
         : request.screeningSource === 'ai-reviewer-fallback'
-          ? dict.screeningAiFallback
+          ? request.aiSuggestion?.isError
+            ? dict.screeningAiFallback
+            : locale === 'zh-CN'
+              ? '外部 AI 复核转人工'
+              : 'External AI requested review'
           : dict.screeningManualMode;
+
+  const aiBannerMeta = (() => {
+    const ai = request.aiSuggestion;
+    if (!ai) return '';
+    const parts: string[] = [];
+    if (ai.model) parts.push(ai.model);
+    if (typeof ai.latencyMs === 'number' && Number.isFinite(ai.latencyMs) && ai.latencyMs > 0) {
+      parts.push(`${Math.round(ai.latencyMs)}ms`);
+    }
+    return parts.join(' · ');
+  })();
 
   async function handleAction(submission: ApprovalDecisionSubmission): Promise<void> {
     if (submitting) return;
@@ -138,11 +156,13 @@ export function InlineRequestView({
       </div>
 
       <div className="request-cmd" data-testid={`request-cmd-${request.requestId}`}>
-        <span className="request-cmd-prompt">$</span>
+        <span className={`request-cmd-prompt${isShellCommand ? '' : ' is-tool'}`}>
+          {isShellCommand ? '$' : '›'}
+        </span>
         <code>{request.commandOrSummary}</code>
       </div>
 
-      {/* 一级只展示用意一句话；作用范围、转交原因、AI 说明等二级信息收进“详情”。 */}
+      {/* 一级展示用意一句话；外部复核结论/异常直接可见，作用范围与规则来源收进“详情”。 */}
       <details className="request-intent-box" data-testid={`request-explanation-${request.requestId}`}>
         <summary className="request-intent-row" data-testid={`request-code-intent-${request.requestId}`}>
           <span className="request-intent-main">{request.explanation.meaning}</span>
@@ -163,15 +183,6 @@ export function InlineRequestView({
             )}
             <span className="muted">{screeningLabel}</span>
           </div>
-          {request.aiSuggestion?.reason && (
-            <div className="request-ai-reason" data-testid={`request-ai-reason-${request.requestId}`}>
-              <Sparkles size={11} />
-              <span>
-                {locale === 'zh-CN' ? 'AI 代审说明：' : 'AI Review Note: '}
-                {request.aiSuggestion.reason}
-              </span>
-            </div>
-          )}
           {!prefixCandidate && (
             <div className="request-warn" data-testid={`prefix-disabled-reason-${request.requestId}`}>
               <AlertTriangle size={12} />
@@ -180,6 +191,44 @@ export function InlineRequestView({
           )}
         </div>
       </details>
+
+      {request.aiSuggestion?.reason && (
+        <div
+          className={`request-ai-reason request-ai-banner${
+            request.aiSuggestion.isError
+              ? ' is-error'
+              : request.aiSuggestion.recommended === 'deny'
+                ? ' is-deny'
+                : ''
+          }`}
+          data-testid={`request-ai-reason-${request.requestId}`}
+        >
+          {request.aiSuggestion.isError ? (
+            <AlertTriangle size={12} />
+          ) : request.aiSuggestion.recommended === 'deny' ? (
+            <ShieldAlert size={12} />
+          ) : (
+            <Sparkles size={12} />
+          )}
+          <span className="request-ai-banner-text">
+            <strong>
+              {request.aiSuggestion.isError
+                ? locale === 'zh-CN'
+                  ? 'AI 代审异常：'
+                  : 'AI Review Error: '
+                : request.aiSuggestion.recommended === 'deny'
+                  ? locale === 'zh-CN'
+                    ? 'AI 代审建议拒绝：'
+                    : 'AI Review Deny: '
+                  : locale === 'zh-CN'
+                    ? 'AI 代审说明：'
+                    : 'AI Review Note: '}
+            </strong>
+            {request.aiSuggestion.reason}
+          </span>
+          {aiBannerMeta && <span className="request-ai-banner-meta mono">{aiBannerMeta}</span>}
+        </div>
+      )}
 
       {actionError && (
         <div role="alert" className="alert" data-testid={`request-error-${request.requestId}`}>

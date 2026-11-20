@@ -205,6 +205,8 @@ export interface PendingApprovalRequest {
     recommended: 'approve' | 'ask' | 'deny';
     reason: string;
     latencyMs: number;
+    model?: string;
+    isError?: boolean;
   };
 }
 

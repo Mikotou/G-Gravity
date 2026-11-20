@@ -2,14 +2,15 @@
 
 ## 本机 Windows 版 v0.2.2（本地构建，未推送）
 
-2026-11-20，Windows x64。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.2/Gravity.exe`，大小为 121,558,579 字节；目录版位于 `release/v0.2.2/win-unpacked/Gravity.exe`；源码压缩包位于 `release/v0.2.2/G-Gravity-v0.2.2-source.zip`（仅本地提交，未推送至 GitHub）。
+2026-11-20，Windows x64。产品名为 Gravity。本机 Windows 便携版位于 `release/v0.2.2/Gravity.exe`，大小为 121,559,708 字节；目录版位于 `release/v0.2.2/win-unpacked/Gravity.exe`；源码压缩包位于 `release/v0.2.2/G-Gravity-v0.2.2-source.zip`（仅本地提交，未推送至 GitHub）。
 
 | 项目 | 验证结果 |
 | --- | --- |
+| Approve for me 全链路审批逻辑修复（无外部复核 + 有外部复核双轨适配） | 修复 ACP `kind: 'other' / 'fetch'` 吞掉真实工具名的问题（优先解析 `title` 与 MCP `ServerName/ToolName`），并为非 Shell/MCP/文档检索工具新增结构化意图解析（不再误报「在终端执行命令」或显示假 `$` 提示符）；纯只读文档/网络/MCP 检索工具与纯查询元数据载荷在 `hybrid`/`rules-only` 下 0ms 自动放行（同时拦截内网/元数据 SSRF 地址）；非只读且非破坏性 MCP 工具降入 `grey_zone`（`medium`）并授予 `tool:<id>` 会话前缀（无外部复核时可一键按工具名记忆，有外部复核时真实送交模型复审）；已开启外部复核时自动放行 `accept-edits`/`auto` 模式下的当前工作区编辑并将只读 PowerShell 分析脚本送交外部模型复审；修复缓存键包含 `toolCallId` 导致 24h 缓存失效的 Bug；外部复核透传结构化 `ReviewContext`、容错解析 JSON、卡片直接外露展示复核说明/异常与模型耗时，且设置页开启外部复核时自动提示/切至 `AI 代审` 模式。 |
 | 外部复核服务端模型与思考强度发现 | 新增 `discoverExternalModels()` 与 IPC `gravity:approval:discover-models`：用户在设置页填入公开 API Key（或切换本机 Ollama）后自动防抖并支持手动查询服务端允许使用的模型列表与思考强度（Gemini `/v1beta/models`、OpenAI `/v1/models`、Ollama `/api/tags`），下拉选择模型时动态筛选可用思考强度（`auto / off / minimal / low / medium / high`），同时保留自定义模型 ID 入口。 |
 | 默认参数与多代模型兼容 | 外部复核默认参数统一升级为 `timeoutMs = 8000`、`maxOutputTokens = 4096`、`thinkingLevel = 'auto'`、`cacheTtlHours = 24` 且均支持在设置页自由调整；Gemini 3/4 自动下发 `thinkingConfig.thinkingLevel`、Gemini 2.5 自动下发 `thinkingConfig.thinkingBudget`（避免 400 报错）；启用 `responseMimeType: 'application/json'`，过滤 `part.thought` 片段，遇到 `MAX_TOKENS` 截断或非 200 状态码时透出脱敏错误说明。 |
 | 跨版本更新与重启配置无损保留 | 外部复核 API Key 接入 Electron `safeStorage`（Windows DPAPI / macOS 钥匙串）以密文独立存于 `reviewer-secret.enc`（`approval-config.json` 保持零明文），更新重启自动恢复启用态与密钥并平滑迁移旧版 `reasoningEffort`；核心配置写入增加短暂占用重试与 `.bak` 影子备份自动恢复；自定义配色支持启动单键容错恢复、编辑自动防抖/关闭兜底落盘及主题页一键回切；检视器悬浮态、输入框高度、思考默认折叠与窗口位置尺寸全部持久化至稳定的 `userData` JSON，不再因便携版解包临时路径变化而丢失。 |
-| 回归、布局与双包桌面冒烟 | 四组 TypeScript 类型检查（shared / main / renderer / tests）0 错误；36 个测试文件共 389 项自动化测试全部通过（1 项联机 smoke 跳过）；生产构建、`test:layout` Chromium 三视口/动效/排版冒烟、以及 `test:desktop` `release/v0.2.2/win-unpacked/Gravity.exe` 与 `release/v0.2.2/Gravity.exe` 双包启动验收全部通过。 |
+| 回归、布局与双包桌面冒烟 | 四组 TypeScript 类型检查（shared / main / renderer / tests）0 错误；37 个测试文件共 396 项自动化测试全部通过（1 项联机 smoke 跳过，含新增 `v022-approve-overhaul.test.tsx` 7 项双轨回归）；生产构建、`test:layout` Chromium 三视口/动效/排版冒烟、以及 `test:desktop` `release/v0.2.2/win-unpacked/Gravity.exe` 与 `release/v0.2.2/Gravity.exe` 双包启动验收全部通过。 |
 
 ## 已发布的 Windows / macOS 版 v0.2.1
 

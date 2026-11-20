@@ -13,8 +13,13 @@ import {
 import { ClientStore } from '../storage/client-store';
 import {
   compileSafePattern,
+  hasUnsafeNetworkOrLocalUrl,
   inspectGeminiPathPolicy,
+  isDestructiveOrPrivilegedToolName,
   isMutatingShellCommand,
+  isPureReadOnlyLookupTool,
+  isReadOnlyScriptReviewCandidate,
+  isShellToolName,
   screenCommand,
   sensitiveTarget,
 } from './shell-screening';
@@ -49,6 +54,7 @@ interface Pending {
   card: PendingApprovalRequest;
   params: AcpRequestPermissionParams;
   screen: DeterministicScreeningResult;
+  withinWorkspace: boolean;
   resolve: (result: AcpRequestPermissionResult) => void;
   reject: (error: unknown) => void;
   started: number;
@@ -109,6 +115,50 @@ function collectCandidatePaths(rawObj?: Record<string, unknown>, locations?: Arr
     }
   }
   return paths;
+}
+
+/** 提取真实工具标识：当 ACP 仅标注笼统的 other/fetch 时优先使用 title 或 MCP Server/Tool 名，避免丢失工具身份。 */
+function resolveToolName(params: AcpRequestPermissionParams, rawObj?: Record<string, unknown>): string {
+  if (rawObj && typeof rawObj.toolName === 'string' && rawObj.toolName.trim()) {
+    return rawObj.toolName.trim();
+  }
+  const declaredKind = (params.toolCall.kind || '').trim().toLowerCase();
+  const rawTitle = (params.toolCall.title || '').trim();
+  if (!declaredKind || declaredKind === 'other' || declaredKind === 'fetch') {
+    if (
+      rawObj &&
+      typeof rawObj.ServerName === 'string' &&
+      rawObj.ServerName.trim() &&
+      typeof rawObj.ToolName === 'string' &&
+      rawObj.ToolName.trim()
+    ) {
+      return `mcp_${rawObj.ServerName.trim()}_${rawObj.ToolName.trim()}`;
+    }
+    if (rawTitle && rawTitle.toLowerCase() !== 'other' && rawTitle.toLowerCase() !== 'fetch') {
+      return rawTitle;
+    }
+    return declaredKind || '未知工具';
+  }
+  return params.toolCall.kind || rawTitle || '未知工具';
+}
+
+/** 为明确的非 Shell 扩展工具构造安全的会话前缀；匿名 other 或自然语言标题不授予宽泛前缀。 */
+function buildSafeToolPrefix(toolName: string, declaredKind: string, isReadOnlyLookup: boolean): string | undefined {
+  const trimmed = (toolName || '').trim();
+  const lower = trimmed.toLowerCase();
+  if (
+    trimmed &&
+    lower !== 'other' &&
+    lower !== 'fetch' &&
+    lower !== '未知工具' &&
+    /^[a-zA-Z0-9._:/-]{2,80}$/.test(trimmed)
+  ) {
+    return `tool:${trimmed}`;
+  }
+  if (isReadOnlyLookup) {
+    return declaredKind === 'fetch' ? 'fetch_read' : 'search_docs';
+  }
+  return undefined;
 }
 
 /** 将一次 ACP 权限询问转换为本地待审请求。自动规则、复审和用户选择都经 finish 回答同一个协议请求。 */
@@ -275,10 +325,19 @@ export class ApprovalEngine extends EventEmitter {
     return this.options.store.lines<ApprovalAuditEntry>('audit.jsonl', Math.max(1, Math.min(limit, 1000))).reverse();
   }
 
-  /** 把会话、目录、原始工具调用和审批配置一并计入缓存键，限制已有结论可以复用的范围。 */
+  /** 把会话、目录、去除单次 toolCallId 的工具参数和审批配置一并计入缓存键，限制已有结论可复用的范围并确保同类请求真实命中缓存。 */
   private key(item: Pending): string {
+    const { kind, title, rawInput, locations } = item.params.toolCall;
     return createHash('sha256')
-      .update(JSON.stringify([item.card.sessionId, item.card.cwd, item.card.toolName, item.params.toolCall, this.config]))
+      .update(
+        JSON.stringify([
+          item.card.sessionId,
+          item.card.cwd,
+          item.card.toolName,
+          { kind, title, rawInput, locations },
+          this.config,
+        ])
+      )
       .digest('hex');
   }
 
@@ -290,10 +349,8 @@ export class ApprovalEngine extends EventEmitter {
     const raw = params.toolCall.rawInput;
     const rawObj = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
     const declaredKind = (params.toolCall.kind || '').toLowerCase();
-    const toolName =
-      rawObj && typeof rawObj.toolName === 'string'
-        ? rawObj.toolName
-        : params.toolCall.kind || params.toolCall.title || '未知工具';
+    const rawTitle = (params.toolCall.title || '').trim();
+    const toolName = resolveToolName(params, rawObj);
 
     // 同时兼容标准 command/cmd 与官方 agy acp 的 PascalCase CommandLine / Path / Query
     const command =
@@ -339,22 +396,37 @@ export class ApprovalEngine extends EventEmitter {
             toolName
           )));
 
+    const isPureReadOnlyWebOrMcpTool =
+      !isPureReadOrSearchTool && !hasMutationFields && isPureReadOnlyLookupTool(toolName, declaredKind, rawObj);
+
     const isEditOrWriteTool =
-      Boolean(rawObj) &&
-      (declaredKind === 'edit' || /^(edit|edit_file|replace|write|write_file|create_file)$/i.test(toolName));
+      declaredKind === 'edit' ||
+      (Boolean(rawObj) && /^(edit|edit_file|replace|write|write_file|create_file)$/i.test(toolName));
 
     const isDeleteOrMoveTool =
       declaredKind === 'delete' ||
       declaredKind === 'move' ||
       /^(delete|remove|rm|unlink|move|rename)/i.test(toolName);
 
-    const commandKind = /^(execute|run_command|bash|zsh|sh|powershell|command|terminal)$/i.test(toolName);
+    const commandKind = declaredKind === 'execute' || isShellToolName(toolName);
+    const customCwd =
+      rawObj && (rawObj.cwd ?? rawObj.Cwd ?? rawObj.DirectoryPath ?? rawObj.WorkingDirectory);
+    const hasOutOfScopeCwd =
+      typeof customCwd === 'string' && customCwd.trim() !== '' && !isPathWithinWorkspace(customCwd, cwd);
+    const hasOutOfScopeLocations = Boolean(
+      params.toolCall.locations?.some((loc) => !loc?.path || !isPathWithinWorkspace(loc.path, cwd))
+    );
     const geminiPolicy = inspectGeminiPathPolicy(rawSerialized, candidatePaths, cwd);
     const isMutatingToolOperation =
       isEditOrWriteTool ||
       isDeleteOrMoveTool ||
       (hasMutationFields && !commandKind) ||
       (commandKind && isMutatingShellCommand(command));
+
+    let withinWorkspace =
+      !hasOutOfScopeCwd &&
+      !hasOutOfScopeLocations &&
+      candidatePaths.every((p) => isPathWithinWorkspace(p, cwd));
 
     if (
       sensitiveTarget(rawSerialized) ||
@@ -363,6 +435,7 @@ export class ApprovalEngine extends EventEmitter {
     ) {
       screening.verdict = 'deny';
       screening.riskLevel = 'critical';
+      screening.commandPrefix = undefined;
       screening.explanation.risk =
         geminiPolicy.tier === 'forbidden' && geminiPolicy.reason
           ? geminiPolicy.reason
@@ -401,6 +474,18 @@ export class ApprovalEngine extends EventEmitter {
                 ? '纯只读查阅 .gemini 用户自定义插件/技能/规则/日志，不含凭据'
                 : '纯只读文件/代码检索操作，不含敏感凭据路径，已安全放行';
         }
+      } else if (isPureReadOnlyWebOrMcpTool) {
+        if (hasOutOfScopeLocations || hasOutOfScopeCwd) {
+          screening.verdict = 'force_ask';
+          screening.riskLevel = 'high';
+          screening.commandPrefix = undefined;
+          screening.explanation.risk = '只读工具携带工作区外路径参数，已转交人工确认';
+        } else if (!screening.matchedRule || screening.verdict !== 'force_ask') {
+          screening.verdict = 'auto_approve';
+          screening.riskLevel = 'safe';
+          screening.commandPrefix = buildSafeToolPrefix(toolName, declaredKind, true);
+          screening.explanation.risk = '纯只读文档/网络/MCP 检索查询操作，不含写入或凭据访问，已安全放行';
+        }
       } else if (isEditOrWriteTool) {
         const primaryTarget = candidatePaths[0] || '';
         const allWithinWorkspace =
@@ -408,20 +493,27 @@ export class ApprovalEngine extends EventEmitter {
           candidatePaths.every((p) => isPathWithinWorkspace(p, cwd)) &&
           !candidatePaths.some((p) => /(?:^|[\\/])\.git(?:[\\/]|$)/i.test(p)) &&
           !candidatePaths.some((p) => /\.(?:exe|bat|cmd|ps1|vbs|vbe|wsf|wsh|msi|dll|sys|reg|sh|bash|zsh|command|pkg|dmg|app|dylib|plist)$/i.test(p));
+        withinWorkspace = allWithinWorkspace;
 
         if (allWithinWorkspace && (!screening.matchedRule || screening.verdict !== 'force_ask')) {
           screening.verdict = 'grey_zone';
           screening.riskLevel = 'medium';
-          screening.commandPrefix = /^(write|write_file|create_file)$/i.test(toolName)
-            ? 'write_file (当前工作区)'
-            : 'edit_file (当前工作区)';
-          screening.explanation.risk = '修改当前工作区内的源码/文档文件，支持本会话前缀放行或 AI 代审托管';
+          const isWriteOp =
+            /^(write|write_file|create_file)$/i.test(toolName) || /^(write|write_file|create_file)$/i.test(rawTitle);
+          screening.commandPrefix = isWriteOp ? 'write_file (当前工作区)' : 'edit_file (当前工作区)';
+          screening.explanation.risk = '修改当前工作区内的源码/文档文件，支持外部 AI 复核、本会话前缀放行或 Approve for me 托管';
         } else {
           screening.verdict = 'force_ask';
+          screening.riskLevel = 'high';
           screening.commandPrefix = undefined;
           screening.explanation.risk = '涉及跨工作区文件写入、可执行脚本或缺少明确路径，已解析代码用意并转交人工确认';
         }
-      } else {
+      } else if (isDeleteOrMoveTool) {
+        screening.verdict = 'force_ask';
+        screening.riskLevel = 'high';
+        screening.commandPrefix = undefined;
+        screening.explanation.risk = '涉及删除或移动文件/资源，必须人工确认';
+      } else if (commandKind) {
         const explicitCommand =
           typeof raw === 'string' ||
           Boolean(
@@ -447,18 +539,56 @@ export class ApprovalEngine extends EventEmitter {
           'timeoutMs',
         ]);
         const extraFields = Boolean(rawObj && Object.keys(rawObj).some((key) => !allowedMetaKeys.has(key)));
-        const customCwd =
-          rawObj && (rawObj.cwd ?? rawObj.Cwd ?? rawObj.DirectoryPath ?? rawObj.WorkingDirectory);
-        const hasOutOfScopeCwd =
-          typeof customCwd === 'string' && customCwd.trim() !== '' && !isPathWithinWorkspace(customCwd, cwd);
-        const hasOutOfScopeLocations = Boolean(
-          params.toolCall.locations?.some((loc) => !loc?.path || !isPathWithinWorkspace(loc.path, cwd))
-        );
 
-        if (!commandKind || !explicitCommand || extraFields || hasOutOfScopeCwd || hasOutOfScopeLocations) {
+        if (!explicitCommand || extraFields || hasOutOfScopeCwd || hasOutOfScopeLocations) {
           screening.verdict = 'force_ask';
+          screening.riskLevel = 'high';
           screening.commandPrefix = undefined;
-          screening.explanation.risk = '涉及文件写入/编辑或特殊工具参数，已解析上方明确代码用意并转交人工确认';
+          screening.explanation.risk = '终端命令包含附加文件参数或跨工作区目录，已转交人工确认';
+        } else if (
+          screening.verdict === 'force_ask' &&
+          !screening.matchedRule &&
+          this.config.mode === 'hybrid' &&
+          this.config.externalReviewer.enabled &&
+          isReadOnlyScriptReviewCandidate(command)
+        ) {
+          // 已开启外部独立复核模型时，将非破坏、无重定向的纯只读 PowerShell 分析脚本交由外部模型复审
+          screening.verdict = 'grey_zone';
+          screening.riskLevel = 'medium';
+          screening.commandPrefix = undefined;
+          screening.explanation.risk = '只读 PowerShell 统计/分析脚本含变量或脚本块，已交由外部独立模型复核安全性';
+        }
+      } else {
+        // 非 Shell 结构化扩展 / MCP / other / fetch 工具：区分高危/SSRF 与常规灰区，避免误标为高风险终端命令并打通外部复核
+        const hasHiddenShellCmd = Boolean(
+          rawObj &&
+            (typeof rawObj.command === 'string' ||
+              typeof rawObj.cmd === 'string' ||
+              typeof rawObj.CommandLine === 'string')
+        );
+        if (hasUnsafeNetworkOrLocalUrl(rawObj)) {
+          screening.verdict = 'force_ask';
+          screening.riskLevel = 'high';
+          screening.commandPrefix = undefined;
+          screening.explanation.risk = '工具参数指向本机/内网地址或非安全协议（防 SSRF），必须人工确认';
+        } else if (
+          hasHiddenShellCmd ||
+          isDestructiveOrPrivilegedToolName(toolName) ||
+          hasOutOfScopeCwd ||
+          hasOutOfScopeLocations ||
+          (screening.matchedRule && screening.verdict === 'force_ask')
+        ) {
+          screening.verdict = 'force_ask';
+          screening.riskLevel = 'high';
+          screening.commandPrefix = undefined;
+          if (!screening.matchedRule) {
+            screening.explanation.risk = '该扩展工具涉及破坏性、提权、隐藏终端命令或跨工作区操作，必须人工确认';
+          }
+        } else {
+          screening.verdict = 'grey_zone';
+          screening.riskLevel = 'medium';
+          screening.commandPrefix = buildSafeToolPrefix(toolName, declaredKind, false);
+          screening.explanation.risk = '非纯只读外部/MCP 工具调用，可由外部 AI 复核，或按工具名人工/会话放行';
         }
       }
     }
@@ -487,6 +617,7 @@ export class ApprovalEngine extends EventEmitter {
         card,
         params,
         screen: screening,
+        withinWorkspace,
         resolve: resolvePromise,
         reject: rejectPromise,
         started: this.now(),
@@ -531,34 +662,40 @@ export class ApprovalEngine extends EventEmitter {
         return;
       }
       if (item.screen.verdict === 'grey_zone' && this.config.mode === 'hybrid') {
+        const delegated = this.isSessionDelegated(item.card.sessionId, item.card.cwd);
+        const execMode = this.sessionModes.get(item.card.sessionId) || 'default';
+        const burstActive = this.isBurstGuardActive(item.card.sessionId);
+        const isWorkspaceEdit = /^(?:edit_file|write_file)\s*\(/.test(item.card.commandPrefix || '');
+
+        // 会话显式选择 accept-edits / auto 时，已通过工作区范围与类型校验的源码编辑直接本地放行，不浪费外部复核延迟与额度
+        if (isWorkspaceEdit && (execMode === 'accept-edits' || execMode === 'auto')) {
+          const reason = `会话处于 ${execMode} 模式，已核验为当前工作区源码/文档编辑并自动放行`;
+          this.finish(item, true, 'auto_approved', 'local-rule', reason);
+          this.recordGuardAutoApproval(item.card.sessionId, 'local-burst-guard', item.card.commandOrSummary);
+          return;
+        }
+
         if (this.config.externalReviewer.enabled) {
           if (await this.review(item)) {
             this.recordGuardAutoApproval(item.card.sessionId, 'external-ai', item.card.commandOrSummary);
             return;
           }
-        } else {
-          const delegated = this.isSessionDelegated(item.card.sessionId, item.card.cwd);
-          const execMode = this.sessionModes.get(item.card.sessionId) || 'default';
-          const burstActive = this.isBurstGuardActive(item.card.sessionId);
-          const isWorkspaceEdit = /^(?:edit_file|write_file)\s*\(/.test(item.card.commandPrefix || '');
-
-          if (
-            (item.screen.riskLevel === 'low' && (delegated || execMode === 'auto' || burstActive)) ||
-            (isWorkspaceEdit && (delegated || execMode === 'accept-edits' || execMode === 'auto'))
-          ) {
-            const reason = delegated
-              ? '本会话已开启 Approve for me 智能托管，本地语义守卫核验低风险自动放行'
-              : execMode === 'auto' || execMode === 'accept-edits'
-                ? `会话处于 ${execMode} 模式，AI 代审本地语义守卫核验放行`
-                : '检测到多命令密集运行，AI 代审批量守卫自动核验低风险命令放行';
-            this.finish(item, true, 'auto_approved', 'local-rule', reason);
-            this.recordGuardAutoApproval(
-              item.card.sessionId,
-              delegated ? 'user-delegated' : 'local-burst-guard',
-              item.card.commandOrSummary
-            );
-            return;
-          }
+        } else if (
+          (item.screen.riskLevel === 'low' && (delegated || execMode === 'auto' || burstActive)) ||
+          (isWorkspaceEdit && delegated)
+        ) {
+          const reason = delegated
+            ? '本会话已开启 Approve for me 智能托管，本地语义守卫核验低风险自动放行'
+            : execMode === 'auto'
+              ? '会话处于 auto 模式，AI 代审本地语义守卫核验低风险命令放行'
+              : '检测到多命令密集运行，AI 代审批量守卫自动核验低风险命令放行';
+          this.finish(item, true, 'auto_approved', 'local-rule', reason);
+          this.recordGuardAutoApproval(
+            item.card.sessionId,
+            delegated ? 'user-delegated' : 'local-burst-guard',
+            item.card.commandOrSummary
+          );
+          return;
         }
       }
     }
@@ -586,9 +723,15 @@ export class ApprovalEngine extends EventEmitter {
         60_000
       );
       const review: AiReviewResult = await Promise.race([
-        this.reviewer(item.card.commandOrSummary, item.card.cwd, structuredClone(this.config.externalReviewer)),
+        this.reviewer(item.card.commandOrSummary, item.card.cwd, structuredClone(this.config.externalReviewer), {
+          toolName: item.card.toolName,
+          executionMode: this.sessionModes.get(item.card.sessionId) || 'default',
+          intentSummary: item.card.explanation.meaning,
+          localRiskLevel: item.screen.riskLevel,
+          withinWorkspace: item.withinWorkspace,
+        }),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('复核超时')), timeout);
+          timer = setTimeout(() => reject(new Error(`复核超时（超过 ${timeout}ms）`)), timeout);
         }),
       ]);
       // 等待远端时用户可能已处理请求或更改配置。先核对待审表和版本号，再采用返回的建议。
@@ -597,7 +740,11 @@ export class ApprovalEngine extends EventEmitter {
         item.card.explanation.risk = '审批配置已变更，请按当前规则人工确认';
         return false;
       }
-      item.card.aiSuggestion = review;
+      item.card.aiSuggestion = {
+        ...review,
+        model: this.config.externalReviewer.model,
+        isError: false,
+      };
       item.card.screeningSource = 'ai-reviewer-fallback';
       if (review.recommended === 'approve' && ['safe', 'low'].includes(review.riskLevel)) {
         this.finish(item, true, 'ai_approved', 'external-ai', review.reason);
@@ -606,13 +753,23 @@ export class ApprovalEngine extends EventEmitter {
       item.card.explanation.risk = review.reason;
       return false;
     } catch (error) {
+      const rawMsg = error instanceof Error ? error.message.trim() : '';
+      const maskedMsg =
+        rawMsg && this.config.externalReviewer.apiKey
+          ? rawMsg.split(this.config.externalReviewer.apiKey).join('***')
+          : rawMsg;
+      const reason =
+        error instanceof IndependentModelLimitError
+          ? maskedMsg
+          : maskedMsg
+            ? `外部复核失败（${maskedMsg.slice(0, 180)}），已回退人工确认`
+            : '独立 AI 复核不可用或超时，已回退人工确认';
       item.card.aiSuggestion = {
         recommended: 'ask',
-        reason:
-          error instanceof IndependentModelLimitError
-            ? error.message
-            : '独立 AI 复核不可用或超时，已回退人工确认',
+        reason,
         latencyMs: this.now() - start,
+        model: this.config.externalReviewer.model,
+        isError: true,
       };
       item.card.screeningSource = 'ai-reviewer-fallback';
       return false;

@@ -760,6 +760,46 @@
   background: color-mix(in srgb, var(--bg-app) 55%, transparent);
 }
 
+.request-cmd-prompt.is-tool {
+  color: var(--text-muted);
+}
+
+.request-ai-banner {
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 26%, transparent);
+  font-size: 12px;
+  line-height: 1.48;
+  word-break: break-word;
+  align-items: center;
+}
+
+.request-ai-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.request-ai-banner-meta {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  opacity: 0.78;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.request-ai-banner.is-error {
+  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+  border-color: color-mix(in srgb, var(--status-warning) 35%, transparent);
+  color: var(--status-warning);
+}
+
+.request-ai-banner.is-deny {
+  background: color-mix(in srgb, var(--status-danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--status-danger) 35%, transparent);
+  color: var(--status-danger);
+}
+
 .option-list {
   gap: 5px;
 }
