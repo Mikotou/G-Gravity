@@ -2,12 +2,13 @@ import { EventEmitter } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute, relative, resolve, win32 as winPath } from 'node:path';
 import type { AcpRequestPermissionParams, AcpRequestPermissionResult, AgentExecutionMode } from '../../shared/acp-protocol';
-import type {
-  ApprovalAuditEntry,
-  ApprovalDecisionSubmission,
-  ApproveForMeConfig,
-  DeterministicScreeningResult,
-  PendingApprovalRequest,
+import {
+  EXTERNAL_REVIEWER_DEFAULTS,
+  type ApprovalAuditEntry,
+  type ApprovalDecisionSubmission,
+  type ApproveForMeConfig,
+  type DeterministicScreeningResult,
+  type PendingApprovalRequest,
 } from '../../shared/approval-contract';
 import { ClientStore } from '../storage/client-store';
 import {
@@ -29,7 +30,7 @@ export const DEFAULT_APPROVAL_CONFIG: ApproveForMeConfig = {
   mode: 'manual',
   enableSafeDownloadAutoApprove: false,
   maxDownloadSizeMB: 50,
-  cacheTtlHours: 1,
+  cacheTtlHours: EXTERNAL_REVIEWER_DEFAULTS.cacheTtlHours,
   allowPatterns: [],
   askPatterns: [],
   denyPatterns: [],
@@ -38,7 +39,9 @@ export const DEFAULT_APPROVAL_CONFIG: ApproveForMeConfig = {
     provider: 'gemini-api-key',
     endpoint: 'https://generativelanguage.googleapis.com',
     model: 'gemini-2.5-flash-lite',
-    timeoutMs: 2500,
+    timeoutMs: EXTERNAL_REVIEWER_DEFAULTS.timeoutMs,
+    maxOutputTokens: EXTERNAL_REVIEWER_DEFAULTS.maxOutputTokens,
+    thinkingLevel: EXTERNAL_REVIEWER_DEFAULTS.thinkingLevel,
   },
 };
 
@@ -149,6 +152,28 @@ export class ApprovalEngine extends EventEmitter {
     }
     if (!Number.isFinite(next.maxDownloadSizeMB) || next.maxDownloadSizeMB < 0) {
       throw new Error('下载大小限制无效');
+    }
+    if (
+      next.externalReviewer.timeoutMs !== undefined &&
+      (!Number.isFinite(next.externalReviewer.timeoutMs) ||
+        next.externalReviewer.timeoutMs < 100 ||
+        next.externalReviewer.timeoutMs > 60_000)
+    ) {
+      throw new Error('外部复核超时时间必须介于 100 至 60000 ms');
+    }
+    if (
+      next.externalReviewer.maxOutputTokens !== undefined &&
+      (!Number.isFinite(next.externalReviewer.maxOutputTokens) ||
+        next.externalReviewer.maxOutputTokens < 64 ||
+        next.externalReviewer.maxOutputTokens > 65_536)
+    ) {
+      throw new Error('最大输出 Token 上限必须介于 64 至 65536');
+    }
+    if (
+      next.externalReviewer.thinkingLevel !== undefined &&
+      !['auto', 'off', 'minimal', 'low', 'medium', 'high'].includes(next.externalReviewer.thinkingLevel)
+    ) {
+      throw new Error('无效的思考强度配置');
     }
     if (next.externalReviewer.enabled) validateExternalEndpoint(next.externalReviewer);
     // 整份配置通过校验后才替换当前值。增加版本号使正在等待的外部复审能识别规则已变更。
@@ -556,7 +581,10 @@ export class ApprovalEngine extends EventEmitter {
     const revision = this.configRevision;
     let timer: NodeJS.Timeout | undefined;
     try {
-      const timeout = Math.min(Math.max(this.config.externalReviewer.timeoutMs || 2500, 100), 30000);
+      const timeout = Math.min(
+        Math.max(this.config.externalReviewer.timeoutMs || EXTERNAL_REVIEWER_DEFAULTS.timeoutMs, 100),
+        60_000
+      );
       const review: AiReviewResult = await Promise.race([
         this.reviewer(item.card.commandOrSummary, item.card.cwd, structuredClone(this.config.externalReviewer)),
         new Promise<never>((_, reject) => {

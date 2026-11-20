@@ -1,13 +1,17 @@
-import React, { useEffect, useState } from 'react';
-import { Check, Cpu, Info, LogIn, LogOut, Plus, Puzzle, Sparkles, Trash2, Wand2, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Cpu, Info, LogIn, LogOut, Plus, Puzzle, RefreshCw, Sparkles, Trash2, Wand2, X } from 'lucide-react';
 import {
   APPROVAL_MODE_ORDER,
   COST_DISCLAIMER,
   DEFAULT_MODEL_RATE_CARDS,
+  EXTERNAL_REVIEWER_DEFAULTS,
+  inferSupportedThinkingLevels,
   type AccountsStateSnapshot,
   type ApprovalAuditEntry,
   type ApproveForMeConfig,
   type ExternalAiReviewerConfig,
+  type ExternalReviewerModelOption,
+  type ExternalReviewerThinkingLevel,
   type McpActionInput,
   type ModelRateCard,
   type PluginActionInput,
@@ -15,6 +19,7 @@ import {
 } from '@shared';
 import { useI18n } from '../../i18n/I18nContext';
 import { formatActionError } from '../../i18n/locales';
+import { getDesktopBridge } from '../../services/desktop-bridge';
 
 /** 统一的忙碌 / 错误处理 */
 function useAction() {
@@ -234,9 +239,102 @@ export function ApprovalsPanel({
   const { busy, error, run } = useAction();
   const [tab, setTab] = useState<ApprovalTab>('rules');
   const [drafts, setDrafts] = useState<Record<PatternField, string>>({ allowPatterns: '', askPatterns: '', denyPatterns: '' });
-  const [reviewer, setReviewer] = useState<ExternalAiReviewerConfig>(config.externalReviewer);
+  const normalizeReviewer = (raw: ExternalAiReviewerConfig): ExternalAiReviewerConfig => ({
+    ...raw,
+    timeoutMs: raw.timeoutMs || EXTERNAL_REVIEWER_DEFAULTS.timeoutMs,
+    maxOutputTokens: raw.maxOutputTokens || EXTERNAL_REVIEWER_DEFAULTS.maxOutputTokens,
+    thinkingLevel: raw.thinkingLevel ?? EXTERNAL_REVIEWER_DEFAULTS.thinkingLevel,
+  });
+  const [reviewer, setReviewer] = useState<ExternalAiReviewerConfig>(() => normalizeReviewer(config.externalReviewer));
+  const [cacheTtlHours, setCacheTtlHours] = useState<number>(config.cacheTtlHours ?? EXTERNAL_REVIEWER_DEFAULTS.cacheTtlHours);
+  const [discoveredModels, setDiscoveredModels] = useState<ExternalReviewerModelOption[]>([]);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
+  const [customModelMode, setCustomModelMode] = useState(false);
+  const discoverySeqRef = useRef(0);
+  const lastAutoDiscoveryKeyRef = useRef('');
 
-  useEffect(() => setReviewer(config.externalReviewer), [config.externalReviewer]);
+  useEffect(() => {
+    setReviewer(normalizeReviewer(config.externalReviewer));
+    setCacheTtlHours(config.cacheTtlHours ?? EXTERNAL_REVIEWER_DEFAULTS.cacheTtlHours);
+  }, [config]);
+
+  const fetchServerModels = useCallback(
+    async (
+      provider: ExternalAiReviewerConfig['provider'],
+      endpoint: string,
+      apiKey?: string
+    ): Promise<void> => {
+      const seq = ++discoverySeqRef.current;
+      setDiscovering(true);
+      setDiscoverError(null);
+      try {
+        const result = await getDesktopBridge().discoverExternalReviewerModels({
+          provider,
+          endpoint: endpoint.trim(),
+          apiKey: apiKey?.trim() || undefined,
+        });
+        if (seq !== discoverySeqRef.current) return;
+        setDiscoveredModels(result.models);
+        if (result.models.length > 0) {
+          setCustomModelMode(false);
+          setReviewer((prev) => {
+            const matched = result.models.find((m) => m.id === prev.model) ?? result.models[0];
+            const nextLevel: ExternalReviewerThinkingLevel =
+              prev.thinkingLevel && matched.supportedThinkingLevels.includes(prev.thinkingLevel)
+                ? prev.thinkingLevel
+                : 'auto';
+            const currentMax = prev.maxOutputTokens || EXTERNAL_REVIEWER_DEFAULTS.maxOutputTokens;
+            const nextMax =
+              matched.outputTokenLimit && currentMax > matched.outputTokenLimit
+                ? matched.outputTokenLimit
+                : currentMax;
+            return {
+              ...prev,
+              model: matched.id,
+              thinkingLevel: nextLevel,
+              maxOutputTokens: nextMax,
+            };
+          });
+        }
+      } catch (err) {
+        if (seq !== discoverySeqRef.current) return;
+        setDiscoverError(formatActionError(err, dict));
+      } finally {
+        if (seq === discoverySeqRef.current) setDiscovering(false);
+      }
+    },
+    [dict]
+  );
+
+  // 用户在复核页填完 API Key（或切到本地 Ollama）后自动防抖查询服务端允许的模型与思考强度。
+  useEffect(() => {
+    if (tab !== 'reviewer') return;
+    const ep = reviewer.endpoint.trim();
+    const key = reviewer.apiKey?.trim() || '';
+    const readyToProbe =
+      Boolean(ep) &&
+      (reviewer.provider === 'local-ollama' ? /^http:\/\/127\.0\.0\.1(?::\d+)?/i.test(ep) : key.length >= 16);
+    if (!readyToProbe) return;
+    const probeKey = `${reviewer.provider}\0${ep}\0${key}`;
+    if (probeKey === lastAutoDiscoveryKeyRef.current) return;
+    const timer = window.setTimeout(() => {
+      lastAutoDiscoveryKeyRef.current = probeKey;
+      void fetchServerModels(reviewer.provider, ep, key);
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [tab, reviewer.provider, reviewer.endpoint, reviewer.apiKey, fetchServerModels]);
+
+  const selectedModelMeta = useMemo<ExternalReviewerModelOption>(() => {
+    const found = discoveredModels.find((m) => m.id === reviewer.model);
+    if (found) return found;
+    const inferred = inferSupportedThinkingLevels(reviewer.provider, reviewer.model);
+    return {
+      id: reviewer.model,
+      displayName: reviewer.model,
+      ...inferred,
+    };
+  }, [discoveredModels, reviewer.model, reviewer.provider]);
 
   const groups: Array<{ field: PatternField; title: string; badge: string }> = [
     { field: 'allowPatterns', title: dict.allowRulesTitle, badge: 'badge-success' },
@@ -450,11 +548,16 @@ export function ApprovalsPanel({
                       model: 'qwen2.5-coder:7b',
                     },
                   };
+                  setDiscoveredModels([]);
+                  setDiscoverError(null);
+                  setCustomModelMode(false);
+                  lastAutoDiscoveryKeyRef.current = '';
                   setReviewer((prev) => ({
                     ...prev,
                     provider: nextProvider,
                     endpoint: defaultsByProvider[nextProvider].endpoint,
                     model: defaultsByProvider[nextProvider].model,
+                    thinkingLevel: 'auto',
                   }));
                 }}
               >
@@ -463,42 +566,288 @@ export function ApprovalsPanel({
                 <option value="local-ollama">{dict.reviewerProviderOllama}</option>
               </select>
             </div>
-            {(
-              [
-                ['endpoint', dict.reviewerEndpointLabel, 'text'],
-                ['model', dict.reviewerModelLabel, 'text'],
-                ...(reviewer.provider === 'local-ollama'
-                  ? ([] as const)
-                  : ([['apiKey', dict.reviewerApiKeyLabel, 'password']] as const)),
-              ] as const
-            ).map(([field, label, type]) => (
-              <div key={field} className="setting-row">
-                <span className="setting-text">
-                  <span className="setting-label">{label}</span>
+
+            <div className="setting-row">
+              <span className="setting-text">
+                <span className="setting-label">{dict.reviewerEndpointLabel}</span>
+              </span>
+              <input
+                className="input input-mono"
+                style={{ width: 280 }}
+                type="text"
+                value={reviewer.endpoint ?? ''}
+                onChange={(e) => {
+                  lastAutoDiscoveryKeyRef.current = '';
+                  setReviewer((prev) => ({ ...prev, endpoint: e.target.value }));
+                }}
+                aria-label={dict.reviewerEndpointLabel}
+              />
+            </div>
+
+            {reviewer.provider !== 'local-ollama' ? (
+              <div className="setting-row" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
+                <span className="setting-text" style={{ flex: '1 1 180px' }}>
+                  <span className="setting-label">{dict.reviewerApiKeyLabel}</span>
+                  <span className="setting-desc">
+                    {discovering
+                      ? dict.reviewerDiscovering
+                      : discoverError
+                        ? <span style={{ color: 'var(--status-danger)' }}>{discoverError}</span>
+                        : discoveredModels.length > 0
+                          ? <span style={{ color: 'var(--status-success)' }}>{dict.reviewerDiscoveredCount(discoveredModels.length)}</span>
+                          : dict.reviewerDiscoverPromptHint}
+                  </span>
                 </span>
-                <input
-                  className="input input-mono"
-                  style={{ width: 260 }}
-                  type={type}
-                  value={(reviewer[field] as string | undefined) ?? ''}
-                  onChange={(e) => setReviewer((prev) => ({ ...prev, [field]: e.target.value }))}
-                  aria-label={label}
-                />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    className="input input-mono"
+                    style={{ width: 210 }}
+                    type="password"
+                    value={reviewer.apiKey ?? ''}
+                    onChange={(e) => {
+                      lastAutoDiscoveryKeyRef.current = '';
+                      setReviewer((prev) => ({ ...prev, apiKey: e.target.value }));
+                    }}
+                    aria-label={dict.reviewerApiKeyLabel}
+                    data-testid="reviewer-apikey-input"
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={discovering || !reviewer.endpoint.trim() || !reviewer.apiKey?.trim()}
+                    onClick={() => {
+                      lastAutoDiscoveryKeyRef.current = `${reviewer.provider}\0${reviewer.endpoint.trim()}\0${reviewer.apiKey?.trim() || ''}`;
+                      void fetchServerModels(reviewer.provider, reviewer.endpoint, reviewer.apiKey);
+                    }}
+                    data-testid="discover-reviewer-models-btn"
+                  >
+                    <RefreshCw size={13} className={discovering ? 'spin' : ''} />
+                    <span>{dict.reviewerDiscoverBtn}</span>
+                  </button>
+                </div>
               </div>
-            ))}
+            ) : (
+              <div className="setting-row">
+                <span className="setting-text">
+                  <span className="setting-label">{dict.reviewerDiscoverBtn}</span>
+                  <span className="setting-desc">
+                    {discovering
+                      ? dict.reviewerDiscovering
+                      : discoverError
+                        ? <span style={{ color: 'var(--status-danger)' }}>{discoverError}</span>
+                        : discoveredModels.length > 0
+                          ? <span style={{ color: 'var(--status-success)' }}>{dict.reviewerDiscoveredCount(discoveredModels.length)}</span>
+                          : '从本机 Ollama 查询已安装的模型列表'}
+                  </span>
+                </span>
+                <span className="spacer" />
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={discovering || !reviewer.endpoint.trim()}
+                  onClick={() => {
+                    lastAutoDiscoveryKeyRef.current = `${reviewer.provider}\0${reviewer.endpoint.trim()}\0`;
+                    void fetchServerModels(reviewer.provider, reviewer.endpoint);
+                  }}
+                  data-testid="discover-reviewer-models-btn"
+                >
+                  <RefreshCw size={13} className={discovering ? 'spin' : ''} />
+                  <span>{dict.reviewerDiscoverBtn}</span>
+                </button>
+              </div>
+            )}
+
+            <div className="setting-row">
+              <span className="setting-text">
+                <span className="setting-label">{dict.reviewerModelLabel}</span>
+                {selectedModelMeta.outputTokenLimit && (
+                  <span className="setting-desc mono">
+                    Max out: {selectedModelMeta.outputTokenLimit.toLocaleString()} tokens
+                  </span>
+                )}
+              </span>
+              {discoveredModels.length > 0 && !customModelMode ? (
+                <select
+                  className="input input-mono"
+                  style={{ width: 280 }}
+                  value={discoveredModels.some((m) => m.id === reviewer.model) ? reviewer.model : '__custom__'}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '__custom__') {
+                      setCustomModelMode(true);
+                      return;
+                    }
+                    const nextMeta = discoveredModels.find((m) => m.id === val);
+                    setReviewer((prev) => {
+                      const nextLevel: ExternalReviewerThinkingLevel =
+                        prev.thinkingLevel && nextMeta?.supportedThinkingLevels.includes(prev.thinkingLevel)
+                          ? prev.thinkingLevel
+                          : 'auto';
+                      const curMax = prev.maxOutputTokens || EXTERNAL_REVIEWER_DEFAULTS.maxOutputTokens;
+                      const nextMax =
+                        nextMeta?.outputTokenLimit && curMax > nextMeta.outputTokenLimit
+                          ? nextMeta.outputTokenLimit
+                          : curMax;
+                      return {
+                        ...prev,
+                        model: val,
+                        thinkingLevel: nextLevel,
+                        maxOutputTokens: nextMax,
+                      };
+                    });
+                  }}
+                  aria-label={dict.reviewerModelLabel}
+                  data-testid="reviewer-model-select"
+                >
+                  {discoveredModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.displayName && m.displayName !== m.id ? `${m.displayName} (${m.id})` : m.id}
+                    </option>
+                  ))}
+                  <option value="__custom__">{dict.reviewerCustomModelOption}</option>
+                </select>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    className="input input-mono"
+                    style={{ width: discoveredModels.length > 0 ? 210 : 280 }}
+                    type="text"
+                    value={reviewer.model ?? ''}
+                    onChange={(e) => setReviewer((prev) => ({ ...prev, model: e.target.value }))}
+                    aria-label={dict.reviewerModelLabel}
+                    data-testid="reviewer-model-input"
+                  />
+                  {discoveredModels.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => setCustomModelMode(false)}
+                    >
+                      列表
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="setting-row">
+              <span className="setting-text">
+                <span className="setting-label">{dict.reviewerThinkingLabel}</span>
+                <span className="setting-desc">
+                  {selectedModelMeta.supportedThinkingLevels.length <= 1
+                    ? dict.reviewerThinkingUnsupported
+                    : selectedModelMeta.defaultThinkingLevel
+                      ? `模型默认: ${selectedModelMeta.defaultThinkingLevel}`
+                      : undefined}
+                </span>
+              </span>
+              <select
+                className="input"
+                style={{ width: 220 }}
+                disabled={selectedModelMeta.supportedThinkingLevels.length <= 1}
+                value={
+                  reviewer.thinkingLevel && selectedModelMeta.supportedThinkingLevels.includes(reviewer.thinkingLevel)
+                    ? reviewer.thinkingLevel
+                    : 'auto'
+                }
+                onChange={(e) =>
+                  setReviewer((prev) => ({
+                    ...prev,
+                    thinkingLevel: e.target.value as ExternalReviewerThinkingLevel,
+                  }))
+                }
+                aria-label={dict.reviewerThinkingLabel}
+                data-testid="reviewer-thinking-select"
+              >
+                {selectedModelMeta.supportedThinkingLevels.map((lv) => (
+                  <option key={lv} value={lv}>
+                    {dict.reviewerThinkingLevels[lv]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="setting-row">
+              <span className="setting-text">
+                <span className="setting-label">{dict.reviewerMaxOutputLabel}</span>
+                <span className="setting-desc">{dict.reviewerMaxOutputHint}</span>
+              </span>
+              <input
+                className="input input-mono"
+                style={{ width: 120 }}
+                type="number"
+                min={64}
+                max={selectedModelMeta.outputTokenLimit || 65536}
+                step={256}
+                value={reviewer.maxOutputTokens ?? EXTERNAL_REVIEWER_DEFAULTS.maxOutputTokens}
+                onChange={(e) =>
+                  setReviewer((prev) => ({
+                    ...prev,
+                    maxOutputTokens: Math.max(0, Number(e.target.value) || 0),
+                  }))
+                }
+                onBlur={() =>
+                  setReviewer((prev) => ({
+                    ...prev,
+                    maxOutputTokens: Math.max(
+                      64,
+                      Math.min(
+                        selectedModelMeta.outputTokenLimit || 65536,
+                        prev.maxOutputTokens || EXTERNAL_REVIEWER_DEFAULTS.maxOutputTokens
+                      )
+                    ),
+                  }))
+                }
+                aria-label={dict.reviewerMaxOutputLabel}
+                data-testid="reviewer-max-output-input"
+              />
+            </div>
+
             <div className="setting-row">
               <span className="setting-text">
                 <span className="setting-label">{dict.reviewerTimeoutLabel}</span>
+                <span className="setting-desc">{dict.reviewerTimeoutHint}</span>
               </span>
               <input
                 className="input input-mono"
                 style={{ width: 120 }}
                 type="number"
                 min={500}
-                step={100}
+                max={60000}
+                step={500}
                 value={reviewer.timeoutMs}
-                onChange={(e) => setReviewer((prev) => ({ ...prev, timeoutMs: Math.max(0, Number(e.target.value) || 0) }))}
+                onChange={(e) =>
+                  setReviewer((prev) => ({
+                    ...prev,
+                    timeoutMs: Math.max(0, Number(e.target.value) || 0),
+                  }))
+                }
+                onBlur={() =>
+                  setReviewer((prev) => ({
+                    ...prev,
+                    timeoutMs: Math.max(500, Math.min(60000, prev.timeoutMs || EXTERNAL_REVIEWER_DEFAULTS.timeoutMs)),
+                  }))
+                }
                 aria-label={dict.reviewerTimeoutLabel}
+                data-testid="reviewer-timeout-input"
+              />
+            </div>
+
+            <div className="setting-row">
+              <span className="setting-text">
+                <span className="setting-label">{dict.reviewerCacheTtlLabel}</span>
+              </span>
+              <input
+                className="input input-mono"
+                style={{ width: 120 }}
+                type="number"
+                min={0}
+                max={168}
+                step={1}
+                value={cacheTtlHours}
+                onChange={(e) => setCacheTtlHours(Math.max(0, Math.min(168, Number(e.target.value) || 0)))}
+                aria-label={dict.reviewerCacheTtlLabel}
+                data-testid="approval-cache-ttl-input"
               />
             </div>
           </div>
@@ -507,7 +856,21 @@ export function ApprovalsPanel({
               type="button"
               className="btn btn-primary"
               disabled={busy}
-              onClick={() => void run(() => onUpdateConfig({ externalReviewer: reviewer }))}
+              onClick={() => {
+                const sanitized: ExternalAiReviewerConfig = {
+                  ...reviewer,
+                  timeoutMs: Math.max(100, Math.min(60000, reviewer.timeoutMs || EXTERNAL_REVIEWER_DEFAULTS.timeoutMs)),
+                  maxOutputTokens: Math.max(
+                    64,
+                    Math.min(
+                      selectedModelMeta.outputTokenLimit || 65536,
+                      reviewer.maxOutputTokens || EXTERNAL_REVIEWER_DEFAULTS.maxOutputTokens
+                    )
+                  ),
+                };
+                setReviewer(sanitized);
+                void run(() => onUpdateConfig({ cacheTtlHours, externalReviewer: sanitized }));
+              }}
               data-testid="save-reviewer-config-btn"
             >
               {dict.saveReviewerBtn}

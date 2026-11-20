@@ -42,6 +42,8 @@ import {
   type DailyCalendarHeatmapCell,
   type DayHourHeatmapCell,
   type DiscoveredSkillItem,
+  type ExternalReviewerModelsDiscoveryInput,
+  type ExternalReviewerModelsDiscoveryResult,
   type GravityDesktopBridge,
   type GravityIconId,
   type HourlyTokenBarBucket,
@@ -219,7 +221,9 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       endpoint: 'https://generativelanguage.googleapis.com',
       model: 'gemini-2.5-flash-lite',
       apiKey: '',
-      timeoutMs: 2500,
+      timeoutMs: 8000,
+      maxOutputTokens: 4096,
+      thinkingLevel: 'auto',
     },
   };
 
@@ -1832,6 +1836,103 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
 
     async listApprovalAudit(limit = 50): Promise<ApprovalAuditEntry[]> {
       return auditEntries.slice(0, limit).map((a) => ({ ...a }));
+    },
+
+    async discoverExternalReviewerModels(
+      input: ExternalReviewerModelsDiscoveryInput
+    ): Promise<ExternalReviewerModelsDiscoveryResult> {
+      const now = new Date().toISOString();
+      if (input.provider === 'gemini-api-key') {
+        if (!input.apiKey?.trim()) throw new Error('请先输入 API Key');
+        return {
+          provider: input.provider,
+          endpoint: input.endpoint,
+          fetchedAt: now,
+          models: [
+            {
+              id: 'gemini-4-argon',
+              displayName: 'Gemini 4 Argon',
+              outputTokenLimit: 65536,
+              supportsThinking: true,
+              supportedThinkingLevels: ['auto', 'low', 'medium', 'high'],
+              defaultThinkingLevel: 'medium',
+            },
+            {
+              id: 'gemini-3.8-flash',
+              displayName: 'Gemini 3.8 Flash',
+              outputTokenLimit: 65536,
+              supportsThinking: true,
+              supportedThinkingLevels: ['auto', 'low', 'medium', 'high'],
+              defaultThinkingLevel: 'medium',
+            },
+            {
+              id: 'gemini-3.5-flash-lite',
+              displayName: 'Gemini 3.5 Flash-Lite',
+              outputTokenLimit: 65536,
+              supportsThinking: true,
+              supportedThinkingLevels: ['auto', 'minimal', 'low', 'medium', 'high'],
+              defaultThinkingLevel: 'minimal',
+            },
+            {
+              id: 'gemini-2.5-flash-lite',
+              displayName: 'Gemini 2.5 Flash-Lite',
+              outputTokenLimit: 65536,
+              supportsThinking: true,
+              supportedThinkingLevels: ['auto', 'off', 'low', 'medium', 'high'],
+              defaultThinkingLevel: 'off',
+            },
+          ],
+        };
+      }
+      if (input.provider === 'openai-compatible') {
+        if (!input.apiKey?.trim()) throw new Error('请先输入 API Key');
+        return {
+          provider: input.provider,
+          endpoint: input.endpoint,
+          fetchedAt: now,
+          models: [
+            {
+              id: 'gpt-5-mini',
+              displayName: 'gpt-5-mini',
+              supportsThinking: true,
+              supportedThinkingLevels: ['auto', 'minimal', 'low', 'medium', 'high'],
+              defaultThinkingLevel: 'medium',
+            },
+            {
+              id: 'o4-mini',
+              displayName: 'o4-mini',
+              supportsThinking: true,
+              supportedThinkingLevels: ['auto', 'low', 'medium', 'high'],
+              defaultThinkingLevel: 'medium',
+            },
+            {
+              id: 'gpt-4o-mini',
+              displayName: 'gpt-4o-mini',
+              supportsThinking: false,
+              supportedThinkingLevels: ['auto'],
+            },
+          ],
+        };
+      }
+      return {
+        provider: input.provider,
+        endpoint: input.endpoint,
+        fetchedAt: now,
+        models: [
+          {
+            id: 'qwen3:8b',
+            displayName: 'qwen3:8b',
+            supportsThinking: true,
+            supportedThinkingLevels: ['auto', 'off', 'low', 'medium', 'high'],
+          },
+          {
+            id: 'qwen2.5-coder:7b',
+            displayName: 'qwen2.5-coder:7b',
+            supportsThinking: false,
+            supportedThinkingLevels: ['auto'],
+          },
+        ],
+      };
     },
 
     async getTelemetryDashboard(): Promise<TelemetryDashboardSnapshot> {

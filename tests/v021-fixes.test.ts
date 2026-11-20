@@ -12,7 +12,12 @@ import {
   stripTransientStreamInterruptions,
 } from '../src/shared';
 import { CoreService } from '../src/main/core-service';
-import { ApprovalEngine } from '../src/main/approval/approval-engine';
+import { ApprovalEngine, DEFAULT_APPROVAL_CONFIG } from '../src/main/approval/approval-engine';
+import {
+  buildGeminiThinkingConfig,
+  callIndependentModel,
+  discoverExternalModels,
+} from '../src/main/approval/external-reviewer';
 import { inspectGeminiPathPolicy, isMutatingShellCommand } from '../src/main/approval/shell-screening';
 import {
   decodeCheckpointMaxTokenLimit,
@@ -679,5 +684,171 @@ describe('GitHub Releases 自动更新引擎（安全域名白名单、平台匹
     expect(failed.status).toBe('error');
     expect(failed.errorMessage).toMatch(/受信任的 GitHub 域名白名单/);
     expect(updater.getState().status).toBe('error');
+  });
+});
+
+describe('外部审查模型服务端发现、思考强度与默认参数（timeout=8000, maxOutputTokens=4096）', () => {
+  it('默认配置使用 timeoutMs=8000、maxOutputTokens=4096、thinkingLevel=auto、cacheTtlHours=24', () => {
+    expect(DEFAULT_APPROVAL_CONFIG.externalReviewer.timeoutMs).toBe(8000);
+    expect(DEFAULT_APPROVAL_CONFIG.externalReviewer.maxOutputTokens).toBe(4096);
+    expect(DEFAULT_APPROVAL_CONFIG.externalReviewer.thinkingLevel).toBe('auto');
+    expect(DEFAULT_APPROVAL_CONFIG.cacheTtlHours).toBe(24);
+  });
+
+  it('按 API Key 查询 Gemini 服务端允许的模型及思考强度，并过滤非文本生成模型', async () => {
+    const fetcher = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      expect(url).toMatch(/^https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models\?pageSize=200/);
+      expect((init?.headers as Record<string, string>)['x-goog-api-key']).toBe('AIza-test-key-1234567890');
+      expect(init?.redirect).toBe('error');
+      return new Response(
+        JSON.stringify({
+          models: [
+            {
+              name: 'models/gemini-4-argon',
+              displayName: 'Gemini 4 Argon',
+              supportedGenerationMethods: ['generateContent'],
+              outputTokenLimit: 65536,
+              thinking: true,
+            },
+            {
+              name: 'models/gemini-3.5-flash-lite',
+              displayName: 'Gemini 3.5 Flash-Lite',
+              supportedGenerationMethods: ['generateContent'],
+              outputTokenLimit: 65536,
+              thinking: true,
+            },
+            {
+              name: 'models/gemini-2.5-flash-lite',
+              displayName: 'Gemini 2.5 Flash-Lite',
+              supportedGenerationMethods: ['generateContent'],
+              outputTokenLimit: 65536,
+              thinking: true,
+            },
+            {
+              name: 'models/gemini-2.0-flash',
+              displayName: 'Gemini 2.0 Flash',
+              supportedGenerationMethods: ['generateContent'],
+              outputTokenLimit: 8192,
+              thinking: false,
+            },
+            {
+              name: 'models/text-embedding-004',
+              displayName: 'Embedding',
+              supportedGenerationMethods: ['embedContent'],
+            },
+            {
+              name: 'models/imagen-4.0-generate-001',
+              displayName: 'Imagen 4',
+              supportedGenerationMethods: ['generateContent'],
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    const result = await discoverExternalModels(
+      {
+        provider: 'gemini-api-key',
+        endpoint: 'https://generativelanguage.googleapis.com',
+        apiKey: 'AIza-test-key-1234567890',
+      },
+      fetcher
+    );
+    expect(result.models.map((m) => m.id)).toEqual([
+      'gemini-4-argon',
+      'gemini-3.5-flash-lite',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash',
+    ]);
+    expect(result.models[0].supportedThinkingLevels).toEqual(['auto', 'low', 'medium', 'high']);
+    expect(result.models[1].supportedThinkingLevels).toEqual(['auto', 'minimal', 'low', 'medium', 'high']);
+    expect(result.models[2].supportedThinkingLevels).toEqual(['auto', 'off', 'low', 'medium', 'high']);
+    expect(result.models[3].supportsThinking).toBe(false);
+    expect(result.models[3].supportedThinkingLevels).toEqual(['auto']);
+  });
+
+  it('callIndependentModel 正确下发 thinkingLevel / thinkingBudget、maxOutputTokens=4096 并过滤 thought 片段', async () => {
+    expect(buildGeminiThinkingConfig('gemini-4-hydrogen', 'low')).toEqual({ thinkingLevel: 'LOW' });
+    expect(buildGeminiThinkingConfig('gemini-3.5-flash-lite', 'minimal')).toEqual({ thinkingLevel: 'MINIMAL' });
+    expect(buildGeminiThinkingConfig('gemini-2.5-flash-lite', 'off')).toEqual({ thinkingBudget: 0 });
+    expect(buildGeminiThinkingConfig('gemini-2.5-flash-lite', 'low')).toEqual({ thinkingBudget: 1024 });
+    expect(buildGeminiThinkingConfig('gemini-2.0-flash', 'low')).toBeUndefined();
+
+    let capturedBody: any;
+    const fetcher = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body || '{}'));
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: {
+                parts: [
+                  { thought: true, text: 'Internal reasoning should not break JSON parsing.' },
+                  { text: '{"recommended":"approve","reason":"只读查询安全","riskLevel":"safe"}' },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    const text = await callIndependentModel(
+      {
+        enabled: true,
+        provider: 'gemini-api-key',
+        endpoint: 'https://generativelanguage.googleapis.com',
+        model: 'gemini-4-argon',
+        apiKey: 'AIza-secret-test-key',
+        timeoutMs: 8000,
+        maxOutputTokens: 4096,
+        thinkingLevel: 'low',
+      },
+      'sys',
+      'user',
+      fetcher
+    );
+    expect(capturedBody.generationConfig).toEqual({
+      maxOutputTokens: 4096,
+      responseMimeType: 'application/json',
+      thinkingConfig: { thinkingLevel: 'LOW' },
+    });
+    expect(JSON.parse(text)).toMatchObject({ recommended: 'approve', riskLevel: 'safe' });
+
+    // 验证达到 MAX_TOKENS 截断时给出明确提示
+    const truncatedFetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: 'MAX_TOKENS',
+              content: { parts: [{ thought: true, text: 'ran out of budget while thinking' }] },
+            },
+          ],
+        }),
+        { status: 200 }
+      )
+    ) as unknown as typeof fetch;
+    await expect(
+      callIndependentModel(
+        {
+          enabled: true,
+          provider: 'gemini-api-key',
+          endpoint: 'https://generativelanguage.googleapis.com',
+          model: 'gemini-4-argon',
+          apiKey: 'AIza-secret-test-key',
+          timeoutMs: 8000,
+          maxOutputTokens: 512,
+          thinkingLevel: 'high',
+        },
+        'sys',
+        'user',
+        truncatedFetcher
+      )
+    ).rejects.toThrow(/maxOutputTokens/);
   });
 });

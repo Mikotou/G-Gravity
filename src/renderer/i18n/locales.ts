@@ -4,6 +4,7 @@ import type {
   ApprovalMode,
   ClientLocale,
   CostTimeScope,
+  ExternalReviewerThinkingLevel,
   ManagedSessionStatus,
   RightInspectorTab,
   RiskLevel,
@@ -213,7 +214,19 @@ export interface UiDictionary {
   reviewerEndpointLabel: string;
   reviewerModelLabel: string;
   reviewerApiKeyLabel: string;
+  reviewerDiscoverBtn: string;
+  reviewerDiscovering: string;
+  reviewerDiscoveredCount: (n: number) => string;
+  reviewerDiscoverPromptHint: string;
+  reviewerCustomModelOption: string;
+  reviewerThinkingLabel: string;
+  reviewerThinkingUnsupported: string;
+  reviewerThinkingLevels: Record<ExternalReviewerThinkingLevel, string>;
+  reviewerMaxOutputLabel: string;
+  reviewerMaxOutputHint: string;
   reviewerTimeoutLabel: string;
+  reviewerTimeoutHint: string;
+  reviewerCacheTtlLabel: string;
   saveReviewerBtn: string;
 
   // Context / Cost
@@ -773,7 +786,26 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
     reviewerEndpointLabel: 'Endpoint',
     reviewerModelLabel: 'Model',
     reviewerApiKeyLabel: 'API Key',
+    reviewerDiscoverBtn: '查询可用模型',
+    reviewerDiscovering: '正在查询服务端允许的模型…',
+    reviewerDiscoveredCount: (n) => `已查询到 ${n} 个可用模型`,
+    reviewerDiscoverPromptHint: '填写 API Key 后将自动查询服务端允许使用的模型及思考强度',
+    reviewerCustomModelOption: '手动输入自定义模型 ID…',
+    reviewerThinkingLabel: '思考强度',
+    reviewerThinkingUnsupported: '该模型不支持单独调节思考强度',
+    reviewerThinkingLevels: {
+      auto: '自动（跟随模型默认）',
+      off: '关闭（不思考）',
+      minimal: 'Minimal（极简）',
+      low: 'Low（低 · 推荐快审）',
+      medium: 'Medium（中）',
+      high: 'High（高）',
+    },
+    reviewerMaxOutputLabel: 'Max Output Tokens',
+    reviewerMaxOutputHint: '默认 4096（含思考与最终 JSON 回复总量，按实际生成计费）',
     reviewerTimeoutLabel: '超时 (ms)',
+    reviewerTimeoutHint: '默认 8000 ms，思考型模型建议 8000–15000 ms',
+    reviewerCacheTtlLabel: '审批结果缓存 (小时)',
     saveReviewerBtn: '保存复核配置',
 
     compactContextBtn: '压缩',
@@ -1203,7 +1235,26 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
     reviewerEndpointLabel: 'Endpoint',
     reviewerModelLabel: 'Model',
     reviewerApiKeyLabel: 'API Key',
+    reviewerDiscoverBtn: 'Fetch models',
+    reviewerDiscovering: 'Querying allowed models…',
+    reviewerDiscoveredCount: (n) => `${n} models available`,
+    reviewerDiscoverPromptHint: 'Enter your API key to query available models and thinking levels',
+    reviewerCustomModelOption: 'Custom model ID…',
+    reviewerThinkingLabel: 'Thinking level',
+    reviewerThinkingUnsupported: 'Thinking level is not configurable for this model',
+    reviewerThinkingLevels: {
+      auto: 'Auto (model default)',
+      off: 'Off (no thinking)',
+      minimal: 'Minimal',
+      low: 'Low (recommended)',
+      medium: 'Medium',
+      high: 'High',
+    },
+    reviewerMaxOutputLabel: 'Max Output Tokens',
+    reviewerMaxOutputHint: 'Default 4096 (covers thinking + JSON reply; billed by actual output)',
     reviewerTimeoutLabel: 'Timeout (ms)',
+    reviewerTimeoutHint: 'Default 8000 ms; 8000–15000 ms recommended for thinking models',
+    reviewerCacheTtlLabel: 'Approval cache TTL (hours)',
     saveReviewerBtn: 'Save review settings',
 
     compactContextBtn: 'Compact',

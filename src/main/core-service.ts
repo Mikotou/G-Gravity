@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AcpConfigOption, AcpRequestPermissionParams, AcpSessionNewResult, AcpSessionUpdateNotification, AcpPromptContentBlock, AgentExecutionMode, AgentReasoningEffort } from '../shared/acp-protocol';
-import type { ApprovalAuditEntry, ApprovalDecisionSubmission, ApprovalMode, ApproveForMeConfig } from '../shared/approval-contract';
+import type { ApprovalAuditEntry, ApprovalDecisionSubmission, ApprovalMode, ApproveForMeConfig, ExternalReviewerModelsDiscoveryInput } from '../shared/approval-contract';
 import type { AppBootstrapPayload, AcpConnectionStatus, AppUpdateState, CreateSessionInput, OpenLinkOrFileInput, OpenLinkOrFileResult, SendPromptInput } from '../shared/ipc-channels';
 import { isForbiddenCredentialOrStatePath } from '../shared/accounts-history-contract';
 import type { ChatMessageItem, ManagedSessionSummary, TitleOrganizeRequest, TitleOrganizeResult, WorkspaceLayoutState } from '../shared/session-contract';
@@ -17,7 +17,7 @@ import type { CreateAccountProfileInput, ContinueHistoryInGravityInput } from '.
 import type { PluginActionInput, McpActionInput } from '../shared/plugins-contract';
 import { AcpClient, type AcpClientOptions } from './acp/acp-client';
 import { ApprovalEngine, DEFAULT_APPROVAL_CONFIG, type ApprovalGuardActivityEvent } from './approval/approval-engine';
-import type { Reviewer } from './approval/external-reviewer';
+import { discoverExternalModels, type Reviewer } from './approval/external-reviewer';
 import { ClientStore } from './storage/client-store';
 import { SessionMultiplexer } from './session/session-multiplexer';
 import { TitleOrganizer } from './organizer/title-organizer';
@@ -44,7 +44,7 @@ import { GitHubUpdater, type GitHubUpdaterOptions } from './updater/github-updat
 
 export const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'gravity-claude-dark', defaultThoughtTrack: 'zh', translationEngine: 'local', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [], autoCheckUpdates: true };
 export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context', splitRatio: 0.5 };
-export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; now?: () => number; appVersion?: string; enableAutoUpdateCheck?: boolean; updaterOptions?: Partial<GitHubUpdaterOptions>; windowChrome?: 'win-overlay' | 'mac-inset' | 'standard'; setIcon?: (iconId: GravityIconId) => void | Promise<void>; setZoom?: (factor: number) => void; onThemeChanged?: (preferences: ClientPreferences) => void; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
+export interface CoreServiceOptions { dataDir: string; acp?: AcpClient; acpOptions?: AcpClientOptions; reviewer?: Reviewer; modelDiscoveryFetcher?: typeof fetch; translator?: ThoughtTranslator; historyRoots?: string[]; pluginsExecutor?: CliExecutor; homeDir?: string; now?: () => number; appVersion?: string; enableAutoUpdateCheck?: boolean; updaterOptions?: Partial<GitHubUpdaterOptions>; windowChrome?: 'win-overlay' | 'mac-inset' | 'standard'; setIcon?: (iconId: GravityIconId) => void | Promise<void>; setZoom?: (factor: number) => void; onThemeChanged?: (preferences: ClientPreferences) => void; openTargetHandler?: (resolvedTarget: string, mode: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image', isDirectory?: boolean) => void | Promise<void>; selectDirectoryHandler?: (defaultPath?: string) => Promise<string | null> }
 /** 主进程的业务入口。窗口请求进入此处，ACP 更新按会话分发给消息、审批、统计和检视器，再由事件通知渲染层。 */
 export class CoreService extends EventEmitter {
   readonly store: ClientStore; readonly client: AcpClient; readonly sessions: SessionMultiplexer; readonly approval: ApprovalEngine;
@@ -1274,6 +1274,9 @@ export class CoreService extends EventEmitter {
   }
   async submitApprovalDecision(submission: ApprovalDecisionSubmission): Promise<void> { await this.approval.submitDecision(submission); }
   async listApprovalAudit(limit?: number) { return this.approval.listAudit(limit); }
+  async discoverExternalReviewerModels(input: ExternalReviewerModelsDiscoveryInput) {
+    return discoverExternalModels(input, this.options.modelDiscoveryFetcher);
+  }
   async getTelemetryDashboard() { return this.telemetry.snapshot(); }
   async updateModelRateCards(rates: ModelRateCard[]) { return this.telemetry.updateModelRateCards(rates); }
   async setAppIcon(iconId: GravityIconId) { return this.updatePreferences({ appIcon: iconId }); }

@@ -7,7 +7,7 @@
 export const APP_BRAND = {
   name: 'Gravity',
   productName: 'Gravity',
-  version: '0.2.1',
+  version: '0.2.2',
   repoSlug: 'Mikotou/G-Gravity',
   repoUrl: 'https://github.com/Mikotou/G-Gravity',
   descriptionZh: '基于官方 ACP 协议的本地智能编码工作台',

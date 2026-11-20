@@ -8,7 +8,7 @@ export function createCoreBridge(core: CoreService): AgyDesktopBridge {
     'listSessions', 'createSession', 'resumeSession', 'manageSession', 'getAccountQuota', 'answerQuestion', 'closeSession', 'getSessionMessages',
     'reviseMessage', 'sendPrompt', 'cancelPrompt', 'compactSessionContext', 'saveWorkspaceLayout',
     'renameSession', 'togglePinSession', 'organizeTitles', 'setApprovalMode',
-    'updateApprovalConfig', 'submitApprovalDecision', 'listApprovalAudit',
+    'updateApprovalConfig', 'submitApprovalDecision', 'listApprovalAudit', 'discoverExternalReviewerModels',
     'getTelemetryDashboard', 'getSwarmState',
     'setAppIcon', 'importCustomTheme', 'exportCustomTheme', 'openLinkOrFileTarget', 'selectDirectory', 'getUpdateState', 'checkForUpdates', 'downloadUpdate', 'installUpdate', 'getAccountsState',
     'createAccountProfile', 'deleteAccountProfile', 'switchAccountProfile', 'officialLogout',

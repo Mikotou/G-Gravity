@@ -149,7 +149,9 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       provider: 'gemini-api-key',
       endpoint: 'https://generativelanguage.googleapis.com',
       model: 'gemini-2.5-flash-lite',
-      timeoutMs: 2500,
+      timeoutMs: 8000,
+      maxOutputTokens: 4096,
+      thinkingLevel: 'auto',
     },
   });
   const [composerDrafts] = useState(() => new Map() as NonNullable<React.ContextType<typeof ComposerDrafts>>);

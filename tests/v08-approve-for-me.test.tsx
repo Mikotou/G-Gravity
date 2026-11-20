@@ -9,8 +9,10 @@ import { ApprovalEngine } from '../src/main/approval/approval-engine';
 import { screenCommand } from '../src/main/approval/shell-screening';
 import { ClientStore } from '../src/main/storage/client-store';
 import { InlineRequestView } from '../src/renderer/components/InlineRequestView';
+import { ApprovalsPanel } from '../src/renderer/components/settings/WorkspacePanels';
 import { I18nProvider } from '../src/renderer/i18n/I18nContext';
-import type { AcpRequestPermissionParams, PendingApprovalRequest } from '../src/shared';
+import { resetFallbackDesktopBridge } from '../src/renderer/services/desktop-bridge';
+import type { AcpRequestPermissionParams, ApproveForMeConfig, PendingApprovalRequest } from '../src/shared';
 
 const tempDirs: string[] = [];
 const activeEngines: ApprovalEngine[] = [];
@@ -254,6 +256,77 @@ describe('v0.8 Approve for me 多段语义快筛、纯只读工具识别与选�
         sessionId: 'sess-v08',
         decision: 'approve_for_me_ai',
       })
+    );
+  });
+
+  it('4) 外部复核设置页：填入 API Key 后查询服务端可用模型与思考强度，支持自定义模型/强度/timeout/maxOutputTokens（默认 8000 / 4096）', async () => {
+    resetFallbackDesktopBridge();
+    const onUpdateConfig = vi.fn().mockResolvedValue(undefined);
+    const initialConfig: ApproveForMeConfig = {
+      mode: 'hybrid',
+      enableSafeDownloadAutoApprove: false,
+      maxDownloadSizeMB: 50,
+      cacheTtlHours: 24,
+      allowPatterns: [],
+      askPatterns: [],
+      denyPatterns: [],
+      externalReviewer: {
+        enabled: false,
+        provider: 'gemini-api-key',
+        endpoint: 'https://generativelanguage.googleapis.com',
+        model: 'gemini-2.5-flash-lite',
+        timeoutMs: 8000,
+        maxOutputTokens: 4096,
+        thinkingLevel: 'auto',
+      },
+    };
+
+    render(
+      <I18nProvider locale="zh-CN" onChangeLocale={() => {}}>
+        <ApprovalsPanel config={initialConfig} auditEntries={[]} onUpdateConfig={onUpdateConfig} />
+      </I18nProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('drawer-tab-reviewer'));
+    expect((screen.getByTestId('reviewer-timeout-input') as HTMLInputElement).value).toBe('8000');
+    expect((screen.getByTestId('reviewer-max-output-input') as HTMLInputElement).value).toBe('4096');
+
+    fireEvent.change(screen.getByTestId('reviewer-apikey-input'), {
+      target: { value: 'AIzaSyTestKey1234567890' },
+    });
+    fireEvent.click(screen.getByTestId('discover-reviewer-models-btn'));
+
+    const modelSelect = (await screen.findByTestId('reviewer-model-select')) as HTMLSelectElement;
+    expect(Array.from(modelSelect.options).map((o) => o.value)).toContain('gemini-3.5-flash-lite');
+
+    // 选择 gemini-3.5-flash-lite 后，思考强度下拉动态列出服务端/模型支持的 minimal/low/medium/high
+    fireEvent.change(modelSelect, { target: { value: 'gemini-3.5-flash-lite' } });
+    const thinkingSelect = screen.getByTestId('reviewer-thinking-select') as HTMLSelectElement;
+    expect(Array.from(thinkingSelect.options).map((o) => o.value)).toEqual([
+      'auto',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+    ]);
+
+    fireEvent.change(thinkingSelect, { target: { value: 'low' } });
+    fireEvent.change(screen.getByTestId('reviewer-timeout-input'), { target: { value: '12000' } });
+    fireEvent.change(screen.getByTestId('reviewer-max-output-input'), { target: { value: '2048' } });
+    fireEvent.click(screen.getByTestId('save-reviewer-config-btn'));
+
+    await waitFor(() =>
+      expect(onUpdateConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cacheTtlHours: 24,
+          externalReviewer: expect.objectContaining({
+            model: 'gemini-3.5-flash-lite',
+            thinkingLevel: 'low',
+            timeoutMs: 12000,
+            maxOutputTokens: 2048,
+          }),
+        })
+      )
     );
   });
 });

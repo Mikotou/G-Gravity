@@ -56,6 +56,7 @@ const bridge: AgyDesktopBridge = {
   updateApprovalConfig: patch => invoke('gravity:approval:update-config', patch),
   submitApprovalDecision: decision => invoke('gravity:approval:submit-decision', decision),
   listApprovalAudit: limit => invoke('gravity:approval:list-audit', limit),
+  discoverExternalReviewerModels: input => invoke('gravity:approval:discover-models', input),
   getTelemetryDashboard: () => invoke('gravity:telemetry:get-dashboard'),
   updateModelRateCards: rates => invoke('gravity:telemetry:update-rate-cards', rates),
   getPluginsSnapshot: cwd => invoke('gravity:plugins:get-snapshot', cwd),

@@ -51,6 +51,7 @@ export function registerIpcRouter(ipcMain: IpcMain, service: CoreService, truste
     [IPC_CHANNELS.APPROVAL_UPDATE_CONFIG]: patch => service.updateApprovalConfig(patch),
     [IPC_CHANNELS.APPROVAL_SUBMIT_DECISION]: submission => service.submitApprovalDecision(submission),
     [IPC_CHANNELS.APPROVAL_LIST_AUDIT]: limit => service.listApprovalAudit(limit),
+    [IPC_CHANNELS.APPROVAL_DISCOVER_MODELS]: input => service.discoverExternalReviewerModels(input),
     [IPC_CHANNELS.TELEMETRY_GET_DASHBOARD]: () => service.getTelemetryDashboard(),
     [IPC_CHANNELS.TELEMETRY_UPDATE_RATE_CARDS]: rates => service.updateModelRateCards(rates),
     [IPC_CHANNELS.PLUGINS_GET_SNAPSHOT]: cwd => service.getPluginsSnapshot(cwd),

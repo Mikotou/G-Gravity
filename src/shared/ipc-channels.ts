@@ -19,6 +19,8 @@ import type {
   ApprovalDecisionSubmission,
   ApprovalMode,
   ApproveForMeConfig,
+  ExternalReviewerModelsDiscoveryInput,
+  ExternalReviewerModelsDiscoveryResult,
   PendingApprovalRequest,
 } from './approval-contract';
 import type {
@@ -103,6 +105,7 @@ export const IPC_CHANNELS = {
   APPROVAL_UPDATE_CONFIG: 'gravity:approval:update-config',
   APPROVAL_SUBMIT_DECISION: 'gravity:approval:submit-decision',
   APPROVAL_LIST_AUDIT: 'gravity:approval:list-audit',
+  APPROVAL_DISCOVER_MODELS: 'gravity:approval:discover-models',
 
   // Context 遥测、24h/7d/30d 热力图与 Cost 单价表
   TELEMETRY_GET_DASHBOARD: 'gravity:telemetry:get-dashboard',
@@ -303,6 +306,9 @@ export interface GravityDesktopBridge {
   updateApprovalConfig(patch: Partial<ApproveForMeConfig>): Promise<ApproveForMeConfig>;
   submitApprovalDecision(submission: ApprovalDecisionSubmission): Promise<void>;
   listApprovalAudit(limit?: number): Promise<ApprovalAuditEntry[]>;
+  discoverExternalReviewerModels(
+    input: ExternalReviewerModelsDiscoveryInput
+  ): Promise<ExternalReviewerModelsDiscoveryResult>;
 
   // Context 遥测、24h/7d/30d 热力图与 Cost 单价配置
   getTelemetryDashboard(): Promise<TelemetryDashboardSnapshot>;
