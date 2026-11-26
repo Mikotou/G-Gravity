@@ -1,0 +1,31 @@
+[
+  {
+    "file": "model.bin",
+    "url": "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/translations-models/a7ff7d5e-e67e-406c-a34b-a7edea35b10e.bin",
+    "version": "2.2"
+  },
+  {
+    "file": "srcvocab.bin",
+    "url": "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/translations-models/ea98c52c-58dc-45d5-af23-38f2b029d020.spm",
+    "version": "2.2"
+  },
+  {
+    "file": "trgvocab.bin",
+    "url": "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/translations-models/bddbda68-d4d2-4317-a0a1-119caa47525e.spm",
+    "version": "2.2"
+  },
+  {
+    "file": "lex.bin",
+    "url": "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/translations-models/da8fccc0-31df-4665-9703-96d36606e019.bin",
+    "version": "2.2"
+  },
+  {
+    "file": "engine.wasm",
+    "url": "https://firefox-settings-attachments.cdn.mozilla.net/main-workspace/translations-wasm/05082c31-aee8-4249-9e01-c1865afd7520.wasm",
+    "version": "3.0"
+  },
+  {
+    "file": "bergamot.js",
+    "url": "https://raw.githubusercontent.com/mozilla-firefox/firefox/48d55cf7ec80093903e2ef7f58b61a84a22ef716/toolkit/components/translations/bergamot-translator/bergamot-translator.js"
+  }
+]

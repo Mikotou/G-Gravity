@@ -1,0 +1,5 @@
+* text=auto
+assets/local-translation/*.bin binary
+assets/local-translation/*.wasm binary
+assets/local-translation/bergamot.js -text
+assets/quota/*.sh text eol=lf

@@ -1,0 +1,72 @@
+/* platform/mac — macOS 交通灯安全区、Apple 字体栈与冷灰表面 */
+[data-window-chrome='win-overlay'] .activity-rail, [data-window-chrome='mac-inset'] .activity-rail { padding-top: 5px; }
+[data-window-chrome='mac-inset'] .activity-rail { padding-top: calc(var(--header-h) + 6px); border-right: 0; }
+[data-window-chrome='mac-inset'] .activity-rail::after { content: ''; position: absolute; top: var(--header-h); right: 0; bottom: 0; width: 1px; background: var(--hairline); pointer-events: none; }
+[data-window-chrome='mac-inset'] .activity-rail::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: var(--header-h); border-bottom: 1px solid color-mix(in srgb, var(--hairline) 65%, transparent); -webkit-app-region: drag; }
+[data-window-chrome='mac-inset'] .app-shell:has(> .sidebar.is-collapsed) .main-header { padding-left: max(34px, calc(var(--mac-traffic-w, 78px) - var(--studio-rail-w) + 4px)); }
+[data-window-chrome='mac-inset'] :is(.rail-top, .sidebar-head, .main-header, .inspector-bar) :is(button, input, select, textarea, a[href], [role='button'], [role='tab'], [role='separator'], [contenteditable='true']) { -webkit-app-region: no-drag; }
+html[data-window-chrome='mac-inset'] body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+[data-window-chrome='mac-inset'] ::-webkit-scrollbar-track, [data-window-chrome='mac-inset'] ::-webkit-scrollbar-corner { background: transparent; }
+[data-window-chrome='mac-inset'] ::-webkit-scrollbar-thumb { background-color: transparent; border-width: 2px; }
+[data-window-chrome='mac-inset'] :hover::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--text-muted) 30%, transparent); }
+[data-window-chrome='mac-inset'] ::-webkit-scrollbar-thumb:hover, [data-window-chrome='mac-inset'] ::-webkit-scrollbar-thumb:active { background-color: color-mix(in srgb, var(--text-muted) 55%, transparent); }
+html[data-window-chrome='mac-inset'] .kbd { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; letter-spacing: 0.02em; }
+html[data-window-chrome='mac-inset'] .image-lightbox { top: var(--header-h, 44px); max-height: calc(100vh - var(--header-h, 44px) - 2vh); }
+html[data-window-chrome='mac-inset'] .image-lightbox-stage > img { max-height: calc(92vh - 56px - var(--header-h, 44px)); }
+html[data-window-chrome='mac-inset'] :is(.image-lightbox, .target-context-menu, .selection-floating-bar), html[data-window-chrome='mac-inset'] :is(.image-lightbox, .target-context-menu, .selection-floating-bar) :is(button, a[href], input, textarea) { -webkit-app-region: no-drag; }
+html[data-window-chrome='mac-inset'] :is(.md-math-inline, .md-math-block) { font-family: 'STIX Two Math', 'STIX Two Text', 'Latin Modern Math', 'Times New Roman', serif; }
+:root[data-theme='macos-light'] .welcome-logo-wrap::before, :root[data-theme='macos-dark'] .welcome-logo-wrap::before { background: radial-gradient(circle, color-mix(in srgb, var(--accent-primary) 16%, transparent) 0%, transparent 70%); }
+[data-window-chrome='mac-inset'] .inspector.is-floating { top: calc(var(--header-h) + 10px); }
+[data-window-chrome='mac-inset'] .session-actions-dialog, [data-window-chrome='mac-inset'] .session-actions-dialog :is(button, input, a[href], [role='button']) { -webkit-app-region: no-drag; }
+[data-window-chrome='mac-inset'] .mode-menu, [data-window-chrome='mac-inset'] .mode-menu :is(button, [role='menuitemradio']) { -webkit-app-region: no-drag; }
+[data-platform='darwin'] { --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB', system-ui, sans-serif; --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', 'Hiragino Sans GB', sans-serif; --font-mono: 'SF Mono', ui-monospace, Menlo, 'PingFang SC', monospace; --font-serif: ui-serif, 'New York', 'Songti SC', Georgia, serif; --studio-serif: ui-serif, 'New York', 'Songti SC', Georgia, serif; --md-fs: 14px; --md-lh: 1.74; --md-measure: max(72ch, 760px); }
+[data-platform='darwin'] body { font-kerning: normal; font-optical-sizing: auto; text-autospace: normal; font-feature-settings: 'kern' 1; }
+[data-window-chrome='mac-inset'][data-polarity='light'] body, [data-platform='darwin'][data-polarity='light'] body { -webkit-font-smoothing: auto; -moz-osx-font-smoothing: auto; }
+[data-platform='darwin'][data-polarity='light'] .cc-text > .md { color: color-mix(in srgb, var(--text-primary) 90%, var(--pal-0b0b0f)); }
+@media (min-resolution: 2dppx) {
+  [data-platform='darwin'][data-polarity='light'] .cc-text > .md { color: color-mix(in srgb, var(--text-primary) 82%, var(--ink-black)); }
+}
+[data-platform='darwin'][data-polarity='dark'] body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+@container pane (min-width: 1100px) {
+  [data-platform='darwin'] .cc-text { --md-fs: 14.5px; }
+}
+[data-platform='darwin'] .cc-text > .md > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, dl, .md-alert, details) { max-width: var(--md-measure); }
+[data-platform='darwin'] .cc-text > .md p { margin-bottom: 0.85em; }
+[data-platform='darwin'] .md :is(h1, h2, h3, h4) { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.015em; }
+[data-platform='darwin'] .md h1 { font-size: 1.45em; margin: 1.5em 0 0.6em; }
+[data-platform='darwin'] .md h2 { font-size: 1.24em; margin: 1.42em 0 0.55em; border-bottom-width: 0.5px; }
+[data-platform='darwin'] .md h3 { font-size: 1.08em; margin: 1.3em 0 0.45em; }
+[data-platform='darwin'] .md h4 { letter-spacing: -0.005em; }
+[data-platform='darwin'] .md :is(strong, b) { font-weight: 600; }
+[data-platform='darwin'] :is(.md-table, .turn-outcome, .outcome-chip, .pane-status-time, .request-score-pill, .ctx-metric-val, .stat-big, .tab-count, .tool-group-badge, .quota-weekly-pct, .heatmap-cell) { font-variant-numeric: tabular-nums; }
+[data-platform='darwin'] .md blockquote { margin: 0 0 0.9em; padding: 0.62em 1em 0.62em 0.95em; border-left: 3px solid color-mix(in srgb, var(--accent-primary) 42%, var(--hairline-strong)); border-radius: 3px 10px 10px 3px; background: color-mix(in srgb, var(--text-primary) 3.6%, transparent); color: var(--secondary-text); }
+[data-platform='darwin'] .md-table-wrap { border: 0; border-radius: 0; background: transparent; margin-bottom: 1em; }
+[data-platform='darwin'] .md-table { font-size: 0.93em; line-height: 1.55; }
+[data-platform='darwin'] .md-table :is(th, td) { padding: 7px 14px 7px 0; border-right: 0; border-bottom: 0.5px solid var(--hairline-strong); }
+[data-platform='darwin'] .md-table :is(th, td):first-child { padding-left: 4px; }
+[data-platform='darwin'] .md-table thead th { background: transparent; color: var(--secondary-text); font-size: 0.92em; font-weight: 600; letter-spacing: 0.01em; border-bottom: 1px solid var(--hairline-strong); }
+[data-platform='darwin'] .md-table tbody tr:nth-child(even) td { background: transparent; }
+[data-platform='darwin'] .md-table tbody tr:hover td { background: color-mix(in srgb, var(--accent-primary) 5%, transparent); }
+[data-platform='darwin'] .md-table tbody tr:last-child td { border-bottom: 0; }
+[data-platform='darwin'] .md code.inline { padding: 0.1em 0.4em; border-radius: 5px; border: 0.5px solid color-mix(in srgb, var(--text-primary) 10%, transparent); background: color-mix(in srgb, var(--text-primary) 6.5%, transparent); color: color-mix(in srgb, var(--text-primary) 92%, var(--accent-text)); font-size: 0.86em; font-weight: 500; }
+[data-platform='darwin']:is([data-theme='claude-code-dark'], [data-theme='claude-code-light']) .md code.inline { background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-code)); border-color: color-mix(in srgb, var(--accent-primary) 16%, transparent); color: color-mix(in srgb, var(--text-primary) 86%, var(--accent-text)); }
+[data-platform='darwin'] .code-block { border-radius: 12px; border: 0.5px solid var(--hairline-strong); box-shadow: 0 1px 2px color-mix(in srgb, var(--ink-black) 7%, transparent), inset 0 1px 0 color-mix(in srgb, var(--ink-white) 4%, transparent); margin-bottom: 1em; }
+[data-platform='darwin'] .code-block-head { height: 32px; padding: 0 6px 0 14px; background: color-mix(in srgb, var(--text-primary) 4.5%, var(--bg-code)); border-bottom: 0.5px solid var(--hairline); font-family: var(--font-sans); font-size: 11.5px; font-weight: 500; letter-spacing: 0.02em; }
+[data-platform='darwin'] .code-block pre { padding: 12px 16px 14px; font-size: 12.5px; line-height: 1.62; scrollbar-width: thin; }
+[data-platform='darwin'] .cc-thinking-head { font-size: 12px; font-weight: 500; }
+[data-platform='darwin'] .cc-thinking-title { font-style: normal; letter-spacing: 0.005em; }
+[data-platform='darwin'] .cc-thinking-body { margin-left: 10px; padding: 2px 0 4px 14px; border-left-width: 1.5px; font-size: 12.5px; font-style: normal; line-height: 1.62; color: var(--muted-text); }
+[data-platform='darwin'] .cc-thinking-body .md.md-compact p { margin-bottom: 0.55em; }
+:root:is([data-theme='macos-light'], [data-theme='macos-dark']) .inspector.is-floating { background: color-mix(in srgb, var(--studio-drawer) 80%, transparent); backdrop-filter: blur(24px) saturate(1.6); }
+:root:is([data-theme='macos-light'], [data-theme='macos-dark']) .popover { background: color-mix(in srgb, var(--bg-elevated) 86%, transparent); backdrop-filter: blur(20px) saturate(1.5); border-color: var(--hairline-strong); }
+:root[data-theme='macos-light'] .popover { background: color-mix(in srgb, var(--ink-white) 84%, transparent); }
+:root:is([data-theme='macos-light'], [data-theme='macos-dark']) .popover:is(.mode-menu, .approval-menu, .model-menu, .composer-menu) { background: var(--bg-elevated); backdrop-filter: none; }
+:where([data-platform='darwin']) :is(.brand-name, .avatar, .cc-user-chevron, .md h1, .md h2, .md h3, .md h4, .md h5, .md h6, .md strong, .md-table thead th, .md-alert-title, .cc-tool-name, .cc-todos-head, .diff-sign, .request-title, .stat-big, .modal-head h2, .settings-nav-title, .settings-head h2, .about-hero h3, .turn-notation-num, .composer-notation-idx, .pane-status-chip, .tab-alert-count, .account-menu-id strong, .option-num, .quota-view h3, .quota-pct, .ctx-metric-val, .conv-tree-prompt-chevron, .settings-usage-total, .diag-title, .status-error-row strong) { font-weight: 600; }
+:where([data-platform='darwin']) :is(.cc-todo.is-in_progress, .option-primary, .settings-nav-item.is-active, .setting-label, .icon-card, .list-row-title, .sub-tab, .selection-pill-btn, .request-intent-main, .swarm-fold-btn, .cc-tool.tool-cat-explore .cc-tool-name, .tool-group-head .cc-tool-name, .outcome-chip, .jump-latest, .request-view .option-primary, .menu-item.is-checked, .thread-item.is-selected .thread-title, .tab.is-active .tab-title, .welcome-cta, .tool-group-title, .quota-view article.quota-bucket-card header strong, .ctx-branch-banner-btn, .welcome-dir-name, .request-action-title, .request-score-pill, .request-intent-pill, .request-cmd-toggle, .menu-item-strong, .md-media-name, .md-file-text a.md-link, .md-file-text a.md-link-file, .md-file-name, .diag-cooldown) { font-weight: 500; }
+:where([data-platform='darwin']) .cc-user-body, :where([data-platform='darwin']) .setting-label-regular { font-weight: 400; }
+@container insp (max-width: 430px) {
+  :where([data-platform='darwin']) .inspector-tab:not(.is-active) .tab-count { font-weight: 600; }
+}
+@container insp (max-width: 490px) {
+  :where([data-platform='darwin']) [data-window-chrome='win-overlay'] .inspector:not(.is-floating) .inspector-tab .tab-count { font-weight: 600; }
+}

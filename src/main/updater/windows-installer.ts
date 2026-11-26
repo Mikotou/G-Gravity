@@ -1,0 +1,57 @@
+function psSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/** Wait for the portable app to close before atomically replacing its executable. */
+export function windowsUpdateScript(pid: number, portableExe: string, stage: string, backupPath: string, filePath: string): string {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('无效的更新目标进程');
+  return [
+    `$ErrorActionPreference = 'Stop'`,
+    `$targetPid = ${pid}`,
+    `$targetExe = ${psSingleQuote(portableExe)}`,
+    `$newExe = ${psSingleQuote(stage)}`,
+    `$backupExe = ${psSingleQuote(backupPath)}`,
+    `try {`,
+    `for ($i = 0; $i -lt 100; $i++) {`,
+    `  if (-not (Get-Process -Id $targetPid -ErrorAction SilentlyContinue)) { break }`,
+    `  Start-Sleep -Milliseconds 300`,
+    `}`,
+    `if (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) { exit 1 }`,
+    `$swapped = $false`,
+    `for ($attempt = 0; $attempt -lt 60; $attempt++) {`,
+    `  try {`,
+    `    [IO.File]::Replace($newExe, $targetExe, $backupExe)`,
+    `    $swapped = $true`,
+    `    break`,
+    `  } catch {`,
+    `    Start-Sleep -Milliseconds 350`,
+    `  }`,
+    `}`,
+    `if ($swapped) {`,
+    `  try {`,
+    `    Start-Process -FilePath $targetExe`,
+    `    Remove-Item -LiteralPath $backupExe -Force -ErrorAction SilentlyContinue`,
+    `    Remove-Item -LiteralPath ${psSingleQuote(filePath)} -Force -ErrorAction SilentlyContinue`,
+    `    exit 0`,
+    `  } catch { }`,
+    `}`,
+    `if (Test-Path -LiteralPath $backupExe -PathType Leaf) {`,
+    `  for ($attempt = 0; $attempt -lt 60; $attempt++) {`,
+    `    try {`,
+    `      if (Test-Path -LiteralPath $targetExe -PathType Leaf) { [IO.File]::Replace($backupExe, $targetExe, $newExe) }`,
+    `      else { [IO.File]::Move($backupExe, $targetExe) }`,
+    `      break`,
+    `    } catch { Start-Sleep -Milliseconds 350 }`,
+    `  }`,
+    `  if (Test-Path -LiteralPath $backupExe -PathType Leaf) { exit 1 }`,
+    `}`,
+    `if (Test-Path -LiteralPath $targetExe -PathType Leaf) {`,
+    `  Start-Process -FilePath $targetExe`,
+    `  Remove-Item -LiteralPath $newExe -Force -ErrorAction SilentlyContinue`,
+    `}`,
+    `exit 1`,
+    `} finally {`,
+    `  if ($PSCommandPath) { Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue }`,
+    `}`,
+  ].join('\r\n');
+}

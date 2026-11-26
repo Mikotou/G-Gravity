@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="claude-code-dark">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 生产策略严格锁定本机与自源资源，禁止外部图片信标、插件对象与 base 劫持；开发态由 Vite serve 仅追加 127.0.0.1 HMR 通道。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="./icons/gravity-claude-dark.svg" />
+    <title>Gravity</title>
+  </head>
+  <body>
+    <!-- 工作台由模块入口挂载到这个节点。生产构建时 Vite 会把脚本引用替换为打包后的资源路径。 -->
+    <div id="root"></div>
+    <script type="module" src="/src/renderer/main.tsx"></script>
+  </body>
+</html>

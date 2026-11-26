@@ -1,0 +1,148 @@
+name: Release Gravity (Windows & macOS)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (defaults to current ref, e.g. v0.3.4)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows x64 Portable
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        env:
+          GRAVITY_REQUIRE_DIST: '1'
+        run: npm test
+
+      - name: Package Windows portable executable
+        run: npx electron-builder --win portable --publish never
+
+      - name: Verify Windows artifact
+        shell: pwsh
+        run: |
+          Get-Item release\Gravity.exe | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: release/Gravity.exe
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS (Apple Silicon & Intel)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        env:
+          GRAVITY_REQUIRE_DIST: '1'
+        run: npm test
+
+      - name: Package macOS arm64 & x64 (DMG + ZIP)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npx electron-builder --mac dmg zip --arm64 --x64 --publish never
+
+      - name: Verify macOS artifacts
+        run: |
+          ls -lh release/*.dmg release/*.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "${TAG_NAME}" =~ ^v ]]; then
+            TAG_NAME="v$(node -p "require('./package.json').version")"
+          fi
+          VERSION="${TAG_NAME#v}"
+          cat <<EOF > release-notes.md
+          ## Gravity ${TAG_NAME}（Windows x64 & macOS Apple Silicon / Intel）
+
+          面向 Google Antigravity (\`agy\`) 的本地桌面智能编码工作台——100% 遵循官方公开 \`agy acp\` 协议，零私密接口、零凭据触碰、零账号轮换。
+
+          ### 下载选择
+          - **Windows 10 / 11 (x64)**：\`Gravity.exe\`（单文件便携版，双击即用）
+          - **macOS Apple Silicon (M1 / M2 / M3 / M4)**：\`Gravity-${VERSION}-mac-arm64.dmg\`（或 \`.zip\`）
+          - **macOS Intel (x64)**：\`Gravity-${VERSION}-mac-x64.dmg\`（或 \`.zip\`）
+
+          > **首次启动提示（开源未签名包）**
+          > - **Windows**：若 SmartScreen 弹窗拦截，点击「更多信息」→「仍要运行」。
+          > - **macOS**：首次打开若提示“已损坏”或“无法验证开发者”，拖入「应用程序」后在终端执行一次：\`xattr -cr /Applications/Gravity.app\` 即可正常打开。
+          > - **前置条件**：请先在本机安装并登录官方原版 \`agy\` CLI（终端运行 \`agy --version\` 正常可用）。
+
+          ### 本版亮点（v0.3.4）
+          - **用户专项体验修复与看板焕新（U-01 ~ U-04）**：修复正文 \`text\` / 代码块复制按钮（主进程 \`copyText\` 桥接 + 降级回退）；支持新建对话弹窗与欢迎页快捷框直接选择模型与推理深度；全站图标收敛至 \`ui/Icon\` 四档矢量规范并根除 Composer 原始 Unicode 模式符号、统一编辑按钮图标；全面重设计 Context 看板 \`7d\`（00/06/12/18/24 小时刻度标尺 + 星期日期 + 日均/峰值 KPI + 每日用量药丸）与 \`30d\`（Mon–Sun 真实日历网格 + 格内日期 + 月初标牌 + 今日描边，移除误导纵轴），覆盖主 Context、外部复核与外部翻译三视图。
+          - **后端并发与稳定性深度加固**：修复 \`CAP-01\` / \`RATE-01\` / \`RATE-02\` 三项防封号 P0 阻断项（缺 \`close\` 能力零泄漏、迟到 429/403 建冷却、冷却期禁重启与周期额度探测）；Swarm SQLite 迁入独立 Worker 线程（真实写锁下主线程事件循环 P99 < 16ms）；流式输出与检视器 50ms 合批（流式 IPC 正文字符降幅 89.71%）；Windows 三代子进程退出回收屏障（0 孤儿进程）；外部第三方 API Key 零明文投影（\`D4\`）；更新包 SHA-256 完整性校验与跨平台安全回滚（\`UPD-01/02\`）；\`src/main\` 98 文件与 \`src/shared\` 均保持 0 循环依赖。
+          - **前端架构、无障碍与性能全面重塑**：三层旧 CSS（301.7 KB / 12,672 行）收敛为单入口 \`index.css\` + 18 模块（源码 221.0 KB / 构建产物 202.88 KB / gzip 36.02 KB，0 跨文件重复选择器、0 死类、0 硬编码色、0 非合成动画）；6 套主题及自定义主题达成 100% WCAG 2.1 AA（≥ 4.5:1）零违规；默认应用图标设为 \`跟随主题（自动）\`（\`D2\`）；右侧检视器精简为 5 个一级页签（分支树归入 Context 二级切换，\`D1\`）；新建入口与全屏设置防误触收敛（\`D3\`）；流式增量 Markdown 分块与 \`React.memo\` 零跨窗格重渲染。
+          - **全量质量门禁与真机验收**：通过四端 \`typecheck\` 与严格 \`noUnusedLocals/Parameters\` 0 错误、1,084 项单元测试 100% 通过、Playwright 布局回归 0px 跳变、Windows 目录版/便携版双包冒烟、17 张离线 E2E + 四主题 \`U-04\` + macOS \`mac-inset\` 2x DPI 视觉走查，以及严格限流低频真实在线官方 \`agy\` 实机冒烟（0 孤儿进程）。
+          EOF
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release edit "${TAG_NAME}" --title "Gravity ${TAG_NAME}" --notes-file release-notes.md
+            gh release upload "${TAG_NAME}" release-artifacts/* --clobber
+          else
+            gh release create "${TAG_NAME}" release-artifacts/* --title "Gravity ${TAG_NAME}" --notes-file release-notes.md
+          fi

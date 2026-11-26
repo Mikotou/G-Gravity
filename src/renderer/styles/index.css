@@ -1,0 +1,21 @@
+/* Gravity v0.3.4 · 渲染层样式唯一总入口（main.tsx、布局夹具与离线 E2E 统一只加载本文件）
+ * 层次：tokens（变量）→ base（reset / 排版 / 关键帧）→ components（按组件拆分）→ platform（Win / macOS 适配）
+ * 全部为本地相对路径，Vite 构建时内联，CSP 下无任何外部请求。 */
+@import './tokens.css';
+@import './base.css';
+@import './components/controls.css';
+@import './components/layout.css';
+@import './components/rail.css';
+@import './components/sidebar.css';
+@import './components/pane.css';
+@import './components/conversation.css';
+@import './components/markdown.css';
+@import './components/requests.css';
+@import './components/composer.css';
+@import './components/quota.css';
+@import './components/inspector.css';
+@import './components/context.css';
+@import './components/swarm.css';
+@import './components/settings.css';
+@import './platform/win.css';
+@import './platform/mac.css';

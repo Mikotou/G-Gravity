@@ -1,0 +1,95 @@
+{
+  "name": "g-gravity",
+  "productName": "Gravity",
+  "version": "0.3.4",
+  "private": true,
+  "description": "Gravity — 基于官方 agy acp 协议的本地智能编码工作台",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev:renderer": "vite --host 127.0.0.1 --port 5173",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "vite build",
+    "build": "npm run build:main && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "start:electron": "electron .",
+    "typecheck:shared": "tsc -p tsconfig.shared.json --noEmit",
+    "typecheck:main": "tsc -p tsconfig.main.json --noEmit",
+    "typecheck:renderer": "tsc -p tsconfig.renderer.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "npm run typecheck:shared && npm run typecheck:main && npm run typecheck:renderer && npm run typecheck:tests",
+    "test": "vitest run",
+    "test:layout": "node tests/desktop-layout-smoke.cjs",
+    "test:desktop": "node tests/windows-package-smoke.cjs",
+    "test:watch": "vitest",
+    "dist:exe": "npm run build && electron-builder --win portable dir --publish never",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --publish never"
+  },
+  "build": {
+    "appId": "com.gravity.desktop",
+    "productName": "Gravity",
+    "directories": {
+      "output": "release"
+    },
+    "asar": false,
+    "npmRebuild": false,
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.map",
+      "!dist/**/*.d.ts",
+      "assets/local-translation/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "win": {
+      "icon": "assets/icons/gravity-claude-dark.ico",
+      "files": [
+        "assets/icons/*.ico",
+        "assets/quota/read-quota.ps1"
+      ],
+      "target": [
+        "portable",
+        "dir"
+      ]
+    },
+    "portable": {
+      "artifactName": "Gravity.exe"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icons/gravity-claude-dark-mac.png",
+      "identity": null,
+      "files": [
+        "assets/icons/*-mac.png",
+        "assets/quota/read-quota-macos.sh",
+        "assets/quota/status-line-macos.js"
+      ],
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "Gravity-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "Gravity ${version}"
+    }
+  },
+  "dependencies": {
+    "lucide-react": "^0.475.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.2.0",
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^35.0.0",
+    "electron-builder": "^26.18.0",
+    "jsdom": "^26.0.0",
+    "playwright-core": "1.65.1",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0",
+    "vitest": "^3.0.7"
+  }
+}
