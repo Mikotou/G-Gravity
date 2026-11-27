@@ -1275,14 +1275,12 @@ describe('Gravity v0.3.6 UI 缺陷清零与交互细节 (TC-UI-01..17)', () => {
     unmount();
 
     const failPlugin = vi.fn().mockRejectedValue(new Error('插件卸载失败'));
-    const snap: PluginsSnapshot = {
-      profileId: 'default',
-      isIsolatedProfile: false,
+    const snap: PluginsManagerSnapshot = {
       builtins: [],
-      plugins: [{ name: 'bad-plug', enabled: true, source: 'local' }],
+      plugins: [{ name: 'bad-plug', enabled: true }],
       mcpServers: [],
       skills: [],
-      updatedAt: '2026-11-28T00:00:00Z',
+      refreshedAt: '2026-11-28T00:00:00Z',
     };
     render(
       wrap(
