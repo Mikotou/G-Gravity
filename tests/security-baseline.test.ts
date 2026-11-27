@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -219,6 +220,82 @@ describe('沙箱 preload 真实编译与最小桥接', () => {
     const missingInRouter = [...expectedChannels].filter((ch) => !routerSet.has(ch)).sort();
     const extraInRouter = [...routerSet].filter((ch) => !expectedChannels.has(ch)).sort();
     expect({ missingInRouter, extraInRouter }).toEqual({ missingInRouter: [], extraInRouter: [] });
+
+    // 3. v0.3.6 93 通道精确数量门禁：73 invoke + 20 event = 93
+    const eventChannels = [...expectedChannels].filter((ch) => ch.startsWith('gravity:event:'));
+    const invokeChannels = [...expectedChannels].filter((ch) => !ch.startsWith('gravity:event:'));
+    expect(expectedChannels.size).toBe(93);
+    expect(invokeChannels).toHaveLength(73);
+    expect(eventChannels).toHaveLength(20);
+  });
+
+  it('v0.3.6 VOICE_APPEND 为唯一二进制切口，其余 72 个 invoke 通道一律拒收 Uint8Array/ArrayBuffer/嵌套二进制', async () => {
+    const handlers = new Map<string, Function>();
+    const ipcMain = {
+      handle: (channel: string, callback: Function) => handlers.set(channel, callback),
+      removeHandler: (channel: string) => handlers.delete(channel),
+    } as unknown as IpcMain;
+    const frame = { url: 'file:///trusted/index.html' };
+    const trusted = { mainFrame: frame, getURL: () => frame.url, isDestroyed: () => false, send: vi.fn() } as unknown as WebContents;
+    const calledChannels: string[] = [];
+    const voiceAppendSpy = vi.fn().mockResolvedValue({ captureId: 'c1', accepted: true, seq: 1, acceptedBytes: 4, remainingBytes: 100 });
+    const serviceProxy = new Proxy(new EventEmitter(), {
+      get(target, prop, receiver) {
+        if (prop === 'voiceAppend') return voiceAppendSpy;
+        if (prop === 'savingForQuit') return false;
+        if (prop === 'voice') return { revoke: vi.fn() };
+        if (prop in target) return Reflect.get(target, prop, receiver);
+        return (..._args: unknown[]) => {
+          calledChannels.push(String(prop));
+          return { ok: true };
+        };
+      },
+    }) as unknown as CoreService;
+    const dispose = registerIpcRouter(ipcMain, serviceProxy, trusted);
+    const event = { sender: trusted, senderFrame: frame } as unknown as IpcMainInvokeEvent;
+    try {
+      expect(handlers.size).toBe(73);
+      const sampleU8 = new Uint8Array(4);
+      const sampleAb = new ArrayBuffer(4);
+      const otherInvokeChannels = [...handlers.keys()].filter((ch) => ch !== IPC_CHANNELS.VOICE_APPEND);
+      expect(otherInvokeChannels).toHaveLength(72);
+
+      for (const ch of otherInvokeChannels) {
+        const handler = handlers.get(ch)!;
+        expect(() => handler(event, sampleU8), `${ch} must reject Uint8Array`).toThrow(/格式无效|参数数量无效/);
+        expect(() => handler(event, sampleAb), `${ch} must reject ArrayBuffer`).toThrow(/格式无效|参数数量无效/);
+        expect(() => handler(event, { nested: { pcm16: sampleU8 } }), `${ch} must reject nested Uint8Array`).toThrow(/格式无效|参数数量无效/);
+      }
+      expect(calledChannels).toEqual([]);
+
+      // VOICE_APPEND accepts valid zero-offset even-length Uint8Array & fixed ArrayBuffer
+      const appendHandler = handlers.get(IPC_CHANNELS.VOICE_APPEND)!;
+      await appendHandler(event, { captureId: 'c1', seq: 1, pcm16: new Uint8Array(4) });
+      await appendHandler(event, { captureId: 'c1', seq: 2, pcm16: new ArrayBuffer(4) });
+      expect(voiceAppendSpy).toHaveBeenCalledTimes(2);
+
+      // VOICE_APPEND rejects Buffer, Int16Array, DataView, subview, odd length, 0B, >32768B, extra key, getter
+      const backing = new ArrayBuffer(16);
+      const subview = new Uint8Array(backing, 2, 4);
+      const getterPayload = { captureId: 'c1', seq: 3 };
+      Object.defineProperty(getterPayload, 'pcm16', { enumerable: true, get: () => new Uint8Array(4) });
+      for (const bad of [
+        { captureId: 'c1', seq: 3, pcm16: Buffer.alloc(4) },
+        { captureId: 'c1', seq: 3, pcm16: new Int16Array(2) },
+        { captureId: 'c1', seq: 3, pcm16: new DataView(new ArrayBuffer(4)) },
+        { captureId: 'c1', seq: 3, pcm16: subview },
+        { captureId: 'c1', seq: 3, pcm16: new Uint8Array(3) },
+        { captureId: 'c1', seq: 3, pcm16: new Uint8Array(0) },
+        { captureId: 'c1', seq: 3, pcm16: new Uint8Array(32_770) },
+        { captureId: 'c1', seq: 3, pcm16: new Uint8Array(4), extra: 1 },
+        getterPayload,
+      ]) {
+        expect(() => appendHandler(event, bad)).toThrow(/语音分片格式无效/);
+      }
+      expect(voiceAppendSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      dispose();
+    }
   });
 });
 
@@ -249,7 +326,7 @@ describe('自动静态回归守卫（不替代人工合规审查）', () => {
     expect(source).toContain("url.hostname !== '127.0.0.1'");
     expect(readFileSync('vite.config.ts', 'utf8')).toContain('127.0.0.1');
   });
-  it('D2-A 严格纯本地 CSP 守卫：index.html 锁定 object-src/base-uri/img-src/connect-src 且禁止 file:/http:/https:', () => {
+  it('D2-A 严格纯本地 CSP 守卫：index.html 锁定 object-src/base-uri/img-src/connect-src 且禁止 file:/http:/https: 与 wasm-unsafe-eval/unsafe-eval/script blob:', () => {
     const html = readFileSync('index.html', 'utf8');
     const cspMatch = /<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"/i.exec(html);
     expect(cspMatch, 'index.html 缺少 Content-Security-Policy meta 标签').not.toBeNull();
@@ -261,6 +338,80 @@ describe('自动静态回归守卫（不替代人工合规审查）', () => {
     expect(csp).toContain("img-src 'self' data: blob:");
     expect(csp).toContain("connect-src 'self'");
     expect(csp).not.toMatch(/\b(?:file|http|https):/i);
+    expect(csp).not.toMatch(/wasm-unsafe-eval|unsafe-eval/i);
+    // script-src 必须严格锁定为 'self'，不得放宽 blob: 或 'unsafe-inline'
+    const scriptSrc = /script-src\s+([^;]+)/i.exec(csp)?.[1].trim();
+    expect(scriptSrc).toBe("'self'");
+  });
+
+  it('v0.3.6 禁用 Chromium Web Speech 守卫：src/ 全量 AST 0 处 SpeechRecognition / webkitSpeechRecognition 引用', () => {
+    const violations: string[] = [];
+    for (const file of files('src')) {
+      const syntax = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+      const visit = (node: ts.Node) => {
+        if (ts.isIdentifier(node) && /^(?:webkit)?SpeechRecognition$/i.test(node.text)) {
+          violations.push(`${file}:${syntax.getLineAndCharacterOfPosition(node.getStart(syntax)).line + 1}:${node.text}`);
+        } else if (ts.isStringLiteralLike(node) && /\b(?:webkit)?SpeechRecognition\b/i.test(node.text)) {
+          violations.push(`${file}:${syntax.getLineAndCharacterOfPosition(node.getStart(syntax)).line + 1}:${node.text}`);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(syntax);
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it('v0.3.6 assets/local-voice 资产哈希、开源许可与运行态合规守卫', () => {
+    const voiceRoot = path.resolve(process.cwd(), 'assets', 'local-voice');
+    const sources = JSON.parse(readFileSync(path.join(voiceRoot, 'sources.json'), 'utf8')) as {
+      model: { fileName: string; sizeBytes: number; sha256: string; license: string };
+      runtime: { wasmSha256: string; jsSha256: string; licenses: string[] };
+      fixture: { wavSha256: string; pcmSha256: string; pcmBytes: number };
+      simplifiedChinese: { license: string; files: Record<string, string> };
+    };
+    const sha256 = (rel: string) => createHash('sha256').update(readFileSync(path.join(voiceRoot, rel))).digest('hex');
+
+    // 1. 校验 6 项固定运行时/测试语音/OpenCC 资产 SHA-256
+    expect(sha256('whisper.wasm')).toBe(sources.runtime.wasmSha256);
+    expect(sha256('whisper.cjs')).toBe(sources.runtime.jsSha256);
+    expect(sha256('test-clip.wav')).toBe(sources.fixture.wavSha256);
+    expect(sha256('test-clip.pcm')).toBe(sources.fixture.pcmSha256);
+    expect(statSync(path.join(voiceRoot, 'test-clip.pcm')).size).toBe(sources.fixture.pcmBytes);
+    for (const [name, expectedHash] of Object.entries(sources.simplifiedChinese.files)) {
+      expect(sha256(name), name).toBe(expectedHash);
+    }
+
+    // 2. test-clip.wav 必须为严格 16kHz / 16-bit / mono PCM 且负载与 test-clip.pcm 逐字节一致
+    const wav = readFileSync(path.join(voiceRoot, 'test-clip.wav'));
+    const pcm = readFileSync(path.join(voiceRoot, 'test-clip.pcm'));
+    expect(wav.toString('ascii', 0, 4)).toBe('RIFF');
+    expect(wav.toString('ascii', 8, 12)).toBe('WAVE');
+    expect(wav.readUInt16LE(20)).toBe(1); // PCM
+    expect(wav.readUInt16LE(22)).toBe(1); // mono
+    expect(wav.readUInt32LE(24)).toBe(16_000); // 16kHz
+    expect(wav.readUInt16LE(34)).toBe(16); // 16-bit
+    expect(wav.subarray(44).equals(pcm)).toBe(true);
+
+    // 3. whisper.cjs 0 外联 URL、0 eval / new Function
+    const whisperJs = readFileSync(path.join(voiceRoot, 'whisper.cjs'), 'utf8');
+    expect(whisperJs).not.toMatch(/https?:\/\//i);
+    expect(whisperJs).not.toMatch(/\beval\s*\(|new\s+Function\s*\(/);
+
+    // 4. 全部 7 份开源许可完整非空
+    const allLicenses = [sources.model.license, ...sources.runtime.licenses, sources.simplifiedChinese.license];
+    expect(new Set(allLicenses).size).toBe(7);
+    for (const lic of allLicenses) {
+      const full = path.join(voiceRoot, lic);
+      expect(existsSync(full), `missing license ${lic}`).toBe(true);
+      expect(readFileSync(full, 'utf8').trim().length).toBeGreaterThan(50);
+    }
+
+    // 5. 若本地已拉取 ggml-base-q5_1.bin（如 QA / 发布打包环境），强校验精确字节数与 SHA-256
+    const modelPath = path.join(voiceRoot, sources.model.fileName);
+    if (existsSync(modelPath)) {
+      expect(statSync(modelPath).size).toBe(sources.model.sizeBytes);
+      expect(sha256(sources.model.fileName)).toBe(sources.model.sha256);
+    }
   });
   it('SEC-02: buildAgyEnvironment 在全平台（Win/macOS/Linux）剥离 NODE_OPTIONS 与 ELECTRON_RUN_AS_NODE', () => {
     const baseEnv: NodeJS.ProcessEnv = {

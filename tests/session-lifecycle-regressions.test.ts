@@ -389,13 +389,18 @@ describe('会话能力、配置与失败回滚', () => {
     expect(first.approval.hasSessionGrants(a.sessionId, directory)).toBe(true);
 
     const write = first.store.write.bind(first.store);
-    vi.spyOn(first.store, 'write').mockImplementation((name, value) => {
+    const writeSpy = vi.spyOn(first.store, 'write').mockImplementation((name, value) => {
       if (name.startsWith('approval-grants-')) throw new Error('cannot write grants');
       write(name, value);
     });
     await expect(first.manageSession(a.sessionId, 'delete')).rejects.toThrow('cannot write grants');
     expect(first.approval.hasSessionGrants(a.sessionId, directory)).toBe(true);
-    await first.dispose();
+    // v0.3.6 4 步退出状态机在 checkpoint 阶段不吞写盘异常，拒绝静默丢弃遗留删除任务
+    await expect(first.dispose()).rejects.toThrow('cannot write grants');
+    expect(first.disposed).toBe(false);
+    writeSpy.mockRestore();
+    first.telemetry.dispose(false);
+    await first.swarm.clear().catch(() => {});
     const {core: next} = setup();
     expect(next.approval.hasSessionGrants(a.sessionId, directory)).toBe(false);
     expect(next.sessions.sessions.has(a.sessionId)).toBe(false);

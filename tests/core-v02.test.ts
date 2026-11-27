@@ -76,16 +76,31 @@ describe('Gravity v0.2 真内核与标准ACP桩整合', () => {
     const { core, cleanup } = setup();
     try {
       const { sessionId } = await core.createSession({ cwd: 'F:\\回放测试' });
-      vi.spyOn(core.sessions, 'isResuming').mockReturnValue(true);
+      await core.closeSession(sessionId);
       const events: string[] = [];
       core.on('message-upserted', ({ message }) => { if (message.role === 'user') events.push(message.content); });
-      const chunk = (sessionUpdate: string, text: string) => core.sessions.emit('update', { sessionId, update: { sessionUpdate, content: { type: 'text', text } } });
-      chunk('user_message_chunk', 'User-selected passages and comments:\n{"message":"","annotations":[');
-      chunk('user_message_chunk', '{"excerpt":"La","comment":"这个词是什么意思？"}]}');
-      expect(events).toEqual([]);
-      chunk('agent_message_chunk', '这是一个定冠词。');
+      const origRequest = core.client.request.bind(core.client);
+      vi.spyOn(core.client, 'request').mockImplementation(async (method, params, timeoutMs, onLate) => {
+        if (method === 'session/load') {
+          const chunk = (sessionUpdate: string, text: string) =>
+            core.client.emit('session/update', { sessionId, update: { sessionUpdate, content: { type: 'text', text } } });
+          chunk('user_message_chunk', 'User-selected passages and comments:\n{"message":"","annotations":[');
+          chunk('user_message_chunk', '{"excerpt":"La","comment":"这个词是什么意思？"}]}');
+          chunk('agent_message_chunk', '这是一个定冠词。');
+          // LoadReplay 必须暂存回放分片，在 session/load 确认成功前不向前端外发
+          expect(events).toEqual([]);
+          return { sessionId };
+        }
+        return origRequest(method, params, timeoutMs, onLate);
+      });
+      await core.resumeSession(sessionId, 'F:\\回放测试');
       expect(events).toEqual(['']);
-      expect((await readAllSessionMessages(core, sessionId))[0].annotations?.[0].comment).toBe('这个词是什么意思？');
+      const msgs = await readAllSessionMessages(core, sessionId);
+      expect(msgs[0].annotations?.[0]).toMatchObject({
+        id: expect.stringMatching(/^ann-legacy-1-/),
+        excerpt: 'La',
+        comment: '这个词是什么意思？',
+      });
     } finally { await cleanup(); }
   });
   it('重新打开旧额度页时保留侧栏尺寸并进入上下文页', async () => {
