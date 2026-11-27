@@ -19,27 +19,52 @@ import { ClientStore } from '../storage/client-store';
 import { within } from '../workspace/workspace-files';
 
 export type CliExecutor = (binary: string, args: string[], options: { shell: false; cwd?: string; timeout: number; env?: NodeJS.ProcessEnv }) => Promise<{ stdout: string; stderr?: string }>;
-export const executeOfficialCli: CliExecutor = (binary, args, options) => new Promise((resolve, reject) => {
+export const executeOfficialCli = (binary: string, args: string[], options: Parameters<CliExecutor>[2],
+  secrets: readonly string[] = args): ReturnType<CliExecutor> => new Promise((resolve, reject) => {
   execFile(binary, args, { ...options, shell: false, encoding: 'utf8', windowsHide: true, maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
-    if (error) reject(new Error(safeCliError({ stderr, stdout, message: error.message, code: error.code }, args)));
+    if (error) reject(new Error(safeCliError({ stderr, stdout, message: error.message, code: error.code }, secrets)));
     else resolve({ stdout, stderr });
   });
 });
 function safeCliError(value: unknown, args: readonly string[] = []): string {
   const fields = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-  let detail = typeof value === 'string' ? value :
-    [...new Set([fields.code, fields.stderr, fields.stdout, fields.message].filter(field => typeof field === 'string' || typeof field === 'number'))].join(' ');
-  return redactCliDiagnostic(maskEnvironment(detail, args));
+  const values = typeof value === 'string' ? [value] : [...new Set([fields.code, fields.stderr, fields.stdout, fields.message])];
+  const mask = environmentMask(args);
+  const detail = values.filter(v => typeof v === 'string' || typeof v === 'number').map(v => safeCliOutput(String(v), mask)).join(' ');
+  return redactCliDiagnostic(detail);
 }
-function maskEnvironment(detail: string, args: readonly string[]): string {
+function environmentMask(args: readonly string[]): (text: string) => string {
+  const values = new Map<string, boolean>();
   for (let i = 0; i < args.length && args[i] !== '--'; i++) {
-    if (args[i] === '--env') {
-      const assignment = args[++i] || '';
-      const secret = assignment.slice(assignment.indexOf('=') + 1);
-      if (secret) detail = maskKnownSecret(detail, secret, '[已隐藏]');
-    }
+    if (args[i] !== '--env') continue;
+    const assignment = args[++i] || '';
+    const split = assignment.indexOf('=');
+    if (split < 1) continue;
+    const name = assignment.slice(0, split), value = assignment.slice(split + 1);
+    if (!value) continue;
+    const common = value.length < 4 || /^(?:true|false|null|[+-]?\d+(?:\.\d+)?)$/i.test(value);
+    const ordinaryWord = value.length <= 12 && /^[a-z][a-z_-]*$/i.test(value);
+    const credential = /key|token|secret|passw(?:or)?d|pwd|auth|credential|cookie/i.test(name);
+    if (!credential && (common || ordinaryWord)) continue;
+    values.set(value, common);
+    // A text diagnostic may interpolate a JSON-escaped credential inside a longer sentence.
+    const escaped = JSON.stringify(value).slice(1, -1);
+    if (escaped !== value) values.set(escaped, common);
   }
-  return detail;
+  const masks = [...values].sort(([a], [b]) => b.length - a.length).map(([value, common]) =>
+    common ? new RegExp('(?<!\\w)' + value.replace(/[.*+?^$()|[\]{}\\]/g, '\\$&') + '(?!\\w)', 'g') : value);
+  return text => {
+    for (const mask of masks) text = typeof mask === 'string' ? maskKnownSecret(text, mask, '[已隐藏]') : text.replace(mask, '[已隐藏]');
+    return text;
+  };
+}
+function safeCliOutput(output: string, mask: (value: string) => string): string {
+  if (/^\s*[\[{]/.test(output)) {
+    try {
+      return JSON.stringify(JSON.parse(output, (key, value: unknown) => typeof value === 'string' ? redactCliValue(key, mask(value)) : value));
+    } catch { /* Plain CLI diagnostics can also start with a bracket. */ }
+  }
+  return sanitizeOutput(mask(output));
 }
 
 interface PluginsManagerOptions { store: ClientStore; binaryPath?: string; executor?: CliExecutor; homeDir?: string; activeProfile?: () => string }
@@ -62,10 +87,9 @@ export class PluginsManager {
   private async run(args: string[], secrets = args): Promise<string> {
     const binary = this.options.executor ? this.options.binaryPath || 'agy' : discoverAgyBinary(this.options.binaryPath);
     try {
-      const result = await (this.options.executor || executeOfficialCli)(binary, args, {
-        shell: false, cwd: this.workspaceCwd, timeout: 30000, env: buildAgyEnvironment(binary),
-      });
-      return result.stdout ? maskEnvironment(result.stdout, secrets) : result.stderr ? safeCliError(result.stderr, secrets) : '';
+      const options = { shell: false as const, cwd: this.workspaceCwd, timeout: 30000, env: buildAgyEnvironment(binary) };
+      const result = this.options.executor ? await this.options.executor(binary, args, options) : await executeOfficialCli(binary, args, options, secrets);
+      return result.stdout ? safeCliOutput(result.stdout, environmentMask(secrets)) : result.stderr ? safeCliError(result.stderr, secrets) : '';
     } catch (error) {
       throw new Error(safeCliError(error, secrets));
     }
@@ -108,7 +132,7 @@ export class PluginsManager {
       mcpServers: mcp.status === 'fulfilled' ? mcp.value.items : [],
       skills: skills.status === 'fulfilled' ? skills.value : [],
       ...(Object.keys(sectionErrors).length > 0 && { sectionErrors }),
-      lastCommandOutput: [plugins, mcp].flatMap(r => r.status === 'fulfilled' ? [sanitizeOutput(r.value.output)] : []).join('\n').trim().slice(0, 50000),
+      lastCommandOutput: [plugins, mcp].flatMap(r => r.status === 'fulfilled' ? [r.value.output] : []).join('\n').trim().slice(0, 50000),
       refreshedAt: new Date().toISOString(),
     };
     return this.getCachedSnapshot();
@@ -182,7 +206,7 @@ export class PluginsManager {
       try {
         const output = await this.run(args);
         await this.refresh(args);
-        this.snapshot.lastCommandOutput = sanitizeOutput(output).slice(0, 50000);
+        this.snapshot.lastCommandOutput = output.slice(0, 50000);
         return this.getCachedSnapshot();
       } finally { this.mutationActive = false; }
     });

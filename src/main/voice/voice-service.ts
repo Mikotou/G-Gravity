@@ -65,6 +65,8 @@ export class VoiceService {
       if (!sameExternalVoiceSettings(current, ext) || !isExternalVoiceConnected(current) || !this.settings.encryptionAvailable()) {
         throw Error('语音服务配置已失验');
       }
+      // A held recording can outlive a rate edit. The ledger snapshots the rate when the HTTP request starts.
+      ext = current;
     }
     try { return await this.remote.transcribe(ext, pcm, locale, signal, owner, scope); }
     catch (error) {

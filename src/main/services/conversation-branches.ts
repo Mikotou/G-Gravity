@@ -156,7 +156,9 @@ export class ConversationBranches {
       void this.app.sendPrompt(revision).catch(error => {
         if (this.context.isDisposed() || this.app.accounts.activeProfileId !== profile || !this.app.sessions.sessions.has(id)) return;
         if (!(this.context.messages().get(id) || []).some(m => m.role === 'user' && !m.revisionHistory)) {
-          this.context.upsert({ id: randomUUID(), sessionId: id, role: 'user', content: revision.text, annotations, references, attachments: structuredClone(selected), createdAt: new Date().toISOString(), sendFailed: true });
+          const messageId = randomUUID();
+          this.context.upsert({ id: messageId, originMessageId: messageId, sessionId: id, role: 'user', content: revision.text,
+            annotations, references, attachments: structuredClone(selected), createdAt: new Date().toISOString(), sendFailed: true });
         }
         this.context.upsert({ id: randomUUID(), sessionId: id, role: 'system', createdAt: new Date().toISOString(),
           content: '修订消息发送失败。' + (diagnosticDetail(error) ?? '未知错误') });
@@ -270,7 +272,10 @@ export class ConversationBranches {
         });
       }
 
-      const swarm = await this.app.swarm.readState(targetBranchId);
+      const [swarm, inspector] = await Promise.all([
+        this.app.swarm.readState(targetBranchId), this.app.getSessionInspector(targetBranchId),
+      ]);
+      if (profile !== this.app.accounts.activeProfileId) throw new Error('账号资料已切换');
       const enrichedActive = this.context.enrich(activeSession);
       const enrichedRoot = this.app.sessions.sessions.get(rootId) ? this.context.enrich(this.app.sessions.get(rootId)) : undefined;
       if (enrichedRoot) this.app.emit('session-updated', enrichedRoot);
@@ -286,7 +291,7 @@ export class ConversationBranches {
         previousBranchId: previousActive,
         messages: structuredClone(messages),
         messagePosition,
-        inspector: this.app.inspector.get(targetBranchId),
+        inspector,
         swarm,
         tree,
         telemetry: this.context.branchTelemetry(treeSet),

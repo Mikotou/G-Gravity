@@ -25,7 +25,7 @@ export class VoiceSettings {
     } catch { /* Invalid legacy or interrupted configuration starts with local defaults. */ }
   }
 
-  external(patch: Partial<ExternalVoiceProviderConfig> = {}): ExternalVoiceProviderConfig {
+  external(patch: NonNullable<VoiceConfigPatch['externalProvider']> = {}): ExternalVoiceProviderConfig {
     const cur = this.config.externalProvider;
     const provider = patch.provider ?? cur.provider;
     if (provider !== 'gemini-api-key' && provider !== 'openai-compatible') throw Error('无效的语音服务商');
@@ -37,7 +37,9 @@ export class VoiceSettings {
     const apiKey = (patch.apiKey ?? (sameExternalService(cur, { provider, endpoint }) ? cur.apiKey : undefined))?.trim();
     if (apiKey && (apiKey.length > 8192 || /[\r\n]/.test(apiKey))) throw Error('无效的语音密钥');
     const timeoutMs = patch.timeoutMs ?? cur.timeoutMs;
-    const rate = patch.ratePerMinuteUsd === undefined ? cur.ratePerMinuteUsd : patch.ratePerMinuteUsd;
+    // An omitted field keeps the saved rate. A present empty field clears it, including over IPC.
+    const suppliedRate: unknown = Object.hasOwn(patch, 'ratePerMinuteUsd') ? patch.ratePerMinuteUsd : cur.ratePerMinuteUsd;
+    const rate = typeof suppliedRate === 'string' && suppliedRate.trim() === '' ? undefined : suppliedRate;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 120_000 ||
         (rate != null && (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0))) throw Error('语音超时或费率无效');
     return { provider, endpoint, model, timeoutMs, apiKey, enabled: (patch.enabled ?? cur.enabled) === true,

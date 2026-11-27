@@ -193,11 +193,12 @@ export async function openWindow(service: CoreService, webPreferences: Electron.
     service.store.write('window-state.json', { bounds, maximized });
   };
   flushWindowState = saveWindowStateNow;
+  const trySaveWindowState = () => {
+    try { saveWindowStateNow(); } catch { service.emit('diagnostic', '窗口位置保存失败'); }
+  };
   const scheduleSaveWindowState = () => {
     clearTimeout(windowStateTimer);
-    windowStateTimer = setTimeout(() => {
-      try { saveWindowStateNow(); } catch { service.emit('diagnostic', '窗口位置保存失败，退出时将重试'); }
-    }, 250);
+    windowStateTimer = setTimeout(trySaveWindowState, 250);
     windowStateTimer.unref();
   };
   mainWindow.on('resize', scheduleSaveWindowState);
@@ -206,7 +207,7 @@ export async function openWindow(service: CoreService, webPreferences: Electron.
   mainWindow.on('unmaximize', scheduleSaveWindowState);
   mainWindow.on('close', event => {
     if (process.platform === 'win32') { event.preventDefault(); app.quit(); }
-    else saveWindowStateNow();
+    else trySaveWindowState();
   });
   nativeTheme.on('updated', onNativeThemeUpdated);
   const contents = mainWindow.webContents;

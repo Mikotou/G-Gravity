@@ -1,34 +1,71 @@
 'use strict';
 const { createHash, randomUUID } = require('node:crypto');
-const { constants } = require('node:fs');
-const { lstat, mkdir, open, realpath, rename, unlink } = require('node:fs/promises');
-const { join, relative, resolve } = require('node:path');
+const { constants, lstatSync, realpathSync } = require('node:fs');
+const { mkdir, open, rename, unlink } = require('node:fs/promises');
+const { dirname, join, parse, resolve, sep } = require('node:path');
 const { model } = require('./sources.json');
 
-async function literalPath(path) {
+function literalPath(path) {
   const full = resolve(path);
-  const alias = process.platform === 'darwin' && /^\/(tmp|var|etc)(?=\/|$)/.exec(full);
-  if (alias && (await lstat(alias[0])).isSymbolicLink() && await realpath(alias[0]) === '/private' + alias[0]) {
-    return '/private' + full;
+  const alias = process.platform === 'darwin' && /^\/(tmp|var|etc)(?=\/|$)/i.exec(full);
+  if (alias && lstatSync(alias[0]).isSymbolicLink()) {
+    const canonical = '/private' + alias[0].toLowerCase();
+    if (realpathSync.native(alias[0]) === canonical) return canonical + full.slice(alias[0].length);
   }
   return full;
 }
 
-async function checkedDirectory(dir) {
-  if (relative(await literalPath(dir), await realpath(dir)) !== '' || !(await lstat(dir)).isDirectory()) {
-    throw Error('Voice model directory is redirected');
+const sameIdentity = (a, b) => a.ino !== 0n && a.dev === b.dev && a.ino === b.ino;
+function checkedPath(path) {
+  const full = literalPath(path);
+  const root = parse(full).root;
+  const parts = full.slice(root.length).split(sep).filter(Boolean);
+  let cursor = root, stat = lstatSync(root, { bigint: true });
+  const identities = parts.map(name => {
+    cursor = join(cursor, name);
+    stat = lstatSync(cursor, { bigint: true });
+    if (stat.isSymbolicLink()) throw Error('Redirected voice model path');
+    return stat;
+  });
+  const resolved = realpathSync.native(full);
+  if (resolved === full) return stat;
+  let right = parse(resolved).root;
+  const names = resolved.slice(right.length).split(sep).filter(Boolean);
+  if (root.toLowerCase() !== right.toLowerCase() || parts.length !== names.length) throw Error('Redirected voice model path');
+  for (let i = 0; i < parts.length; i++) {
+    const name = parts[i], actual = names[i];
+    right = join(right, actual);
+    if (name === actual) continue;
+    const spelling = process.platform === 'darwin' && name.normalize('NFC').toLowerCase() === actual.normalize('NFC').toLowerCase();
+    const windows = process.platform === 'win32' && (name.toLowerCase() === actual.toLowerCase() ||
+      [name, actual].some(n => /~\d+(?:\.|$)/.test(n)));
+    const canonical = lstatSync(right, { bigint: true });
+    if ((!spelling && !windows) || canonical.isSymbolicLink() || !sameIdentity(identities[i], canonical)) throw Error('Redirected voice model path');
   }
+  return stat;
+}
+
+async function checkedDirectory(dir, create = false) {
+  let stat;
+  try { stat = checkedPath(dir); } catch (error) {
+    if (!create || error.code !== 'ENOENT' || dirname(dir) === dir) throw error;
+    await checkedDirectory(dirname(dir), true);
+    try { await mkdir(dir, { mode: 0o700 }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    stat = checkedPath(dir);
+  }
+  if (!stat.isDirectory()) throw Error('Invalid voice model directory');
+  return stat;
 }
 
 async function readVerified(file) {
-  const before = await lstat(file, { bigint: true });
+  const before = checkedPath(file);
   const valid = s => s.isFile() && s.nlink === 1n && s.size === BigInt(model.sizeBytes);
-  if (!valid(before) || relative(await literalPath(file), await realpath(file)) !== '') throw Error('Invalid voice model file');
+  if (!valid(before)) throw Error('Invalid voice model file');
   const flags = constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0);
   const handle = await open(file, flags);
   try {
     const stat = await handle.stat({ bigint: true });
-    if (!valid(stat) || stat.ino !== before.ino) throw Error('Voice model changed');
+    if (!valid(stat) || !sameIdentity(stat, before)) throw Error('Voice model changed');
     const bytes = Buffer.allocUnsafeSlow(model.sizeBytes);
     let offset = 0;
     while (offset < bytes.length) {
@@ -37,22 +74,23 @@ async function readVerified(file) {
       offset += bytesRead;
     }
     const after = await handle.stat({ bigint: true });
-    const current = await lstat(file, { bigint: true });
-    if (!valid(after) || !valid(current) || current.ino !== stat.ino || after.ctimeNs !== stat.ctimeNs ||
-        relative(await literalPath(file), await realpath(file)) !== '' ||
+    const current = checkedPath(file);
+    if (!valid(after) || !valid(current) || !sameIdentity(current, stat) ||
+        current.ctimeNs !== stat.ctimeNs || after.ctimeNs !== stat.ctimeNs ||
         createHash('sha256').update(bytes).digest('hex') !== model.sha256) throw Error('Voice model integrity check failed');
     return bytes;
   } finally { await handle.close(); }
 }
 
 async function install(dir, signal, progress = () => {}, fetcher = fetch) {
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  await checkedDirectory(dir);
+  dir = resolve(dir);
+  const destination = await checkedDirectory(dir, true);
   const target = join(dir, model.fileName);
   const tmp = join(dir, '.' + randomUUID() + '.tmp');
   const handle = await open(tmp, 'wx', 0o600);
-  let closed = false;
+  let ownFile, closed = false;
   try {
+    ownFile = await handle.stat({ bigint: true });
     const response = await fetcher(model.downloadUrl, { signal });
     if (!response.ok || !response.body) throw Error('Voice model download failed');
     let received = 0;
@@ -69,14 +107,17 @@ async function install(dir, signal, progress = () => {}, fetcher = fetch) {
     await handle.sync();
     await handle.close();
     closed = true;
-    await checkedDirectory(dir);
+    if (!sameIdentity(destination, await checkedDirectory(dir))) throw Error('Voice model directory changed');
     // Validate the on-disk bytes as well as the transport stream before publishing.
     await readVerified(tmp);
+    if (!sameIdentity(ownFile, checkedPath(tmp))) throw Error('Voice model download changed');
     signal?.throwIfAborted();
     await rename(tmp, target);
   } finally {
     if (!closed) await handle.close();
-    await unlink(tmp).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    try {
+      if (ownFile && sameIdentity(destination, await checkedDirectory(dir)) && sameIdentity(ownFile, checkedPath(tmp))) await unlink(tmp);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
 }
 

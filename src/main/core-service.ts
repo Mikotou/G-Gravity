@@ -1,5 +1,5 @@
 import { VoiceService } from './voice/voice-service';
-import type { VoiceOwner } from '../shared/session-owner';
+import type { SessionOwner, VoiceOwner } from '../shared/session-owner';
 import type { VoiceAbortInput, VoiceAppendInput, VoiceArmCaptureInput, VoiceConfigPatch, VoiceDiscoverModelsInput,
   VoiceFinishInput, VoiceInstallModelInput, VoiceTestConnectionInput } from '../shared/voice-contract';
 import { EventEmitter } from 'node:events';
@@ -217,7 +217,7 @@ export class CoreService extends EventEmitter {
       } catch (error) {
         this.client.lastError = diagnosticDetail(error) || 'ACP 连接失败';
       }
-      // Take the live snapshots together, after I/O. A Dock-resident turn can stop during either refresh.
+      const voiceState = await this.voice.state();
       const sessions = this.sessions.localSessionSummaries(true).map(item => this.enrichSession(item));
       for (const s of sessions) {
         this.telemetry.hydrateFromMessages(s.sessionId, s.modelId, () => this.messages.forStatistics(s.sessionId));
@@ -231,7 +231,7 @@ export class CoreService extends EventEmitter {
           }
         }
       }
-      return { preferences: { ...this.settings.preferences }, connection: this.connectionStatus(), accounts: this.accounts.getState(), plugins: this.plugins.getCachedSnapshot(), approvalConfig: publicApprovalConfig(this.approval.getConfig()), activeReviews: this.approval.listActiveReviews(), translationConfig: publicTranslationConfig(this.settings.translationConfig), sessions, layout: structuredClone(this.settings.layout), pendingApprovals: this.approval.listAwaitingUser(), telemetry: this.telemetry.snapshot(), windowChrome: this.options.windowChrome ?? 'standard', updateState: this.updater.getState() };
+      return { preferences: { ...this.settings.preferences }, connection: this.connectionStatus(), accounts: this.accounts.getState(), plugins: this.plugins.getCachedSnapshot(), approvalConfig: publicApprovalConfig(this.approval.getConfig()), activeReviews: this.approval.listActiveReviews(), translationConfig: publicTranslationConfig(this.settings.translationConfig), voiceState, sessions, layout: structuredClone(this.settings.layout), pendingApprovals: this.approval.listAwaitingUser(), telemetry: this.telemetry.snapshot(), windowChrome: this.options.windowChrome ?? 'standard', updateState: this.updater.getState() };
     })();
     try { return await this.bootstrapping; } finally { this.bootstrapping = undefined; }
   }
@@ -325,10 +325,10 @@ export class CoreService extends EventEmitter {
   async switchAccountProfile(profileId: string) { return this.accounts.switchProfile(profileId); }
   async officialLogout() { return this.accounts.logout(); }
   async getSessionInspector(sessionId: string) {
-    this.planArtifacts.observe({ profileId: this.accounts.activeProfileId, sessionId });
-    const owner = { profileId: this.accounts.activeProfileId, sessionId };
-    const epoch = this.epochForSession(owner);
-    return { ...this.inspector.get(sessionId), ...owner, epoch, owner: { ...owner, epoch } };
+    const owner: SessionOwner = { profileId: this.accounts.activeProfileId, sessionId };
+    owner.epoch = this.epochForSession(owner);
+    this.planArtifacts.observe(owner);
+    return { ...this.inspector.get(sessionId), ...owner, owner };
   }
   async getSessionPlanArtifact(input: GetSessionPlanArtifactInput): Promise<PlanArtifactSnapshot> {
     return this.planArtifacts.get(input);

@@ -9,6 +9,10 @@ export function modelMessage(text: string, annotations?: MessageAnnotation[]): s
 /** Read transcripts written before user text and selected passages were stored separately. */
 export function restoreAnnotatedMessage(message: ChatMessageItem): ChatMessageItem {
   if (message.role !== 'user') return message;
-  if (message.annotations) return { ...message, annotations: ensureAnnotationIds(message.annotations) };
-  return { ...message, ...decodeAnnotatedWireContent(message.content) };
+  if (message.annotations) {
+    const annotations = ensureAnnotationIds(message.annotations);
+    return annotations === message.annotations ? message : { ...message, annotations };
+  }
+  const decoded = decodeAnnotatedWireContent(message.content);
+  return decoded ? { ...message, ...decoded } : message;
 }
