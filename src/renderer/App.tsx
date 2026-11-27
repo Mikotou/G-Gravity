@@ -899,8 +899,13 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     }
   };
 
+  // B11：每个分屏槽位的绑定代次——连续拖放 / 切换时，较慢返回的旧请求（恢复会话、加载数据）不得覆盖新绑定
+  const bindSeqRef = useRef(new Map<number, number>());
   const handleBindSlotSession = useCallback(
     async (slotIndex: number, sessionId: string) => {
+      const seq = (bindSeqRef.current.get(slotIndex) ?? 0) + 1;
+      bindSeqRef.current.set(slotIndex, seq);
+      const stale = () => bindSeqRef.current.get(slotIndex) !== seq;
       try {
         const bridge = getDesktopBridge();
         const target = sessions.find((s) => s.sessionId === sessionId);
@@ -912,9 +917,10 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         } else if (!layoutRef.current.openTabSessionIds.includes(sessionId)) {
           await loadSessionData(sessionId);
         }
+        if (stale()) return;
         await openSessionInWorkspace(sessionId, slotIndex);
       } catch (err) {
-        reportError(err);
+        if (!stale()) reportError(err);
       }
     },
     [loadSessionData, openSessionInWorkspace, preferences.activeProfileId, replaceSession, reportError, sessions]

@@ -42,6 +42,8 @@
 .list-row-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
 .list-icon{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;background:var(--accent-soft);color:var(--accent-text);flex-shrink:0}
 .sub-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border-subtle)}
+.plugins-toolbar{display:flex;justify-content:flex-end}
+.inline-confirm{display:inline-flex;gap:4px}
 .sub-tab{position:relative;height:32px;padding:0 12px;color:var(--muted-text);font-size:12.5px;font-weight:550}
 .sub-tab:hover, .sub-tab.is-active{color:var(--text-primary)}
 .sub-tab.is-active::after{content:'';position:absolute;left:8px;right:8px;bottom:-1px;height:2px;border-radius:99px;background:var(--accent-primary)}

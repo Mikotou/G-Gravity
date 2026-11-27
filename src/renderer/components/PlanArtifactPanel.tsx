@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, CircleCheck, Circle, ExternalLink, Info, Link2, RefreshCw, TriangleAlert, Workflow } from 'lucide-react';
 import type { PlanArtifactOwner } from '@shared';
 import { countFenceLines } from '../lib/plan-view';
+import { PlanTimeline } from './PlanTimeline';
 import { useI18n } from '../i18n/I18nContext';
 import { stripIpcErrorPrefix } from '../i18n/locales';
 import { scrollBehavior } from '../lib/motion';
@@ -370,4 +371,17 @@ export function PlanDocument({
       {blocks}
     </div>
   );
+}
+
+/**
+ * @deprecated v0.3.6 兼容导出：旧单体面板已拆分为 `PlanTimeline`（四态 + 摘要）与 `PlanSourceDrawer`（按需原文）。
+ * 仅为旧调用方保留签名；正文只在用户打开「查看原文」抽屉后读取。
+ */
+export function PlanArtifactPanel(props: {
+  profileId: string;
+  sessionId: string;
+  cwd?: string;
+  onStatusChange?: (status: string) => void;
+}): React.ReactElement {
+  return <PlanTimeline profileId={props.profileId} sessionId={props.sessionId} cwd={props.cwd} plan={undefined} todos={[]} />;
 }

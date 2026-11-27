@@ -7,6 +7,7 @@ import {
 } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { formatActionError } from '../i18n/locales';
+import { isImeComposing } from '../lib/platform-keys';
 import { Icon } from './ui/Icon';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 
@@ -46,13 +47,18 @@ export function TitleOrganizerModal({
   // Esc 关闭弹窗；整理请求进行中时保持打开，避免结果回来时找不到展示位置。
   useEffect(() => {
     if (!visible) return;
+    // B14：打开时记住触发元素，关闭后归还焦点；输入法组词中的 Esc 只取消候选
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     function onKey(e: KeyboardEvent): void {
-      if (e.key !== 'Escape' || runningRef.current) return;
+      if (e.key !== 'Escape' || runningRef.current || isImeComposing(e)) return;
       e.preventDefault();
       onCloseRef.current();
     }
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      if (opener?.isConnected) requestAnimationFrame(() => opener.focus());
+    };
   }, [visible]);
 
   // 由上层先执行整理，再把本次结果传入。列表展示已处理条目的前后标题，空建议列表也可显示汇总。

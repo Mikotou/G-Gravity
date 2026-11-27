@@ -111,20 +111,87 @@ function useAction() {
   const { dict } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 同一面板的操作复用忙碌状态，每次重试先清除上次错误，再把新的异常按当前语言显示。
-  async function run(fn: () => Promise<void>): Promise<void> {
-    if (busy) return;
+  const [errorKey, setErrorKey] = useState<string | null>(null);
+  // B5：忙碌守卫用 ref（避免同一帧双击穿透闭包旧值）；卸载后不再写状态；错误按操作 key 隔离显示
+  const busyRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  async function run(fn: () => Promise<void>, key?: string): Promise<void> {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setError(null);
+    setErrorKey(null);
     try {
       await fn();
     } catch (err) {
-      setError(formatActionError(err, dict));
+      if (mountedRef.current) {
+        setError(formatActionError(err, dict));
+        setErrorKey(key ?? null);
+      }
     } finally {
-      setBusy(false);
+      busyRef.current = false;
+      if (mountedRef.current) setBusy(false);
     }
   }
-  return { busy, error, run };
+  return { busy, error, errorKey, run };
+}
+
+/** B3：破坏性操作行内二次确认（首次点击展开「确认删除 / 取消」，Esc 或 5 秒后自动收回）。 */
+function ConfirmDeleteButton({
+  label,
+  name,
+  disabled,
+  testId,
+  onConfirm,
+}: {
+  label: string;
+  name: string;
+  disabled?: boolean;
+  testId?: string;
+  onConfirm: () => void;
+}): React.ReactElement {
+  const { dict } = useI18n();
+  const t6 = dict.ui.v036;
+  const [asking, setAsking] = useState(false);
+  const confirmRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!asking) return;
+    confirmRef.current?.focus();
+    const timer = window.setTimeout(() => setAsking(false), 5000);
+    return () => window.clearTimeout(timer);
+  }, [asking]);
+  if (!asking) {
+    return (
+      <button type="button" className="icon-btn" title={label} aria-label={`${label} ${name}`} disabled={disabled}
+        onClick={() => setAsking(true)} data-testid={testId}>
+        <Icon icon={Trash2} size="sm" />
+      </button>
+    );
+  }
+  return (
+    <span className="inline-confirm" role="group" aria-label={t6.confirmDeleteAsk(name)}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          setAsking(false);
+        }
+      }}>
+      <button ref={confirmRef} type="button" className="btn btn-sm danger" disabled={disabled}
+        onClick={() => { setAsking(false); onConfirm(); }} data-testid={testId ? `${testId}-confirm` : undefined}>
+        {t6.confirmDelete}
+      </button>
+      <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAsking(false)}>
+        {t6.cancel}
+      </button>
+    </span>
+  );
 }
 
 function Switch({
@@ -269,16 +336,13 @@ export function AccountsPanel({
                   </button>
                 )}
                 {!p.isDefault && !active && (
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    title={dict.accountsDeleteBtn}
-                    aria-label={dict.accountsDeleteBtn}
+                  <ConfirmDeleteButton
+                    label={dict.accountsDeleteBtn}
+                    name={p.name || p.profileId}
                     disabled={busy}
-                    onClick={() => void run(() => onDeleteProfile(p.profileId))}
-                  >
-                    <Icon icon={Trash2} size="sm" />
-                  </button>
+                    testId={`delete-profile-${p.profileId}`}
+                    onConfirm={() => void run(() => onDeleteProfile(p.profileId))}
+                  />
                 )}
               </div>
             </div>
@@ -1790,7 +1854,9 @@ export function PluginsPanel({
             )}
           </button>
         ))}
-        <span className="spacer" />
+      </div>
+      {/* B4：刷新是操作而非页签，移出 role="tablist"，保持方向键漫游只在页签间进行 */}
+      <div className="plugins-toolbar">
         <button
           type="button"
           className="btn btn-ghost btn-sm"
@@ -1908,16 +1974,13 @@ export function PluginsPanel({
                       label={pl.enabled ? dict.pluginDisableBtn : dict.pluginEnableBtn}
                       onChange={(v) => void run(() => onRunPluginAction({ action: v ? 'enable' : 'disable', target: pl.name }))}
                     />
-                    <button
-                      type="button"
-                      className="icon-btn"
-                      title={dict.pluginUninstallBtn}
-                      aria-label={dict.pluginUninstallBtn}
+                    <ConfirmDeleteButton
+                      label={dict.pluginUninstallBtn}
+                      name={pl.name}
                       disabled={busy}
-                      onClick={() => void run(() => onRunPluginAction({ action: 'uninstall', target: pl.name }))}
-                    >
-                      <Icon icon={Trash2} size="sm" />
-                    </button>
+                      testId={`uninstall-plugin-${pl.name}`}
+                      onConfirm={() => void run(() => onRunPluginAction({ action: 'uninstall', target: pl.name }))}
+                    />
                   </div>
                 </div>
               ))
@@ -2008,16 +2071,13 @@ export function PluginsPanel({
                       label={srv.enabled ? dict.pluginDisableBtn : dict.pluginEnableBtn}
                       onChange={(v) => void run(() => onRunMcpAction({ action: v ? 'enable' : 'disable', name: srv.name }))}
                     />
-                    <button
-                      type="button"
-                      className="icon-btn"
-                      title={dict.mcpRemoveBtn}
-                      aria-label={dict.mcpRemoveBtn}
+                    <ConfirmDeleteButton
+                      label={dict.mcpRemoveBtn}
+                      name={srv.name}
                       disabled={busy}
-                      onClick={() => void run(() => onRunMcpAction({ action: 'remove', name: srv.name }))}
-                    >
-                      <Icon icon={Trash2} size="sm" />
-                    </button>
+                      testId={`remove-mcp-${srv.name}`}
+                      onConfirm={() => void run(() => onRunMcpAction({ action: 'remove', name: srv.name }))}
+                    />
                   </div>
                 </div>
               ))

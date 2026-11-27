@@ -222,6 +222,8 @@ const CACHE_MAX_ENTRIES = 512;
 /** Base64 预览图按字符数近似计入（UTF-16 下每字符 2 字节），总预算约 24 MB。 */
 const CACHE_MAX_BYTES = 24 * 1024 * 1024;
 let cacheBytes = 0;
+/** B15：缓存代次——清空（切账号 / 删会话）后递增，丢弃清空前发出的迟到检验结果，杜绝跨 Profile 污染。 */
+let cacheGeneration = 0;
 
 function cacheKey(cwd: string, sessionId: string, target: string): string {
   return `${cwd}\u0000${sessionId}\u0000${target}`;
@@ -306,6 +308,7 @@ function subscribeKeys(keys: string[], fn: () => void): () => void {
 
 /** 切换账号、删除会话或测试时清空检验缓存（释放全部 Base64 预览图）。 */
 export function clearLocalTargetInspectionCache(): void {
+  cacheGeneration++;
   inspectCache.clear();
   inflight.clear();
   cacheBytes = 0;
@@ -357,6 +360,7 @@ export function useLocalTargetInspection(targets: string[], options: { cwd: stri
       for (let i = 0; i < needed.length; i += MAX_LOCAL_INSPECT_TARGETS) {
         const batch = needed.slice(i, i + MAX_LOCAL_INSPECT_TARGETS);
         batch.forEach(target => inflight.add(cacheKey(cwd, sessionId, target)));
+        const generation = cacheGeneration;
         let request: Promise<{ items: Record<string, InspectedLocalTarget> }>;
         try {
           request = bridge.inspectLocalTargets({ targets: batch, cwd: cwd || undefined, sessionId: sessionId || undefined, includePreviewData: true });
@@ -365,6 +369,7 @@ export function useLocalTargetInspection(targets: string[], options: { cwd: stri
         }
         void Promise.resolve(request)
           .then(result => {
+            if (generation !== cacheGeneration) return;
             const now = Date.now();
             for (const target of batch) {
               const item = result?.items?.[target];
@@ -372,10 +377,12 @@ export function useLocalTargetInspection(targets: string[], options: { cwd: stri
             }
           })
           .catch(() => {
+            if (generation !== cacheGeneration) return;
             const now = Date.now();
             for (const target of batch) writeCache(cacheKey(cwd, sessionId, target), 'failed', now);
           })
           .finally(() => {
+            if (generation !== cacheGeneration) return;
             const keys = batch.map(target => cacheKey(cwd, sessionId, target));
             keys.forEach(key => inflight.delete(key));
             notifyKeys(keys);

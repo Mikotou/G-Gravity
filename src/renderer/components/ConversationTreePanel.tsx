@@ -107,7 +107,7 @@ export function ConversationTreePanel({
         </div>
       </section>
 
-      <div className="conv-tree-list" role="tree" aria-label={dict.ui.v035.treeTitle} data-testid="conversation-tree-nodes">
+      <div className="conv-tree-list" role="list" aria-label={dict.ui.v035.treeTitle} data-testid="conversation-tree-nodes">
         {rows.map(({ node, ancestorHasMore, isLastChild }) => {
           const liveTele = telemetry.activeSessions[node.branchId];
           const usedTokens = liveTele?.usedContextTokens ?? node.usedContextTokens;
@@ -126,13 +126,10 @@ export function ConversationTreePanel({
             <div
               key={node.branchId}
               className={`conv-tree-row ${isActive ? 'is-active' : ''} ${node.isOnActivePath ? 'is-on-path' : ''}`}
-              role="treeitem"
-              aria-selected={isActive}
-              aria-level={node.depth + 1}
-              aria-setsize={node.siblingCount}
-              aria-posinset={node.siblingIndex}
-              aria-expanded={hasChildren ? true : undefined}
+              role="listitem"
+              aria-current={isActive ? 'true' : undefined}
               data-depth={node.depth}
+              data-has-children={hasChildren || undefined}
             >
               {node.depth > 0 && (
                 <div className="conv-tree-rails" aria-hidden="true">

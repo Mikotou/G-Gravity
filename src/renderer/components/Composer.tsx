@@ -600,6 +600,7 @@ export function Composer({
     if (!turnActive) setRunningEnterNotice(false);
   }, [turnActive]);
 
+  const compactingRef = useRef(false);
   const sendLabel = annotationItems.length ? ui.v035.composerSendAnnotations(annotationItems.length) : dict.sendMessageBtn;
   async function submit(): Promise<void> {
     const text = draft.trim();
@@ -608,11 +609,19 @@ export function Composer({
 
     // 独立输入的 /compact 和 /plan 走各自的操作入口。带有引用摘录或批注时，草稿会与它们一起构造成消息。
     if (text === '/compact' && !hasQuotesOrNotations) {
+      // B12：压缩进行中重复回车 / 双击发送只触发一次；失败时恢复原指令
+      if (compactingRef.current) return;
+      compactingRef.current = true;
       setDraft('');
+      setSending(true);
       try {
         await onCompactContext(session.sessionId);
       } catch (err) {
+        setDraft((current) => current || text);
         reportError(err);
+      } finally {
+        compactingRef.current = false;
+        setSending(false);
       }
       return;
     }
