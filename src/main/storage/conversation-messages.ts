@@ -1,12 +1,11 @@
-import { planReferences as extractPlanReferences } from '../session/plan-references';
 import { createHash } from 'node:crypto';
 import type { ChatMessageItem, ConversationMessagePage, MessagePagePosition } from '../../shared/session-contract';
 import { advanceMessagePosition, emptyMessagePosition, MESSAGE_PAGE_SIZE } from '../../shared/session-contract';
 import { redactSecretsForReviewer } from '../security/redaction';
-import { restoreAnnotatedMessage } from '../session/annotation-prompt';
+import { decodeAnnotatedWireContent, ensureAnnotationIds, summarizeMessageIntentForContext } from '../../shared/message-annotation';
 import {
   mergeBranchMessageStats, summarizeBranchMessages, type BranchMessageStats,
-} from '../session/conversation-tree-store';
+} from '../../shared/conversation-tree';
 import type { ClientStore } from './client-store';
 
 interface PageRef {
@@ -18,13 +17,14 @@ interface SessionLog {
   pages: PageRef[];
   recent: ChatMessageItem[];
   recoverOlder?: boolean;
-  planHistoryChecked?: boolean;
 }
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 function restore(items: ChatMessageItem[], recoverDelivery = true): ChatMessageItem[] {
   return items.filter(m => m && typeof m.id === 'string').map(item => ({
-    ...restoreAnnotatedMessage({ ...item, content: typeof item.content === 'string' ? item.content : '' }), isStreaming: false,
+    ...item, content: typeof item.content === 'string' ? item.content : '',
+    ...(item.annotations ? { annotations: ensureAnnotationIds(item.annotations) } :
+      item.role === 'user' && typeof item.content === 'string' ? decodeAnnotatedWireContent(item.content) : {}), isStreaming: false,
     ...(recoverDelivery && item.questionFollowup && { questionFollowup: { ...item.questionFollowup,
       state: item.questionFollowup.state === 'queued' ? 'failed-unsent' : item.questionFollowup.state === 'sending' ? 'unknown' : item.questionFollowup.state } }),
     question: item.question?.state === 'open' ? { ...item.question, state: 'cancelled' } : item.question,
@@ -41,7 +41,6 @@ export class ConversationMessages {
   private liveIndex: Record<string, unknown> = Object.create(null);
   private logs = new Map<string, SessionLog>();
   private unreadable = new Map<string, unknown>();
-  private planRefsByPage = new WeakMap<PageRef, string[]>();
   private cached = new Map<string, ChatMessageItem[]>();
   private liveDeliveryPages = new Set<string>();
   constructor(private store: ClientStore) {}
@@ -67,7 +66,7 @@ export class ConversationMessages {
           this.logs.set(id, { pages: [], recent: restore(raw.recent) });
           continue;
         }
-        this.logs.set(id, { ...raw, recent: restore(raw.recent) });
+        this.logs.set(id, { pages: raw.pages, recoverOlder: raw.recoverOlder, recent: restore(raw.recent) });
       } else {
         this.unreadable.set(id, raw);
         if (Array.isArray(raw?.recent)) this.logs.set(id, { pages: [], recent: restore(raw.recent) });
@@ -90,31 +89,7 @@ export class ConversationMessages {
     return items;
   }
   recent(id: string): ChatMessageItem[] { return this.logs.get(id)?.recent || []; }
-  private indexPlanReferences(ref: PageRef, items: ChatMessageItem[]): string[] {
-    const paths = [...new Set(extractPlanReferences(items))];
-    this.planRefsByPage.set(ref, paths);
-    return paths;
-  }
-  *planReferences(id: string, readArchives: boolean): Generator<string> {
-    const log = this.logs.get(id);
-    if (!log) return;
-    yield* extractPlanReferences(log.recent);
-    for (let i = log.pages.length - 1; i >= 0; i--) {
-      const ref = log.pages[i];
-      let paths = this.planRefsByPage.get(ref);
-      if (!paths && readArchives) {
-        try { paths = this.indexPlanReferences(ref, this.readPage(ref)); }
-        catch { continue; } // An unavailable page supplies no authority. The readable tail is still usable.
-      }
-      if (paths) yield* paths;
-    }
-  }
   needsRecovery(id: string): boolean { return this.logs.get(id)?.recoverOlder === true; }
-  hasCheckedPlanHistory(id: string): boolean { return this.logs.get(id)?.planHistoryChecked === true; }
-  markPlanHistoryChecked(id: string): void {
-    const log = this.logs.get(id);
-    if (log && !log.planHistoryChecked) { log.planHistoryChecked = true; this.dirty = true; }
-  }
   markRecovered(id: string): void { const log = this.logs.get(id); if (log?.recoverOlder) { delete log.recoverOlder; this.dirty = true; } }
   get(id: string): ChatMessageItem[] | undefined {
     if (this.unreadable.has(id)) throw new Error('此会话的旧消息索引无法读取，本地副本已保留');
@@ -159,7 +134,7 @@ export class ConversationMessages {
     let first: ChatMessageItem | undefined;
     for (let i = 0; !first && i <= log.pages.length; i++) {
       const items = i === log.pages.length ? log.recent : this.availablePage(log.pages[i]);
-      first = items.find(m => m.role === 'user' && m.content?.trim());
+      first = items.find(m => m.role === 'user' && (m.content?.trim() || m.annotations?.length));
     }
     const latest: ChatMessageItem[] = [];
     let assistant: ChatMessageItem | undefined;
@@ -167,7 +142,7 @@ export class ConversationMessages {
       const items = i === log.pages.length ? log.recent : this.availablePage(log.pages[i]);
       for (let j = items.length - 1; j >= 0; j--) {
         const m = items[j];
-        if (!m.content?.trim()) continue;
+        if (!m.content?.trim() && !m.annotations?.length) continue;
         if (m.role === 'user' && latest.length < 4) latest.push(m);
         if (m.role === 'assistant') assistant ??= m;
         if (latest.length === 4 && assistant) break;
@@ -176,8 +151,8 @@ export class ConversationMessages {
     latest.reverse();
     if (first && !latest.some(m => m.id === first.id)) latest.unshift(first);
     if (assistant) latest.push(assistant);
-    return latest.map(({ id, sessionId, role, content, createdAt }) => ({
-      id, sessionId, role, createdAt, content: redactSecretsForReviewer(content).slice(0, 2800),
+    return latest.map(({ id, sessionId, role, content, annotations, createdAt }) => ({
+      id, sessionId, role, createdAt, content: redactSecretsForReviewer(summarizeMessageIntentForContext(content, annotations, 2800)),
     }));
   }
   branchStats(id: string): BranchMessageStats {
@@ -221,12 +196,15 @@ export class ConversationMessages {
     else log.recent.push(message);
   }
   findMessage(id: string, messageId: string): ChatMessageItem | undefined {
+    return this.findWhere(id, m => m.id === messageId);
+  }
+  findWhere(id: string, predicate: (message: ChatMessageItem) => boolean): ChatMessageItem | undefined {
     const log = this.logs.get(id);
     if (!log) return;
-    const recent = log.recent.find(m => m.id === messageId);
+    const recent = log.recent.find(predicate);
     if (recent) return recent;
     for (let i = log.pages.length - 1; i >= 0; i--) {
-      const message = this.readPage(log.pages[i]).find(m => m.id === messageId);
+      const message = this.readPage(log.pages[i]).find(predicate);
       if (message) return message;
     }
   }
@@ -258,7 +236,6 @@ export class ConversationMessages {
       const live = changed.some(m => m.questionFollowup?.state === 'queued' || m.questionFollowup?.state === 'sending');
       rewritten.push({ old: ref.file, live: live ? file : undefined });
       log.pages[i] = { ...ref, file, stats: summarizeBranchMessages(changed) };
-      this.indexPlanReferences(log.pages[i], changed);
     }
     if (replacements.size) throw new Error('无法定位提问消息');
     this.logs.set(id, log);
@@ -316,11 +293,10 @@ export class ConversationMessages {
         this.store.write(file, chunk);
         const end = advanceMessagePosition(pages.at(-1)?.end || emptyMessagePosition(), chunk);
         const ref = { file, end, stats: summarizeBranchMessages(chunk) };
-        this.indexPlanReferences(ref, chunk);
         pages.push(ref);
         split += chunk.length;
       }
-      output[id] = { pages, recent: split ? log.recent.slice(split) : log.recent, recoverOlder: log.recoverOlder || undefined, planHistoryChecked: log.planHistoryChecked || undefined };
+      output[id] = { pages, recent: split ? log.recent.slice(split) : log.recent, recoverOlder: log.recoverOlder || undefined };
     }
     const preserved = Object.fromEntries([...this.unreadable].map(([id, raw]) => {
       const log = this.logs.get(id);

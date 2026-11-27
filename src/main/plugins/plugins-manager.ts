@@ -29,14 +29,17 @@ function safeCliError(value: unknown, args: readonly string[] = []): string {
   const fields = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   let detail = typeof value === 'string' ? value :
     [...new Set([fields.code, fields.stderr, fields.stdout, fields.message].filter(field => typeof field === 'string' || typeof field === 'number'))].join(' ');
-  for (let i = 0; i < args.length; i++) {
+  return redactCliDiagnostic(maskEnvironment(detail, args));
+}
+function maskEnvironment(detail: string, args: readonly string[]): string {
+  for (let i = 0; i < args.length && args[i] !== '--'; i++) {
     if (args[i] === '--env') {
       const assignment = args[++i] || '';
       const secret = assignment.slice(assignment.indexOf('=') + 1);
       if (secret) detail = maskKnownSecret(detail, secret, '[已隐藏]');
     }
   }
-  return redactCliDiagnostic(detail);
+  return detail;
 }
 
 interface PluginsManagerOptions { store: ClientStore; binaryPath?: string; executor?: CliExecutor; homeDir?: string; activeProfile?: () => string }
@@ -56,15 +59,15 @@ export class PluginsManager {
     if (this.isIsolated()) result.lastCommandOutput = '官方 CLI 列表属于默认 Profile，隔离 Profile 仅可查看。\n' + (result.lastCommandOutput ?? '');
     return result;
   }
-  private async run(args: string[]): Promise<string> {
+  private async run(args: string[], secrets = args): Promise<string> {
     const binary = this.options.executor ? this.options.binaryPath || 'agy' : discoverAgyBinary(this.options.binaryPath);
     try {
       const result = await (this.options.executor || executeOfficialCli)(binary, args, {
         shell: false, cwd: this.workspaceCwd, timeout: 30000, env: buildAgyEnvironment(binary),
       });
-      return result.stdout ? result.stdout : result.stderr ? safeCliError(result.stderr, args) : '';
+      return result.stdout ? maskEnvironment(result.stdout, secrets) : result.stderr ? safeCliError(result.stderr, secrets) : '';
     } catch (error) {
-      throw new Error(safeCliError(error, args));
+      throw new Error(safeCliError(error, secrets));
     }
   }
   /** Reads wait in arrival order. Explicit mutations still reject a concurrent management action. */
@@ -86,10 +89,10 @@ export class PluginsManager {
     try { return await result; }
     finally { if (this.loading?.result === result) this.loading = undefined; }
   }
-  private async refresh(): Promise<PluginsManagerSnapshot> {
+  private async refresh(secrets: string[] = []): Promise<PluginsManagerSnapshot> {
     const [plugins, mcp, skills] = await Promise.allSettled([
-      this.run(['plugin', 'list', '--json']).then(output => ({ output, items: this.parsePlugins(output) })),
-      this.run(['mcp', 'list']).then(output => ({ output, items: this.parseMcpList(output) })),
+      this.run(['plugin', 'list', '--json'], secrets).then(output => ({ output, items: this.parsePlugins(output) })),
+      this.run(['mcp', 'list'], secrets).then(output => ({ output, items: this.parseMcpList(output) })),
       this.scanSkills(this.workspaceCwd),
     ]);
     const sectionErrors: NonNullable<PluginsManagerSnapshot['sectionErrors']> = {};
@@ -137,25 +140,31 @@ export class PluginsManager {
       });
       return list.map(item => {
         if (!isSafeMcpServerName(item?.name) || ![item.url, item.command, item.commandOrUrl].some(v => typeof v === 'string' && v.trim())) throw invalid();
-        return { name: item.name, type: item.type === 'http' || item.url ? 'http' : 'stdio', commandOrUrl: item.url || item.command || item.commandOrUrl,
-          args: Array.isArray(item.args) ? item.args : [], enabled: item.enabled !== false && item.disabled !== true, status: item.status };
+        const transport = String(item.type ?? item.transport ?? '').toLowerCase();
+        const commandOrUrl = item.url || item.command || item.commandOrUrl;
+        const http = transport === 'sse' || transport === 'http' || /^https?:\/\//i.test(commandOrUrl);
+        return { name: item.name, type: http ? 'http' : 'stdio', commandOrUrl,
+          args: Array.isArray(item.args) ? item.args : [], enabled: item.enabled !== false && item.disabled !== true,
+          status: transport === 'sse' ? 'sse' : item.status };
       });
     }
     const lines = sanitizeOutput(output).split(/\r?\n/);
     const rows = lines.flatMap(line => {
         const row = /^\s*([\w.-]+)\s+(stdio|http|sse)\s+(enabled|disabled)\s+(.+?)\s*$/i.exec(line);
         if (row && isSafeMcpServerName(row[1])) {
-          return [{ name: row[1], type: row[2].toLowerCase() === 'stdio' ? 'stdio' as const : 'http' as const, commandOrUrl: row[4], args: [], enabled: row[3].toLowerCase() === 'enabled', status: row[3] }];
+          return [{ name: row[1], type: row[2].toLowerCase() === 'stdio' ? 'stdio' as const : 'http' as const, commandOrUrl: row[4], args: [], enabled: row[3].toLowerCase() === 'enabled', status: row[2].toLowerCase() === 'sse' ? 'sse' : row[3] }];
         }
         const match = /^\s*(?:[-*]\s+)?([\w.-]+)\s*:\s*(.+)$/.exec(line); if (!match || !isSafeMcpServerName(match[1])) return [];
         if (/^(?:name|status|type|command|url|version|description|enabled|disabled|servers?|total|warning|error|note|usage|configuration)$/i.test(match[1])) return [];
         const text = match[2].trim();
         const marker = /\s+[\[(](enabled|disabled)[\])]$/i.exec(text);
-        const destination = marker ? text.slice(0, marker.index).trimEnd() : text;
+        const transportText = marker ? text.slice(0, marker.index).trimEnd() : text;
+        const sse = /(?:^sse\s+|\s+[\[(]sse[\])]$)/i;
+        const destination = transportText.replace(sse, '').trim();
         const url = /^https?:\/\/[^\s]+$/i.test(destination);
         const command = /^(?:(?:"[^"]+"|[^\s]+)\.(?:exe|cmd|bat|sh|js|py)|\.{0,2}[\\/]\S+|[A-Za-z]:[\\/]\S+|(?:node|npx|npm|bunx?|deno|python[\d.]*|uvx?|docker|java|go|ruby|dotnet))(?:\s|$)/i.test(destination);
         if (!url && !command) return [];
-        return [{ name: match[1], type: url ? 'http' as const : 'stdio' as const, commandOrUrl: destination, args: [], enabled: marker?.[1].toLowerCase() !== 'disabled', status: marker?.[1] || '官方 CLI 列表（文本）' }];
+        return [{ name: match[1], type: url ? 'http' as const : 'stdio' as const, commandOrUrl: destination, args: [], enabled: marker?.[1].toLowerCase() !== 'disabled', status: sse.test(transportText) ? 'sse' : marker?.[1] || '官方 CLI 列表（文本）' }];
     });
     if (rows.length) return rows;
     const empty = /^(?:note:\s*)?no (?:configured )?(?:mcp )?servers?(?: (?:are|configured|found|registered|installed|available|yet))*[.!]?$|^total:\s*0$/i;
@@ -172,7 +181,7 @@ export class PluginsManager {
       this.mutationActive = true;
       try {
         const output = await this.run(args);
-        await this.refresh();
+        await this.refresh(args);
         this.snapshot.lastCommandOutput = sanitizeOutput(output).slice(0, 50000);
         return this.getCachedSnapshot();
       } finally { this.mutationActive = false; }

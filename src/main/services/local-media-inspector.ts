@@ -1,3 +1,4 @@
+import type { SessionOwner } from '../../shared/session-owner';
 import { lstatSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
@@ -34,7 +35,7 @@ export function isExecutableTarget(real: string, requested: string, stat: Stats)
     (process.platform !== 'win32' && stat.isFile() && (stat.mode & 0o111) !== 0);
 }
 
-export interface LocalTargetContext { homeDir?: string; appDataRoot?: string }
+export interface LocalTargetContext { homeDir?: string; appDataRoot?: string; profileId?: string; owns?: (owner: SessionOwner) => boolean }
 interface ArtifactScope { root: string; anchor: string }
 interface Candidate { path: string; relativeToWorkspace?: boolean; artifact?: ArtifactScope }
 
@@ -109,13 +110,18 @@ function targetsWorkspace(candidatePath: string, cwd?: string, workspaceRoot?: s
 }
 
 type LocalResolution = { kind: 'found'; path: string; candidatePath: string; workspaceRoot?: string } | { kind: 'missing'; path?: string } | { kind: 'forbidden' };
-export function resolveLocalTarget(raw: string, input: { cwd?: string; sessionId?: string }, context: LocalTargetContext, restrictWorkspaceLinks = false): LocalResolution {
+export function resolveLocalTarget(raw: string, input: { cwd?: string; sessionId?: string; profileId?: string; owner?: SessionOwner }, context: LocalTargetContext, restrictWorkspaceLinks = false): LocalResolution {
   const home = context.homeDir || homedir();
-  const { cwd, sessionId } = input;
+  const { cwd, owner } = input;
+  const sessionId = input.sessionId ?? owner?.sessionId;
+  const profileId = input.profileId ?? owner?.profileId ?? context.profileId;
+  const authorized = !!sessionId && !!profileId && profileId === context.profileId &&
+    (!owner || (owner.sessionId === sessionId && owner.profileId === profileId)) &&
+    context.owns?.({ profileId, sessionId, epoch: owner?.epoch }) === true;
   const inProfileStore = (path: string) => context.appDataRoot && localPathMember(context.appDataRoot, path) !== undefined;
   const workspaceRoot = restrictWorkspaceLinks ? canonicalWorkspace(cwd) : undefined;
   const stores = context.appDataRoot ? [context.appDataRoot] : ['antigravity-cli', 'antigravity'].map(name => join(home, '.gemini', name));
-  const scopes = sessionId && /^[a-z0-9_-]{1,100}$/i.test(sessionId)
+  const scopes = authorized && sessionId && /^[a-z0-9_-]{1,100}$/i.test(sessionId)
     ? stores.map(store => ({ root: join(store, 'brain', sessionId), anchor: context.appDataRoot ? dirname(store) : home })) : [];
   const choices = localPaths(raw).flatMap(path => candidates(path, cwd, home, scopes));
   const paths = [...choices.filter(c => !c.artifact), ...choices.filter(c => c.artifact)];
@@ -287,6 +293,10 @@ export async function inspectLocalTargets(input: InspectLocalTargetsInput, conte
   for (const raw of new Set(input.targets.slice(0, MAX_LOCAL_INSPECT_TARGETS))) {
     if (typeof raw !== 'string') continue;
     const item = await inspectOne(raw, input, context, budget);
+    if (input.owner && !context.owns?.(input.owner)) {
+      items[raw] = { rawTarget: raw, fileName: extractTargetBaseName(raw), kind: 'forbidden', exists: false };
+      continue;
+    }
     if (item.previewDataUrl) budget -= item.sizeBytes!;
     items[raw] = item;
   }

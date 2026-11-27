@@ -8,10 +8,8 @@ import {
 } from '../../shared/session-contract';
 import { QuestionFollowups } from './question-followups';
 import { TurnActivity } from './turn-activity';
-import { normalizePlan } from './session-plan';
-import { HistoryReplay } from './history-replay';
+import { LoadReplay } from './load-replay';
 import { AgentQuestions } from './agent-questions';
-import { restoreAnnotatedMessage } from './annotation-prompt';
 import { appendImage } from './message-images';
 import { approvalConversationContext } from '../services/approval-coordinator';
 import { buildDiagnosticBanner, type SessionDiagnosticBanner } from '../../shared/diagnostic-contract';
@@ -21,7 +19,6 @@ import type { TurnHost } from '../core-contracts';
 export abstract class TurnStream {
   private profileGeneration = 0;
   private readonly textBatches = new Map<string, { message: ChatMessageItem; timer: NodeJS.Timeout }>();
-  readonly recoveringHistory = new Map<string, HistoryReplay>();
   readonly sessionLifetimes = new Map<string, symbol>();
   readonly assistantMessages = new Map<string, ChatMessageItem>();
   // Elicitation splits the visible reply. Retain earlier segments until the enclosing turn settles.
@@ -29,14 +26,7 @@ export abstract class TurnStream {
   readonly thoughtOwners = new Map<string, { sessionId: string; message: ChatMessageItem }>();
   readonly followups = new QuestionFollowups(() => this.app.messages, m => this.publishCommitted(m));
   readonly activity = new TurnActivity();
-  private replayPlans = new Map<string, { profile: string; generation: number; latest?: ReturnType<typeof normalizePlan> }>();
-  beginPlanReplay(id: string) {
-    const replay = { profile: this.app.accounts.activeProfileId, generation: this.profileGeneration, latest: undefined as ReturnType<typeof normalizePlan> };
-    this.replayPlans.set(id, replay);
-    const current = () => this.replayPlans.get(id) === replay && replay.generation === this.profileGeneration && replay.profile === this.app.accounts.activeProfileId;
-    return { current, commit: () => { if (current() && replay.latest) this.app.inspector.applyPlan(id, replay.latest); },
-      discard: () => { if (this.replayPlans.get(id) === replay) this.replayPlans.delete(id); } };
-  }
+  readonly loadReplay: LoadReplay;
   private queueAnswer(message: ChatMessageItem): void {
     const profile = this.app.accounts.activeProfileId, id = message.sessionId;
     this.followups.add(message);
@@ -73,14 +63,12 @@ export abstract class TurnStream {
   readonly warningChunkStarts = new WeakMap<ChatMessageItem, { offset: number; separate: boolean }>();
   readonly promptOwners = new Map<string, AbortController>();
   readonly turnAutoDenied = new Map<string, Array<{ toolCallId?: string; toolName: string; command: string; reason: string }>>();
-  readonly skipReplayedMessages = new Set<string>();
   readonly reactiveTurnTimers = new Map<string, NodeJS.Timeout>();
-  readonly replayedUsers = new Map<string, ChatMessageItem>();
   readonly compactAvailable = new Set<string>();
   readonly lastToolReply = new Map<string, { contentLengthAtLastToolEnd: number; attachmentsAtLastToolEnd: number }>();
   readonly autoDeniedByToolCall = new Map<string, string>();
   readonly submitted = new Map<string, ChatMessageItem>();
-  constructor(protected readonly app: TurnHost) {}
+  constructor(protected readonly app: TurnHost) { this.loadReplay = new LoadReplay(app); }
   protected abstract sendQueuedReply(id: string): void;
   isSessionTurnActive(id: string): boolean {
     const status = this.app.sessions.sessions.get(id)?.status;
@@ -284,24 +272,9 @@ export abstract class TurnStream {
   /** 按 ACP 更新类型合并增量。回复正文、思考、工具状态和用量共享 sessionId，各自维护自己的累计方式。 */
   consumeUpdate({ sessionId, update }: AcpSessionUpdateNotification): void {
     if (this.app.disposed || this.app.isEphemeral(sessionId)) return;
+    if (this.loadReplay.consume(sessionId, update) || this.app.sessions.isResuming(sessionId)) return;
     const pureText = update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && typeof update.content.text === 'string';
     if (!pureText) this.flushText(sessionId);
-    const replaying = this.app.sessions.isResuming(sessionId) || this.replayPlans.has(sessionId);
-    if (replaying) {
-      this.app.swarm.consume(sessionId, update, true);
-      this.recoveringHistory.get(sessionId)?.consume(update);
-    }
-    if (replaying && update.sessionUpdate === 'plan' && this.skipReplayedMessages.has(sessionId)) {
-      const replay = this.replayPlans.get(sessionId);
-      const latest = normalizePlan(update.entries);
-      if (replay && latest) replay.latest = latest;
-      return;
-    }
-    if (replaying && this.skipReplayedMessages.has(sessionId) &&
-        !['available_commands_update', 'current_mode_update', 'config_option_update'].includes(update.sessionUpdate)) return;
-    if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'plan'].includes(update.sessionUpdate)) {
-      this.finishReplayedUser(sessionId);
-    }
     const text = update.content?.text || '';
     if (update.sessionUpdate === 'available_commands_update') {
       const commands = (update as unknown as { availableCommands?: Array<{ name: string }> }).availableCommands;
@@ -314,8 +287,8 @@ export abstract class TurnStream {
       if (typeof update.used === 'number' || typeof update.size === 'number') {
         this.app.telemetry.applyContextWindow(sessionId, update.used, update.size);
       }
-      if (!replaying && update.usage) this.app.telemetry.applyUsage(sessionId, update.usage);
-      if (!replaying) this.app.maybeSyncSessionCheckpointWindow(sessionId);
+      if (update.usage) this.app.telemetry.applyUsage(sessionId, update.usage);
+      this.app.maybeSyncSessionCheckpointWindow(sessionId);
       if (this.reactiveWakeupActive.has(sessionId)) {
         this.scheduleReactiveTurnSettle(sessionId, true);
       }
@@ -325,7 +298,7 @@ export abstract class TurnStream {
       ? this.app.inspector.consume(sessionId, { ...update, sessionUpdate: 'plan' }) : undefined;
     if (update.sessionUpdate === 'plan' && !todos) return;
     const isReactiveAgentUpdate =
-      !replaying && !this.app.sessions.isBusy(sessionId) &&
+      !this.app.sessions.isBusy(sessionId) &&
       ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan'].includes(update.sessionUpdate);
     if (isReactiveAgentUpdate && !this.reactiveWakeupActive.has(sessionId)) {
       this.activity.begin(sessionId);
@@ -338,21 +311,13 @@ export abstract class TurnStream {
     }
 
     if (todos) {
-      if (!replaying && todos.length >= 2) this.app.approval.enableBurstGuard(sessionId);
+      if (todos.length >= 2) this.app.approval.enableBurstGuard(sessionId);
       const message = this.assistant(sessionId);
       this.clearTransientStreamWarning(sessionId, message);
       message.todos = todos;
       this.upsert(message);
     }
     if (update.sessionUpdate === 'user_message_chunk') {
-      if (replaying) {
-        this.finishAssistantMessage(sessionId);
-        const message = this.replayedUsers.get(sessionId) || { id: randomUUID(), sessionId, role: 'user', content: '', createdAt: new Date().toISOString() };
-        message.content += text;
-        appendImage(message, update.content, this.app.mediaContext);
-        this.replayedUsers.set(sessionId, message);
-        return;
-      }
       // Our outgoing turn was already published with the user's structured annotations.
       if (this.app.sessions.isBusy(sessionId)) return;
       const items = this.app.messages.recent(sessionId); const previous = items.at(-1);
@@ -366,7 +331,7 @@ export abstract class TurnStream {
         this.completeStreamingThoughts(message);
         appendImage(message, update.content, this.app.mediaContext);
         if (update.content?.type === 'image') this.clearTransientStreamWarning(sessionId, message);
-        if (text) this.appendAssistantText(sessionId, message, text, !replaying);
+        if (text) this.appendAssistantText(sessionId, message, text, true);
       } else {
         if (text.trim()) this.clearTransientStreamWarning(sessionId, message);
         const id = `${message.id}:thought`;
@@ -374,12 +339,12 @@ export abstract class TurnStream {
         const prev = message.thoughts?.[0];
         const prefix = prev && !prev.isStreaming && prev.originalText && !prev.originalText.endsWith('\n') && !text.startsWith('\n') ? '\n\n' : '';
         this.app.thoughts.append(id, prefix + text);
-        if (!replaying) this.app.telemetry.addChunk(sessionId, text, 'thoughtTokens');
+        this.app.telemetry.addChunk(sessionId, text, 'thoughtTokens');
       }
       if (update.sessionUpdate === 'agent_message_chunk') this.upsert(message, pureText);
     }
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
-      if (!replaying) this.app.swarm.consume(sessionId, update);
+      this.app.swarm.consume(sessionId, update);
       if (!update.toolCallId) return;
       const earlier = update.sessionUpdate === 'tool_call_update' && this.questionSegments.get(sessionId)
         ?.find(segment => segment.toolCalls?.some(card => card.toolCallId === update.toolCallId));
@@ -397,7 +362,7 @@ export abstract class TurnStream {
         if (!denyReason && card.status === 'failed' && !card.outputPreview && this.turnAutoDenied.get(sessionId)?.length) {
           card.outputPreview = '因同批次其他命令触发本地安全策略拦截，此并行命令被一并取消';
         }
-        if (!replaying && (!previous || (!previous.completedAt && card.completedAt) ||
+        if ((!previous || (!previous.completedAt && card.completedAt) ||
             (!isToolCallFailure(previous) && isToolCallFailure(card)))) {
           this.lastToolReply.set(sessionId, this.replyProgress(sessionId));
         }
@@ -406,10 +371,10 @@ export abstract class TurnStream {
           this.clearTransientStreamWarning(sessionId, message);
         }
       }
-      if (!replaying && update.sessionUpdate === 'tool_call') {
+      if (update.sessionUpdate === 'tool_call') {
         this.app.maybeSyncSessionCheckpointWindow(sessionId);
       }
-      if (!replaying && card) this.app.telemetry.updateTool(sessionId, update.toolCallId, card.argsSummary, card.outputPreview ?? '');
+      if (card) this.app.telemetry.updateTool(sessionId, update.toolCallId, card.argsSummary, card.outputPreview ?? '');
       this.upsert(message);
     }
     if (isReactiveAgentUpdate) {
@@ -488,13 +453,6 @@ export abstract class TurnStream {
     if (!message.thoughts?.length) return;
     message.thoughts = message.thoughts.map(block => (block.isStreaming ? this.app.thoughts.complete(block.id) || block : block));
   }
-  finishReplayedUser(sessionId: string): void {
-    const message = this.replayedUsers.get(sessionId);
-    if (message) {
-      this.replayedUsers.delete(sessionId);
-      this.upsert(restoreAnnotatedMessage(message));
-    }
-  }
   prepareDisconnect(): void {
     for (const owner of this.promptOwners.values()) owner.abort(new Error('连接正在关闭'));
     this.questions.cancel();
@@ -505,8 +463,8 @@ export abstract class TurnStream {
   releaseProfile(stop?: SessionDiagnosticBanner): void {
     const ids = new Set([...this.sessionLifetimes.keys(), ...this.promptOwners.keys(), ...this.assistantMessages.keys(),
       ...this.questionSegments.keys(), ...this.reactiveTurnTimers.keys(), ...this.reactiveWakeupActive,
-      ...this.submitted.keys(), ...this.feedback.keys(), ...this.followups.sessions(), ...this.replayPlans.keys(), ...this.compactAvailable,
-      ...this.turnAutoDenied.keys(), ...this.turnUserCancelled, ...this.recoveringHistory.keys(), ...this.replayedUsers.keys(),
+      ...this.submitted.keys(), ...this.feedback.keys(), ...this.followups.sessions(), ...this.loadReplay.keys(), ...this.compactAvailable,
+      ...this.turnAutoDenied.keys(), ...this.turnUserCancelled,
       ...Array.from(this.thoughtOwners.values(), owner => owner.sessionId)]);
     const errors: unknown[] = [];
     for (const id of ids) {
@@ -542,12 +500,9 @@ export abstract class TurnStream {
       this.assistantMessages.delete(id);
       this.questionSegments.delete(id);
       this.compactAvailable.delete(id);
-      this.recoveringHistory.delete(id);
-      this.replayedUsers.delete(id);
-      this.skipReplayedMessages.delete(id);
       this.feedback.delete(id);
       this.followups.end(id);
-      this.replayPlans.delete(id);
+      this.loadReplay.delete(id);
       this.resetTurnState(id);
     }
   }

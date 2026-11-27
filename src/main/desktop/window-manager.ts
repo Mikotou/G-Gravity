@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeTheme, screen, shell } from 'electron';
+import { pathToFileURL } from 'node:url';
+import { app, BrowserWindow, ipcMain, Menu, nativeTheme, screen, shell, systemPreferences } from 'electron';
 import { chromeColors } from './chrome-colors';
 import { join } from 'node:path';
 import { resolveLocalTarget } from '../services/local-media-inspector';
@@ -48,7 +49,7 @@ export function getLiveWindow(): BrowserWindow | undefined {
   return window?.isDestroyed() ? undefined : window;
 }
 
-function detachRouter(): void {
+export function detachRouter(): void {
   disposeRouter?.();
   disposeRouter = undefined;
 }
@@ -66,10 +67,18 @@ export function iconPath(id: GravityIconPreference, prefs?: Pick<ClientPreferenc
   return join(__dirname, '../../..', asset);
 }
 
+function macButtonPosition(scale?: number) {
+  return { x: Math.round(14 * clampUiScale(scale)), y: Math.round(15 * clampUiScale(scale)) };
+}
+export async function requestMicrophone(): Promise<boolean> {
+  return process.platform !== 'darwin' || systemPreferences.askForMediaAccess('microphone');
+}
+
 export function syncWindowChrome(prefs: ClientPreferences): void {
   const target = getLiveWindow();
   if (!target) return;
   const appearance = resolveWindowAppearance(prefs);
+  if (process.platform === 'darwin') target.setWindowButtonPosition(macButtonPosition(prefs.uiScale));
   target.setBackgroundColor(appearance.backgroundColor);
   if (process.platform === 'win32') {
     try {
@@ -146,7 +155,7 @@ export async function openWindow(service: CoreService, webPreferences: Electron.
       : process.platform === 'darwin'
         ? {
             titleBarStyle: 'hiddenInset' as const,
-            trafficLightPosition: { x: 14, y: 15 },
+            trafficLightPosition: macButtonPosition(preferences.uiScale),
           }
         : {}),
     webPreferences,
@@ -179,25 +188,26 @@ export async function openWindow(service: CoreService, webPreferences: Electron.
     clearTimeout(windowStateTimer);
     windowStateTimer = undefined;
     if (mainWindow.isDestroyed()) return;
-    try {
-      const maximized = mainWindow.isMaximized();
-      const bounds = maximized ? mainWindow.getNormalBounds() : mainWindow.getBounds();
-      service.store.write('window-state.json', { bounds, maximized });
-    } catch {
-      /* 忽略窗口关闭瞬间的状态保存错误 */
-    }
+    const maximized = mainWindow.isMaximized();
+    const bounds = maximized ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+    service.store.write('window-state.json', { bounds, maximized });
   };
   flushWindowState = saveWindowStateNow;
   const scheduleSaveWindowState = () => {
     clearTimeout(windowStateTimer);
-    windowStateTimer = setTimeout(saveWindowStateNow, 250);
+    windowStateTimer = setTimeout(() => {
+      try { saveWindowStateNow(); } catch { service.emit('diagnostic', '窗口位置保存失败，退出时将重试'); }
+    }, 250);
     windowStateTimer.unref();
   };
   mainWindow.on('resize', scheduleSaveWindowState);
   mainWindow.on('move', scheduleSaveWindowState);
   mainWindow.on('maximize', scheduleSaveWindowState);
   mainWindow.on('unmaximize', scheduleSaveWindowState);
-  mainWindow.on('close', saveWindowStateNow);
+  mainWindow.on('close', event => {
+    if (process.platform === 'win32') { event.preventDefault(); app.quit(); }
+    else saveWindowStateNow();
+  });
   nativeTheme.on('updated', onNativeThemeUpdated);
   const contents = mainWindow.webContents;
   if (process.platform === 'darwin') {
@@ -229,15 +239,47 @@ export async function openWindow(service: CoreService, webPreferences: Electron.
     }
   });
   contents.on('will-attach-webview', event => event.preventDefault());
-  contents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  contents.session.setPermissionCheckHandler(() => false);
-  disposeRouter = registerIpcRouter(ipcMain, service, contents);
   const url = developmentUrl();
+  const page = join(__dirname, '../../renderer/index.html');
+  const trustedUrl = url?.href ?? pathToFileURL(page).href;
+  const trustedFrame = (sender: Electron.WebContents | null, details: { isMainFrame: boolean; requestingUrl?: string }) =>
+    sender === contents && !contents.isDestroyed() && contents.getURL() === trustedUrl &&
+    contents.mainFrame.url === trustedUrl && details.isMainFrame === true && details.requestingUrl === trustedUrl &&
+    service.voice.captures.hasLease;
+  contents.session.setPermissionRequestHandler((sender, permission, callback, details) => {
+    const media = (details as Electron.MediaAccessPermissionRequest).mediaTypes;
+    callback(permission === 'media' && trustedFrame(sender, details) && media?.length === 1 && media[0] === 'audio');
+  });
+  const documentUrl = new URL(trustedUrl);
+  const documentOrigin = (origin: string) => documentUrl.protocol === 'file:'
+    ? origin === 'file://' || origin === 'file:///' || origin === trustedUrl
+    : origin === documentUrl.origin || origin === documentUrl.origin + '/' || origin === trustedUrl;
+  contents.session.setPermissionCheckHandler((sender, permission, origin, details) =>
+    permission === 'media' && details.mediaType === 'audio' && !details.embeddingOrigin && documentOrigin(origin) &&
+    (!details.securityOrigin || documentOrigin(details.securityOrigin)) && trustedFrame(sender, details));
+  contents.session.setDisplayMediaRequestHandler?.((_request, callback) => callback({}));
+  contents.on('did-start-navigation', details => {
+    if (details.isMainFrame) service.voice.revoke('window-closed');
+  });
+  mainWindow.on('unresponsive', () => {
+    const active = service.voice.captures.summaries().activeCapture;
+    if (active?.state === 'armed' || active?.state === 'capturing') {
+      service.voice.revoke('device-error');
+      contents.forcefullyCrashRenderer();
+    }
+  });
+  contents.on('render-process-gone', () => service.voice.revoke('window-closed'));
+  const unbind = registerIpcRouter(ipcMain, service, contents, trustedUrl);
+  const session = contents.session;
+  disposeRouter = () => {
+    session.setPermissionCheckHandler(() => false);
+    session.setPermissionRequestHandler((_sender, _permission, callback) => callback(false));
+    unbind();
+  };
   if (url) await mainWindow.loadURL(url.toString());
-  else await mainWindow.loadFile(join(__dirname, '../../renderer/index.html'));
+  else await mainWindow.loadFile(page);
 }
 
 export function flushDesktopWindow(): void {
-  detachRouter();
   flushWindowState?.();
 }

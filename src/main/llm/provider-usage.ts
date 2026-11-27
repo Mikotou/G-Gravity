@@ -47,19 +47,17 @@ function extractGeminiUsage(um?: GeminiUsageMetadataRaw): ExternalModelTokenUsag
   const thinkingTokens = safeUsageInt(um.thoughtsTokenCount);
   const candidatesTokens = safeUsageInt(um.candidatesTokenCount);
   const rawTotal = safeUsageInt(um.totalTokenCount);
-  const outputTokens =
-    candidatesTokens > 0
-      ? candidatesTokens
-      : rawTotal > 0
-        ? Math.max(0, rawTotal - promptTotal - thinkingTokens)
-        : 0;
-  const totalTokens = inputTokens + cachedInputTokens + outputTokens + thinkingTokens;
+  const outputTokens = candidatesTokens;
+  const classified = promptTotal + thinkingTokens + outputTokens;
+  const unclassifiedTokens = Math.max(0, rawTotal - classified);
+  const totalTokens = classified + unclassifiedTokens;
   if (totalTokens <= 0) return undefined;
   return {
     inputTokens,
     cachedInputTokens,
     outputTokens,
     thinkingTokens,
+    ...(unclassifiedTokens > 0 && { unclassifiedTokens }),
     totalTokens,
     providerReported: true,
   };

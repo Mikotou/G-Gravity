@@ -1,3 +1,5 @@
+import { redactSecretsForReviewer } from '../security/redaction';
+import { summarizeMessageIntentForContext } from '../../shared/message-annotation';
 import { modelConfig, selectValues } from '../session/session-options-store';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -184,15 +186,16 @@ export class TitleOrganizerService {
       checkProfile();
       const items = targets.map(item => {
         const msgs = this.messages().firstTurns(item.sessionId);
-        const firstUser = msgs.find(m => m.role === 'user')?.content?.replace(/\s+/g, ' ').trim().slice(0, 200) || '';
+        const user = msgs.find(m => m.role === 'user');
+        const firstUser = redactSecretsForReviewer(summarizeMessageIntentForContext(user?.content, user?.annotations, 200));
         const firstAssistant = msgs.find(m => m.role === 'assistant')?.content?.replace(/\s+/g, ' ').trim().slice(0, 140) || '';
         const folder = item.cwd.split(/[\\/]/).filter(Boolean).pop() || '';
         return {
           sessionId: item.sessionId,
-          currentTitle: item.title,
-          folder,
+          currentTitle: redactSecretsForReviewer(item.title),
+          folder: redactSecretsForReviewer(folder),
           firstUser,
-          firstAssistant,
+          firstAssistant: redactSecretsForReviewer(firstAssistant),
         };
       });
 

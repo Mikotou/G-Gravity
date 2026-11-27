@@ -1,12 +1,12 @@
+import { summarizeMessageIntentForContext } from '../../shared/message-annotation';
 import { ownedExternalUsage } from '../telemetry/external-usage-owner';
 import { ServiceVerifier } from '../llm/service-verifier';
 import { maskKnownSecret, redactSecretsForReviewer } from '../security/redaction';
-import { reviewerCircuit } from '../llm/external-llm-transport';
-import { discoverExternalModels } from '../approval/external-reviewer';
+import { reviewerCircuit, discoverExternalModels, IndependentModelCallError } from '../llm/external-llm-transport';
 import type { ExternalReviewerModelsDiscoveryInput } from '../../shared/approval-contract';
 import type { ExternalUsageHost, CoreServiceOptions } from '../core-contracts';
 import { ApprovalEngine } from '../approval/approval-engine';
-import { IndependentModelCallError, reviewWithIndependentModel } from '../approval/external-reviewer';
+import { reviewWithIndependentModel } from '../approval/external-reviewer';
 import type { ManagedSessionSummary, ChatMessageItem } from '../../shared/session-contract';
 import {
   hasReviewerConnectionSettings, isExternalReviewerConnected, sameExternalService, sameReviewerSettings,
@@ -139,12 +139,12 @@ export class ApprovalCoordinator {
 }
 
 export function approvalConversationContext(recent: ChatMessageItem[]): string | undefined {
-  const users = recent.filter(m => m.role === 'user' && m.content?.trim());
+  const users = recent.filter(m => m.role === 'user' && (m.content?.trim() || m.annotations?.length));
   const selected = users.slice(-4);
   if (users[0] && !selected.includes(users[0])) selected.unshift(users[0]);
   const assistant = recent.filter(m => m.role === 'assistant' && m.content?.trim()).at(-1);
   const snippet = (value: string, limit: number) => value.length <= limit ? value : value.slice(0, limit - 1) + '…';
-  const clean = (m: ChatMessageItem) => redactSecretsForReviewer(m.content).replace(/\s+/g, ' ').trim();
+  const clean = (m: ChatMessageItem) => redactSecretsForReviewer(summarizeMessageIntentForContext(m.content, m.annotations, 2800)).replace(/\s+/g, ' ').trim();
   const assistantLine = assistant ? '[Assistant] ' + snippet(clean(assistant), 180) : '';
   let available = 2800 - assistantLine.length - (assistantLine ? 1 : 0);
   const contents = selected.map(clean);

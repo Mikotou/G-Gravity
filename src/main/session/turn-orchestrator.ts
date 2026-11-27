@@ -1,3 +1,4 @@
+import { normalizeMessageAnnotations } from '../../shared/message-annotation';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -95,8 +96,8 @@ export class TurnOrchestrator extends TurnStream {
   private async runPrompt(input: SendPromptInput, owner: AbortController, followup?: ChatMessageItem): Promise<void> {
     this.app.accounts.assertReady();
     if (this.app.isChangingSession(input.sessionId)) throw new Error('该会话正在创建修订分支');
-    if (typeof input?.text !== 'string' || (input.annotations !== undefined && (!Array.isArray(input.annotations) ||
-        input.annotations.some(a => !a || typeof a.excerpt !== 'string' || !a.excerpt.trim() || (a.comment !== undefined && typeof a.comment !== 'string'))))) throw new Error('消息格式无效');
+    if (typeof input?.text !== 'string') throw new Error('消息格式无效');
+    if (input.annotations !== undefined) input = { ...input, annotations: normalizeMessageAnnotations(input.annotations) };
     const wireText = modelMessage(input.text, input.annotations);
     if (wireText.length > 1000000 || (!wireText.trim() && !input.attachments?.length)) throw new Error('请输入有效的提示词');
     if (!this.app.sessions.isActive(input.sessionId) || this.app.sessions.isBusy(input.sessionId)) throw new Error('会话未激活或仍在生成');

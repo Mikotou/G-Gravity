@@ -24,6 +24,10 @@ import type { LocalTargetContext } from './services/local-media-inspector';
 import type { GravityDesktopBridge } from '../shared/ipc-channels';
 export interface CoreServiceOptions {
   dataDir: string;
+  appRoot?: string;
+  voiceFetcher?: typeof fetch;
+  voiceModelFetcher?: typeof fetch;
+  requestMicrophone?: () => Promise<boolean>;
   acp?: AcpClient;
   acpOptions?: AcpClientOptions;
   reviewer?: Reviewer;
@@ -89,4 +93,6 @@ export interface TurnHost extends Omit<CoreResources, 'titles' | 'store'> {
 export interface LifecycleHost extends Pick<TurnHost, 'disposed' | 'accounts' | 'client' | 'sessions' | 'telemetry' | 'thoughts' | 'inspector' | 'trees' | 'swarm' | 'messages' | 'approval' | 'emit' | 'mediaContext' | 'isChangingSession'> {
   store: ClientStore;
   titles: TitleOrganizer;
+  retireSession(id: string): void;
+  epochForSession(owner: { profileId: string; sessionId: string }): number | undefined;
 }

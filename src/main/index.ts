@@ -5,7 +5,7 @@ import { validateUserDataDirectory } from './storage/data-directory';
 import { CoreService } from './core-service';
 import { registerAppWindowLifecycle } from './macos-lifecycle';
 import { clampUiScale } from '../shared/theme-i18n-contract';
-import { getLiveWindow, iconPath, syncWindowChrome, openWindow, flushDesktopWindow } from './desktop/window-manager';
+import { getLiveWindow, iconPath, syncWindowChrome, openWindow, flushDesktopWindow, detachRouter, requestMicrophone } from './desktop/window-manager';
 import { clipboardImage } from './desktop/clipboard-image';
 import { canInstallUpdateDirectly, installDownloadedUpdate } from './updater/platform-installer';
 import { launchLogin, stopLoginProcesses } from './accounts/login-launcher';
@@ -16,7 +16,7 @@ function ensureService(): CoreService {
   if (service) return service;
   // 把剪贴板、文件对话框等桌面能力注入业务层，测试可以替换这些回调而不用创建窗口。
   service = new CoreService({
-    dataDir: app.getPath('userData'),
+    dataDir: app.getPath('userData'), appRoot: app.getAppPath?.(), requestMicrophone,
     acpOptions: { binaryPath: process.env.AGY_BINARY_PATH, loginLauncher: (binary, args = ['acp', '--login']) => {
       if (lifecycle.isQuitting()) throw new Error('客户端正在退出。');
       return launchLogin(binary, args, service?.getPreferences().locale);
@@ -112,8 +112,10 @@ function createWindow(): Promise<void> {
 }
 
 async function cleanupBeforeQuit(): Promise<void> {
-  const results = await Promise.allSettled([stopLoginProcesses(), service?.dispose(), Promise.resolve().then(flushDesktopWindow)]);
-  for (const result of results) if (result.status === 'rejected') throw result.reason;
+  flushDesktopWindow();
+  if (service) await service.dispose(stopLoginProcesses);
+  else await stopLoginProcesses();
+  detachRouter();
 }
 
 app.setName('Gravity');
@@ -127,6 +129,7 @@ else {
     platform: process.platform, app, hasOpenWindow: () => Boolean(getLiveWindow()),
     getWindow: getLiveWindow, createWindow, cleanupBeforeQuit,
     cleanupFailed: error => {
+      if (!getLiveWindow()) void createWindow();
       void dialog.showMessageBox({ type: 'error', message: '退出尚未完成', detail: String(error),
         buttons: ['重试保存并退出', '稍后重试'], cancelId: 1 }).then(({ response }) => { if (response === 0) app.quit(); });
     },

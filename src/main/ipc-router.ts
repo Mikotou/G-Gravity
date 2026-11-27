@@ -1,3 +1,5 @@
+import { types } from 'node:util';
+import type { VoiceAppendInput } from '../shared/voice-contract';
 import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron';
 import { IPC_CHANNELS, type GravityDesktopBridge } from '../shared/ipc-channels';
 import type { CoreService } from './core-service';
@@ -10,14 +12,52 @@ type CompatibleMethod = {
   [K in BridgeMethods]: CoreService[K] extends GravityDesktopBridge[K] ? K : never;
 }[BridgeMethods];
 
+function checkVoiceAppend(value: unknown): number {
+  const invalid = (): never => { throw new Error('语音分片格式无效'); };
+  if (!value || typeof value !== 'object') return invalid();
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== null && Object.getPrototypeOf(prototype) !== null) return invalid();
+  if (Reflect.ownKeys(value).length !== 3 || !['captureId', 'seq', 'pcm16'].every(key => {
+    const field = Object.getOwnPropertyDescriptor(value, key);
+    return field?.enumerable && Object.hasOwn(field, 'value');
+  })) return invalid();
+  const { captureId, seq, pcm16 } = value as VoiceAppendInput;
+  if (typeof captureId !== 'string' || !captureId.length || captureId.length > 128 ||
+      !Number.isSafeInteger(seq) || seq < 1) return invalid();
+  const view = ArrayBuffer.isView(pcm16);
+  if (view && Object.getPrototypeOf(pcm16) !== Uint8Array.prototype) return invalid();
+  const typed = Object.getPrototypeOf(Uint8Array.prototype);
+  const actual = (key: string) => Object.getOwnPropertyDescriptor(typed, key)!.get!.call(pcm16);
+  const buffer = view ? actual('buffer') : pcm16;
+  // Invoke the intrinsic brand check. Shared buffers and lookalikes cannot satisfy it.
+  const get = (key: string) => Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, key)?.get;
+  const bytes: number = get('byteLength')!.call(buffer);
+  if (!bytes || bytes > 32_768 || bytes % 2 || get('resizable')?.call(buffer) || get('detached')?.call(buffer) ||
+      (view && (actual('byteOffset') !== 0 || actual('byteLength') !== bytes))) return invalid();
+  return bytes;
+}
+
 function checkPayload(args: unknown[], channel: string): void {
   const prompt = channel === IPC_CHANNELS.SESSION_SEND_PROMPT || channel === IPC_CHANNELS.SESSION_REVISE_MESSAGE;
+  let audio: VoiceAppendInput['pcm16'] | undefined;
+  let audioBytes = 0;
+  if (channel === IPC_CHANNELS.VOICE_APPEND) {
+    if (args.length !== 1) throw Error('语音分片参数数量无效');
+    audioBytes = checkVoiceAppend(args[0]);
+    audio = (args[0] as VoiceAppendInput).pcm16;
+  }
   let attachmentBytes = 0;
   let remaining = 32 * 1024 * 1024;
   const maxNodes = 100_000;
   let nodes = 0;
-  const visit = (value: unknown, depth: number, scope?: 'prompt' | 'attachments' | 'attachment' | 'data') => {
+  const visit = (value: unknown, depth: number, scope?: 'prompt' | 'attachments' | 'attachment' | 'data' | 'voice' | 'pcm16') => {
     if (depth > 64 || ++nodes > maxNodes) throw new Error('IPC 请求超过大小限制');
+    if (scope === 'pcm16' && audio && value === audio) {
+      remaining -= audioBytes;
+      if (remaining < 0) throw Error('IPC 请求超过大小限制');
+      return;
+    }
+    if (types.isAnyArrayBuffer(value) || ArrayBuffer.isView(value)) throw Error('IPC 参数格式无效');
     if (scope === 'data' && value !== undefined) {
       const maxBytes = 20 * 1024 * 1024;
       if (typeof value !== 'string' || value.length > Math.ceil(maxBytes / 3) * 4 || value.length % 4 !== 0 ||
@@ -46,7 +86,8 @@ function checkPayload(args: unknown[], channel: string): void {
       if (!Object.hasOwn(value, key)) continue;
       if (key.length > remaining) throw new Error('IPC 请求超过大小限制');
       remaining -= Buffer.byteLength(key) + 3;
-      const childScope = prompt && depth === 0 && key === '0' ? 'prompt'
+      const childScope = audio && depth === 0 && key === '0' ? 'voice'
+        : scope === 'voice' && key === 'pcm16' ? 'pcm16' : prompt && depth === 0 && key === '0' ? 'prompt'
         : scope === 'prompt' && key === 'attachments' ? 'attachments'
         : scope === 'attachments' && /^(0|[1-9]\d*)$/.test(key) ? 'attachment'
         : scope === 'attachment' && key === 'dataBase64' ? 'data' : undefined;
@@ -57,7 +98,7 @@ function checkPayload(args: unknown[], channel: string): void {
 }
 
 /** 将一个窗口绑定到一个 CoreService。返回的函数同时解除请求处理和事件转发，供应用退出时调用。 */
-export function registerIpcRouter(ipcMain: IpcMain, service: CoreService, trustedContents: WebContents): () => void {
+export function registerIpcRouter(ipcMain: IpcMain, service: CoreService, trustedContents: WebContents, trustedUrl = trustedContents.getURL()): () => void {
   const handlers = {
     [IPC_CHANNELS.APP_GET_BOOTSTRAP]: 'getBootstrap',
     [IPC_CHANNELS.APP_UPDATE_PREFERENCES]: 'updatePreferences',
@@ -112,6 +153,15 @@ export function registerIpcRouter(ipcMain: IpcMain, service: CoreService, truste
     [IPC_CHANNELS.APPROVAL_LIST_AUDIT]: 'listApprovalAudit',
     [IPC_CHANNELS.APPROVAL_DISCOVER_MODELS]: 'discoverExternalReviewerModels',
     [IPC_CHANNELS.APPROVAL_TEST_CONNECTION]: 'testExternalReviewerConnection',
+    [IPC_CHANNELS.VOICE_GET_STATE]: 'getVoiceState',
+    [IPC_CHANNELS.VOICE_UPDATE_CONFIG]: 'updateVoiceConfig',
+    [IPC_CHANNELS.VOICE_DISCOVER_MODELS]: 'discoverVoiceModels',
+    [IPC_CHANNELS.VOICE_TEST_CONNECTION]: 'testVoiceConnection',
+    [IPC_CHANNELS.VOICE_INSTALL_MODEL]: 'installVoiceModel',
+    [IPC_CHANNELS.VOICE_ARM_CAPTURE]: 'voiceArmCapture',
+    [IPC_CHANNELS.VOICE_APPEND]: 'voiceAppend',
+    [IPC_CHANNELS.VOICE_FINISH]: 'voiceFinish',
+    [IPC_CHANNELS.VOICE_ABORT]: 'voiceAbort',
     [IPC_CHANNELS.TRANSLATION_GET_CONFIG]: 'getTranslationConfig',
     [IPC_CHANNELS.TRANSLATION_UPDATE_CONFIG]: 'updateTranslationConfig',
     [IPC_CHANNELS.TRANSLATION_DISCOVER_MODELS]: 'discoverExternalTranslationModels',
@@ -125,11 +175,15 @@ export function registerIpcRouter(ipcMain: IpcMain, service: CoreService, truste
     [IPC_CHANNELS.SWARM_GET_STATE]: 'getSwarmState',
   } as const satisfies Record<InvokeChannel, CompatibleMethod>;
   // 调用时读取窗口当前 URL，以窗口对象、主 frame 和页面地址共同确认来源。
-  const trustedUrl = () => trustedContents.getURL();
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (event: IpcMainInvokeEvent, ...args: unknown[]) => {
-      if (event.sender !== trustedContents || event.senderFrame !== trustedContents.mainFrame || event.senderFrame?.url !== trustedUrl()) throw new Error('拒绝来自非主窗口的 IPC 请求');
-      if (args.length > 3) throw new Error('IPC 参数数量无效');
+      if (event.sender !== trustedContents || event.senderFrame !== trustedContents.mainFrame || event.senderFrame?.url !== trustedUrl || trustedContents.getURL() !== trustedUrl) throw new Error('拒绝来自非主窗口的 IPC 请求');
+      if (args.length > 3 || (channel.startsWith('gravity:voice:') &&
+          (channel === IPC_CHANNELS.VOICE_GET_STATE ? args.length !== 0 :
+            channel === IPC_CHANNELS.VOICE_INSTALL_MODEL || channel === IPC_CHANNELS.VOICE_TEST_CONNECTION ? args.length > 1 : args.length !== 1))) throw new Error('IPC 参数数量无效');
+      if (service.savingForQuit && !/^(?:get|list|inspect|cancel|voiceAbort)/.test(handler) &&
+          !(handler === 'installVoiceModel' && (args[0] as { action?: string })?.action === 'cancel') &&
+          !(handler === 'voiceArmCapture' && (args[0] as { op?: string })?.op === 'release-media')) throw Error('正在保存退出，请稍候');
       checkPayload(args, channel);
       return Reflect.apply(service[handler], service, args);
     });
@@ -151,10 +205,13 @@ export function registerIpcRouter(ipcMain: IpcMain, service: CoreService, truste
     'swarm-updated': IPC_CHANNELS.EVENT_SWARM_UPDATED,
     'update-state': IPC_CHANNELS.EVENT_UPDATE_STATE,
     'tree-updated': IPC_CHANNELS.EVENT_TREE_UPDATED,
+    'voice-segment': IPC_CHANNELS.EVENT_VOICE_SEGMENT,
+    'voice-settled': IPC_CHANNELS.EVENT_VOICE_SETTLED,
+    'voice-capture-revoked': IPC_CHANNELS.EVENT_VOICE_CAPTURE_REVOKED,
     'translation-config-updated': IPC_CHANNELS.EVENT_TRANSLATION_CONFIG_UPDATED,
   } as const;
   const listeners = Object.entries(events).map(([event, channel]) => {
-    const listener = (payload: unknown) => { if (!trustedContents.isDestroyed()) trustedContents.send(channel, payload); };
+    const listener = (payload: unknown) => { if (!trustedContents.isDestroyed() && trustedContents.getURL() === trustedUrl) trustedContents.send(channel, payload); };
     service.on(event, listener); return { event, listener };
   });
   let disposed = false;
@@ -163,5 +220,6 @@ export function registerIpcRouter(ipcMain: IpcMain, service: CoreService, truste
     disposed = true;
     for (const channel of Object.keys(handlers)) ipcMain.removeHandler(channel);
     for (const { event, listener } of listeners) service.off(event, listener);
+    service.voice?.revoke('window-closed');
   };
 }

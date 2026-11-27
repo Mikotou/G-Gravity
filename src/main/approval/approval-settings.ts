@@ -1,5 +1,6 @@
+import { validateExternalEndpoint } from '../llm/external-llm-transport';
 import { APPROVAL_POLICY_DEFAULTS, validateApprovalPattern, MAX_APPROVAL_PATTERNS_PER_KIND, type ApproveForMeConfig } from '../../shared/approval-contract';
-import { alignedRiskCeiling, validateExternalEndpoint } from './external-reviewer';
+import { alignedRiskCeiling } from './external-reviewer';
 export function validatedApprovalConfig(current: ApproveForMeConfig, patch: Partial<ApproveForMeConfig>, restoring = false): ApproveForMeConfig {
     const next = {
       ...current,

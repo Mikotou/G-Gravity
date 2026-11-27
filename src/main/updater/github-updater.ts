@@ -114,11 +114,9 @@ export function selectReleaseAsset(
   const valid = assets.filter((a) => a?.name && a.downloadUrl && isAllowedGitHubUpdateUrl(a.downloadUrl));
   if (platform === 'win32') {
     if (arch !== 'x64' && arch !== 'arm64') return;
-    const label = arch === 'x64' ? /^(?:x64|amd64|x86_64)$/i : /^(?:arm64|aarch64)$/i;
     const tagged = valid.find(asset => {
-      if (!/\.exe$/i.test(asset.name)) return false;
-      const tags = asset.name.match(/(?<![a-z0-9])(?:x86_64|x64|amd64|arm64|aarch64|ia32|x86|armv7l)(?![a-z0-9])/gi);
-      return tags?.length === 1 && label.test(tags[0]);
+      const match = /^Gravity-(?:(?:v?\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:\.\d+)?)?|win(?:dows)?|portable)-)*(x86_64|amd64|x64|arm64|aarch64)\.exe$/i.exec(asset.name);
+      return match && (arch === 'x64' ? /^(?:x64|amd64|x86_64)$/i : /^(?:arm64|aarch64)$/i).test(match[1]);
     });
     // The historical untagged portable Gravity.exe is built for Windows x64.
     return tagged ?? (arch === 'x64' ? valid.find(asset => /^Gravity\.exe$/i.test(asset.name)) : undefined);

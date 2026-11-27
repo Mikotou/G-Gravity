@@ -331,56 +331,22 @@ export class ThoughtTranslator extends EventEmitter {
     state.inFlightRange = { start, end };
     state.block.isTranslating = true;
 
+    let translated = '';
+    let source: ThoughtTranslationEngineSource | undefined;
     try {
-      const rawResult = await this.translate!(coreText, id, state.controller.signal);
-
-      // 等待译文期间原块可能被清理或重新打开，写回时必须核对对象身份和代次。
-      if (this.states.get(id) !== state || state.epoch !== epoch) return;
-
-      const normalized = normalizeTranslateResult(rawResult);
-      const cleanFinal = cleanTranslationEnvelope(normalized.text, coreText);
-      state.inFlightRange = undefined;
-
-      if (cleanFinal) {
-        const closedEntry = this.recordFinalizedSegment(
-          state,
-          start,
-          end,
-          `${leadWs}${cleanFinal}${trailWs}`,
-          true
-        );
-        state.translatedOffset = end;
-        state.hasTranslatedSegment = true;
-        state.lastSource = normalized.source;
-        if (closedEntry) {
-          this.maybeRefineParagraph(id, state, closedEntry);
-        }
-        this.pump(id, state, !state.block.isStreaming, false);
-        this.refreshDerivedFields(state);
-        this.emit('block', { ...state.block });
-      } else {
-        // 译文为空（如离线兜底）：保留干净原文推进游标，避免死循环重试
-        const closedEntry = this.recordFinalizedSegment(state, start, end, rawSegment, false);
-        state.translatedOffset = end;
-        if (closedEntry) {
-          this.maybeRefineParagraph(id, state, closedEntry);
-        }
-        this.pump(id, state, !state.block.isStreaming, false);
-        this.refreshDerivedFields(state);
-        this.emit('block', { ...state.block });
-      }
-    } catch {
-      if (this.states.get(id) !== state || state.epoch !== epoch) return;
-      state.inFlightRange = undefined;
-      const closedEntry = this.recordFinalizedSegment(state, start, end, rawSegment, false);
-      state.translatedOffset = end;
-      if (closedEntry) {
-        this.maybeRefineParagraph(id, state, closedEntry);
-      }
-      this.pump(id, state, !state.block.isStreaming, false);
-      this.refreshDerivedFields(state);
-      this.emit('block', { ...state.block });
-    }
+      const result = normalizeTranslateResult(await this.translate!(coreText, id, state.controller.signal));
+      translated = cleanTranslationEnvelope(result.text, coreText);
+      source = result.source;
+    } catch { /* Preserve the original segment on failure. */ }
+    if (this.states.get(id) !== state || state.epoch !== epoch) return;
+    state.inFlightRange = undefined;
+    const closed = this.recordFinalizedSegment(state, start, end,
+      translated ? leadWs + translated + trailWs : rawSegment, Boolean(translated));
+    state.translatedOffset = end;
+    if (translated) { state.hasTranslatedSegment = true; state.lastSource = source; }
+    this.maybeRefineParagraph(id, state, closed);
+    this.pump(id, state, !state.block.isStreaming, false);
+    this.emit('block', { ...state.block });
   }
 
   append(id: string, chunk: string): DualTrackThoughtBlock {

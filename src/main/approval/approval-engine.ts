@@ -1,3 +1,4 @@
+import { IndependentModelCallError, IndependentModelLimitError } from '../llm/external-llm-transport';
 import { decisionCacheKey, type Pending } from './approval-request';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -15,7 +16,7 @@ import { maskKnownSecret, redactSecretsForReviewer } from '../security/redaction
 import { approvalWorkspaceKey, SessionGrants } from './session-grants';
 import { screenCommand } from './shell-screening';
 import {
-  applyGuardianPolicy, IndependentModelCallError, IndependentModelLimitError, reviewWithIndependentModel,
+  applyGuardianPolicy, reviewWithIndependentModel,
   type Reviewer, type AiReviewResult,
 } from './external-reviewer';
 

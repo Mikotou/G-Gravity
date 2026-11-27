@@ -1,8 +1,9 @@
+export { summarizeBranchMessages, mergeBranchMessageStats, type BranchMessageStats } from '../../shared/conversation-tree';
 import {
-  summarizeBranchSnippet, type ConversationBranchRecord, type ConversationTreeNode,
+  summarizeBranchSnippet, type BranchMessageStats, type ConversationBranchRecord, type ConversationTreeNode,
   type ConversationTreeState, type StoredConversationTree,
 } from '../../shared/conversation-tree';
-import type { ChatMessageItem, ManagedSessionSummary } from '../../shared/session-contract';
+import type { ManagedSessionSummary } from '../../shared/session-contract';
 import { resolveModelCompactionLimit, type SessionContextTelemetry } from '../../shared/telemetry-contract';
 import type { ClientStore } from '../storage/client-store';
 
@@ -23,38 +24,6 @@ interface BuildTreeContext {
   getMessageStats(id: string): BranchMessageStats;
   getTelemetry(id: string): SessionContextTelemetry | undefined;
   getRootTitle(rootId: string): string;
-}
-
-export interface BranchMessageStats {
-  users: number;
-  own: number;
-  firstUser?: string;
-  firstOwnUser?: string;
-  latestUser?: string;
-  latestAssistant?: string;
-}
-
-export function summarizeBranchMessages(messages: ChatMessageItem[]): BranchMessageStats {
-  const stats: BranchMessageStats = { users: 0, own: 0 };
-  for (const m of messages) {
-    if (m.role === 'system') continue;
-    if (!m.revisionHistory) stats.own++;
-    if (m.role === 'user') {
-      stats.users++;
-      const preview = summarizeBranchSnippet(m.content, 72);
-      const fork = preview || summarizeBranchSnippet(m.annotations?.[0]?.comment || m.annotations?.[0]?.excerpt, 72);
-      stats.firstUser ??= fork;
-      if (!m.revisionHistory) stats.firstOwnUser ??= fork;
-      stats.latestUser = preview;
-    } else if (m.content?.trim()) stats.latestAssistant = summarizeBranchSnippet(m.content, 84);
-  }
-  return stats;
-}
-
-export function mergeBranchMessageStats(first: BranchMessageStats, last: BranchMessageStats): BranchMessageStats {
-  return { users: first.users + last.users, own: first.own + last.own,
-    firstUser: first.firstUser ?? last.firstUser, firstOwnUser: first.firstOwnUser ?? last.firstOwnUser,
-    latestUser: last.latestUser ?? first.latestUser, latestAssistant: last.latestAssistant ?? first.latestAssistant };
 }
 
 /**

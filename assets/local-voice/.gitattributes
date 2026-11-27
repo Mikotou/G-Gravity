@@ -1,0 +1,6 @@
+*.cjs text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+*.pcm binary
+*.wav binary
+*.wasm binary

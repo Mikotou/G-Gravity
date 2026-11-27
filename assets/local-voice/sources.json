@@ -1,0 +1,49 @@
+{
+  "model": {
+    "fileName": "ggml-base-q5_1.bin",
+    "sizeBytes": 59707625,
+    "sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+    "downloadUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base-q5_1.bin",
+    "license": "licenses/whisper-model.txt"
+  },
+  "runtime": {
+    "repository": "https://github.com/ggml-org/whisper.cpp",
+    "version": "v1.8.3",
+    "commit": "2eeeba56e9edd762b4b38467bab96c2517163158",
+    "compiler": "Emscripten 4.0.21",
+    "compilerRelease": "d70a5da89b3e673bf6a482724478fc17e81e575e",
+    "target": "wasm32, CPU SIMD128, single thread, Node CommonJS",
+    "build": [
+      "With the pinned Emscripten environment active, check out the whisper.cpp commit above.",
+      "emcmake cmake -S assets/local-voice/build -B build-voice -G Ninja -DWHISPER_SOURCE=<absolute-whisper.cpp-checkout> -DCMAKE_BUILD_TYPE=Release",
+      "cmake --build build-voice --target voice",
+      "Copy build-voice/whisper.js as whisper.cjs and build-voice/whisper.wasm as whisper.wasm."
+    ],
+    "wasmSha256": "3370566d07260b63b7fc0d912c4ac70767a7ceb357bc07c47c2ad4098f808c79",
+    "jsSha256": "3ed7a89dc018a4ea7ca28dbe112d27ea9eddfb28186a575c8b9e8e73c6568f4f",
+    "licenses": [
+      "licenses/whisper-cpp.txt",
+      "licenses/emscripten.txt",
+      "licenses/compiler-rt.txt",
+      "licenses/libcxx.txt",
+      "licenses/musl.txt"
+    ]
+  },
+  "fixture": {
+    "source": "Locally synthesized English speech for connection verification. Mono linear PCM, 16 kHz, 16-bit little-endian.",
+    "wavSha256": "62f2584ee02c8e754699a6fe3573ed6de88d11f9a7f053e0313f69ad7c65de57",
+    "pcmSha256": "6e582a0c45ac405107af9d83c9469173542872924496b93aed5d157aff8b74ed",
+    "pcmBytes": 93726
+  },
+  "simplifiedChinese": {
+    "repository": "https://github.com/BYVoid/OpenCC",
+    "commit": "556ed22496d650bd0b13b6c163be9814637970ae",
+    "version": "1.1.9",
+    "sourceDirectory": "data/dictionary",
+    "license": "licenses/opencc.txt",
+    "files": {
+      "TSCharacters.txt": "6b5a0a799bea2bb22c001f635eaa3fc2904310f0c08addbff275477a80ecf09a",
+      "TSPhrases.txt": "504169029c43f7f234b8e2ae470720af3657675c5574ff8aa0feb257e1dc5ce2"
+    }
+  }
+}

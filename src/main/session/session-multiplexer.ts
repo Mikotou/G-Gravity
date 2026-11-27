@@ -32,6 +32,7 @@ export class SessionMultiplexer extends SessionLedger {
   private busy = new Map<string, symbol>();
   private opening = new Set<string>();
   readonly slots: SessionSlots;
+  private restoringOptions = new Map<string, Map<string, AcpSessionUpdateNotification>>();
   private creating = 0;
   private configuring = new Set<string>();
   private earlyOptions = new Map<string, Map<string, AcpSessionUpdateNotification>>();
@@ -73,6 +74,7 @@ export class SessionMultiplexer extends SessionLedger {
       this.options.localTurboSessions.clear();
       this.busy.clear();
       this.opening.clear();
+      this.restoringOptions.clear();
       this.earlyOptions.clear();
       const diagnostic = disconnectDiagnostic(client, event);
       for (const id of interrupted) this.setStatus(id, 'error', diagnostic);
@@ -81,6 +83,11 @@ export class SessionMultiplexer extends SessionLedger {
 
   private routeUpdate(payload: AcpSessionUpdateNotification): void {
       if (!payload || !payload.update) return;
+      const staged = this.restoringOptions.get(payload.sessionId);
+      if (staged && (payload.update.sessionUpdate === 'config_option_update' || payload.update.sessionUpdate === 'current_mode_update')) {
+        staged.set(payload.update.sessionUpdate, payload);
+        return;
+      }
       if (!this.active.has(payload.sessionId) && !this.opening.has(payload.sessionId)) {
         const kind = payload.update.sessionUpdate;
         if (this.creating && ['available_commands_update', 'config_option_update', 'current_mode_update'].includes(kind) &&
@@ -305,6 +312,7 @@ export class SessionMultiplexer extends SessionLedger {
     if (this.active.has(sessionId)) return { ...this.get(sessionId) };
     const slot = this.slots.reserve(false, sessionId);
     this.opening.add(sessionId);
+    this.restoringOptions.set(sessionId, new Map());
     try {
       await this.client.start();
       const capabilities = this.client.initializeResult?.agentCapabilities;
@@ -351,6 +359,9 @@ export class SessionMultiplexer extends SessionLedger {
         session.readOnly = false;
         this.configuring.add(sessionId);
         this.active.add(sessionId);
+        const staged = this.restoringOptions.get(sessionId);
+        this.restoringOptions.delete(sessionId);
+        for (const update of staged?.values() ?? []) this.routeUpdate(update);
         if (desiredMode && session.executionMode !== desiredMode && (desiredMode === 'full-access' || this.supportsMode(sessionId, desiredMode))) {
           await this.setSessionMode(sessionId, desiredMode);
         }
@@ -371,6 +382,7 @@ export class SessionMultiplexer extends SessionLedger {
       this.slots.releaseUnused(slot);
       this.configuring.delete(sessionId);
       this.opening.delete(sessionId);
+      this.restoringOptions.delete(sessionId);
     }
   }
 

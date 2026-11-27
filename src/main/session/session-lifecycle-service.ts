@@ -5,7 +5,6 @@ import type { ManagedSessionSummary, SessionAction } from '../../shared/session-
 import { isLegacyPollutionSessionTitle, withoutSession } from '../../shared/session-contract';
 import { AcpRequestNotSentError } from '../acp/acp-client';
 import { ConversationMessages } from '../storage/conversation-messages';
-import { HistoryReplay } from './history-replay';
 import { isSessionExecutionMode } from './session-multiplexer';
 import { SwarmWorkerClient } from '../swarm/swarm-worker-client';
 import { InspectorStore } from './inspector-store';
@@ -31,7 +30,10 @@ export class SessionLifecycleService {
     const trees = new ConversationTreeStore(this.app.store);
     trees.setProfile(profileId, owned);
     inspector.on('updated', data => {
-      if (inspector === this.app.inspector) this.app.emit('inspector-updated', data);
+      if (inspector !== this.app.inspector) return;
+      const owner = { profileId, sessionId: data.sessionId };
+      const epoch = this.app.epochForSession(owner);
+      if (epoch !== undefined) this.app.emit('inspector-updated', { ...data, ...owner, epoch, owner: { ...owner, epoch } });
     });
     swarm.on('updated', state => {
       if (swarm === this.app.swarm) this.app.emit('swarm-updated', state);
@@ -135,41 +137,24 @@ export class SessionLifecycleService {
     if (this.app.sessions.isResuming(sessionId)) throw new Error('此会话正在恢复');
     this.turns.sessionLifetimes.delete(sessionId);
     const hadLocalMessages = this.app.messages.recent(sessionId).length > 0;
-    const replay = this.app.messages.needsRecovery(sessionId) ? new HistoryReplay(sessionId, this.app.mediaContext) : undefined;
-    if (replay) this.turns.recoveringHistory.set(sessionId, replay);
-    const planReplay = this.turns.beginPlanReplay(sessionId);
+    const replay = this.turns.loadReplay.begin(sessionId, this.turns.compactAvailable);
     const profileId = this.app.accounts.activeProfileId;
     const swarm = this.app.swarm;
     const sameOwner = () => !this.app.disposed && swarm === this.app.swarm && this.app.accounts.activeProfileId === profileId;
     this.managing.add(sessionId);
     swarm.beginReplay(sessionId);
-    if (hadLocalMessages) this.turns.skipReplayedMessages.add(sessionId);
     let session: ManagedSessionSummary;
     try {
-      const needPlan = hadLocalMessages && !this.app.messages.hasCheckedPlanHistory(sessionId) && this.app.inspector.needsPlanReplay(sessionId);
-      session = await this.app.sessions.resumeSession(sessionId, cwd, replay || needPlan ? true : () => swarm.needsReplay(sessionId));
+      const needHistory = replay.first || replay.recovering || this.app.inspector.needsPlanReplay(sessionId);
+      session = await this.app.sessions.resumeSession(sessionId, cwd, needHistory || (() => swarm.needsReplay(sessionId)));
+      if (!replay.current()) throw new Error('恢复期间会话归属已改变');
       await swarm.finishReplay(sessionId);
-      if (!planReplay.current()) throw new Error('恢复期间会话归属已改变');
-      this.turns.finishReplayedUser(sessionId);
-      if (replay) {
-        const local = this.app.messages.get(sessionId) || [];
-        const prefix = replay.prefixFor(local);
-        if (prefix) {
-          if (prefix.length) this.app.messages.set(sessionId, [...prefix, ...local]);
-          this.app.messages.markRecovered(sessionId);
-        }
-      }
-      planReplay.commit();
-      const capabilities = this.app.client.initializeResult?.agentCapabilities;
-      if ((replay || needPlan) && (capabilities?.loadSession || capabilities?.load_session)) this.app.messages.markPlanHistoryChecked(sessionId);
+      replay.commit();
+      const caps = this.app.client.initializeResult?.agentCapabilities;
+      if (needHistory && (caps?.loadSession || caps?.load_session)) this.app.inspector.finishPlanReplay(sessionId);
     } catch (error) {
       // 仅在切号/退出导致归属变更时直接中止；同 Profile 下 ACP 启动失败或断连仍须走下方离线只读回退，同时 planReplay.current() 已失效确保不提交脏 Plan。
       if (!sameOwner()) throw error;
-      if (!hadLocalMessages) {
-        this.app.messages.discardUnsavedReplay(sessionId);
-        this.turns.assistantMessages.delete(sessionId);
-        this.turns.clearSessionThoughts(sessionId);
-      }
       const localExisting = this.app.sessions.sessions.get(sessionId);
       // 已保存的对话可以离线阅读。只在恢复成功后重新启用输入和编辑。
       const diagnostic = diagnosticForError(error, this.app.client);
@@ -186,13 +171,8 @@ export class SessionLifecycleService {
       }
     } finally {
       this.managing.delete(sessionId);
-      if (sameOwner()) {
-        swarm.discardReplay(sessionId);
-        this.turns.skipReplayedMessages.delete(sessionId);
-        this.turns.replayedUsers.delete(sessionId);
-        this.turns.recoveringHistory.delete(sessionId);
-      }
-      planReplay.discard();
+      if (sameOwner()) swarm.discardReplay(sessionId);
+      replay.discard();
     }
     this.app.approval.setSessionExecutionMode(session.sessionId, session.executionMode);
     this.app.telemetry.hydrateFromMessages(sessionId, session.modelId, () => this.app.messages.forStatistics(sessionId));
@@ -207,6 +187,7 @@ export class SessionLifecycleService {
     await this.app.sessions.closeSession(sessionId);
   }
   private async finishDeletion(id: string): Promise<void> {
+    this.app.retireSession(id);
     const profile = this.app.accounts.activeProfileId;
     this.app.approval.clearSessionGrants(id);
     this.turns.releaseSession(id);

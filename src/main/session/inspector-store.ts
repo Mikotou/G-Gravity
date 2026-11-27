@@ -9,8 +9,11 @@ import type { ClientStore } from '../storage/client-store';
 
 function record(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function string(value: unknown): string { return typeof value === 'string' ? value : ''; }
+type StoredInspector = SessionInspectorData & { planDigest?: string; stepsChecked?: boolean };
 export class InspectorStore extends EventEmitter {
   private states = new Map<string, SessionInspectorData>();
+  private stepsChecked = new WeakSet<SessionInspectorData>();
+  private digests = new WeakMap<SessionInspectorData, string>();
   private proposedDiffs = new Map<string, FileDiffEntry[]>();
   private timers = new Map<string, NodeJS.Timeout>();
   private legacyIds = new Set<string>();
@@ -41,6 +44,14 @@ export class InspectorStore extends EventEmitter {
         saved = this.store?.readSessionRecords<SessionInspectorData>(this.filename, 'inspector-states.json', this.owned)[id];
       }
       value = saved && Array.isArray(saved.diffs) ? saved : { sessionId: id, diffs: [], todos: [], terminals: [] };
+      const persisted = value as StoredInspector;
+      if (persisted.stepsChecked) this.stepsChecked.add(value);
+      delete persisted.stepsChecked;
+      const digest = persisted.planDigest;
+      if (digest) {
+        this.digests.set(value, digest);
+        delete persisted.planDigest;
+      }
       if (!value.plan) {
         const legacy = value.todos?.length && normalizePlan(value.todos);
         value.plan = legacy ? { ...legacy.plan, revision: 1 } : unreceivedPlan();
@@ -58,7 +69,14 @@ export class InspectorStore extends EventEmitter {
     this.states.set(id, value);
     return value;
   }
-  needsPlanReplay(sessionId: string): boolean { return this.state(sessionId).plan?.state === 'unreceived'; }
+  needsPlanReplay(id: string): boolean {
+    const state = this.state(id);
+    return state.plan?.state === 'unreceived' && !this.stepsChecked.has(state);
+  }
+  finishPlanReplay(id: string): void {
+    const state = this.state(id);
+    if (!this.stepsChecked.has(state)) { this.stepsChecked.add(state); this.save(state); }
+  }
   get(sessionId: string): SessionInspectorData { return structuredClone(this.state(sessionId)); }
   private flushFile(file: string): void {
     if (this.dirtyFiles.has(file)) {
@@ -161,6 +179,14 @@ export class InspectorStore extends EventEmitter {
   }
   applyPlan(sessionId: string, normalized: NonNullable<ReturnType<typeof normalizePlan>>): SessionTodoItem[] {
     const state = this.state(sessionId);
+    const { revision, ...previous } = state.plan ?? unreceivedPlan();
+    const digest = this.digests.get(state);
+    if ((!digest || digest === normalized.digest) && Object.entries(normalized.plan).every(([key, value]) => previous[key as keyof typeof previous] === value) &&
+        JSON.stringify(state.todos) === JSON.stringify(normalized.todos)) {
+      this.digests.set(state, normalized.digest);
+      return structuredClone(state.todos);
+    }
+    this.digests.set(state, normalized.digest);
     state.todos = normalized.todos;
     state.plan = { ...normalized.plan, revision: (state.plan?.revision ?? 0) + 1 };
     this.save(state);
@@ -194,7 +220,7 @@ export class InspectorStore extends EventEmitter {
     if (!state) return;
     if (this.store) {
       const file = this.file(id);
-      this.store.writeDebounced(file, state);
+      this.store.writeDebounced(file, { ...state, planDigest: this.digests.get(state), ...(this.stepsChecked.has(state) && { stepsChecked: true }) });
       this.dirtyFiles.add(file);
     }
     this.emit('updated', structuredClone(state));

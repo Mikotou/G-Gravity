@@ -1,3 +1,4 @@
+import type { VoiceAppendInput } from '../shared/voice-contract';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { TelemetryCharts, TelemetryDelta } from './telemetry/telemetry-update';
 import type { TelemetryDashboardSnapshot } from '../shared/telemetry-contract';
@@ -5,6 +6,30 @@ import type { GravityDesktopBridge } from '../shared/ipc-channels';
 
 // 沙箱 Preload 运行时仅加载 Electron，所有共享依赖均为类型导入。
 const invoke = (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args);
+function checkVoiceAppend(value: unknown): asserts value is VoiceAppendInput {
+  const invalid = () => { throw new Error('语音分片格式无效'); };
+  if (!value || typeof value !== 'object') return invalid();
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== null && Object.getPrototypeOf(prototype) !== null) return invalid();
+  if (Reflect.ownKeys(value).length !== 3 || !['captureId', 'seq', 'pcm16'].every(key => {
+    const field = Object.getOwnPropertyDescriptor(value, key);
+    return field?.enumerable && Object.hasOwn(field, 'value');
+  })) return invalid();
+  const { captureId, seq, pcm16 } = value as VoiceAppendInput;
+  if (typeof captureId !== 'string' || !captureId.length || captureId.length > 128 ||
+      !Number.isSafeInteger(seq) || seq < 1) return invalid();
+  const view = ArrayBuffer.isView(pcm16);
+  if (view && Object.getPrototypeOf(pcm16) !== Uint8Array.prototype) return invalid();
+  const typed = Object.getPrototypeOf(Uint8Array.prototype);
+  const actual = (key: string) => Object.getOwnPropertyDescriptor(typed, key)!.get!.call(pcm16);
+  const buffer = view ? actual('buffer') : pcm16;
+  // Invoke the intrinsic brand check. Shared buffers and lookalikes cannot satisfy it.
+  const get = (key: string) => Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, key)?.get;
+  const bytes: number = get('byteLength')!.call(buffer);
+  if (!bytes || bytes > 32_768 || bytes % 2 || get('resizable')?.call(buffer) || get('detached')?.call(buffer) ||
+      (view && (actual('byteOffset') !== 0 || actual('byteLength') !== bytes))) return invalid();
+}
+
 /** 只将业务载荷交给页面。返回的清理函数保留同一个监听器引用，组件卸载时能精确取消订阅。 */
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const handler = (_event: Electron.IpcRendererEvent, payload: T) => listener(payload);
@@ -104,6 +129,18 @@ const bridge: GravityDesktopBridge = {
   listApprovalAudit: limit => invoke('gravity:approval:list-audit', limit),
   discoverExternalReviewerModels: input => invoke('gravity:approval:discover-models', input),
   testExternalReviewerConnection: input => invoke('gravity:approval:test-connection', input),
+  getVoiceState: () => invoke('gravity:voice:get-state'),
+  updateVoiceConfig: input => invoke('gravity:voice:update-config', input),
+  discoverVoiceModels: input => invoke('gravity:voice:discover-models', input),
+  testVoiceConnection: input => invoke('gravity:voice:test-connection', input),
+  installVoiceModel: input => invoke('gravity:voice:install-model', input),
+  voiceArmCapture: input => invoke('gravity:voice:arm-capture', input),
+  voiceAppend: async input => { checkVoiceAppend(input); return invoke('gravity:voice:append', input); },
+  voiceFinish: input => invoke('gravity:voice:finish', input),
+  voiceAbort: input => invoke('gravity:voice:abort', input),
+  onVoiceSegment: listener => subscribe('gravity:event:voice-segment', listener),
+  onVoiceSettled: listener => subscribe('gravity:event:voice-settled', listener),
+  onVoiceCaptureRevoked: listener => subscribe('gravity:event:voice-capture-revoked', listener),
   getTranslationConfig: () => invoke('gravity:translation:get-config'),
   updateTranslationConfig: patch => invoke('gravity:translation:update-config', patch),
   discoverExternalTranslationModels: input => invoke('gravity:translation:discover-models', input),

@@ -17,7 +17,8 @@ export async function openExternalTarget(
   input: OpenLinkOrFileInput,
   options: Pick<CoreServiceOptions, 'openTargetHandler' | 'homeDir'>,
   accounts?: AccountManager,
-  verifyPlan?: (owner: PlanArtifactOwner) => Promise<PlanArtifactSnapshot>
+  verifyPlan?: (owner: PlanArtifactOwner) => Promise<PlanArtifactSnapshot>,
+  context: LocalTargetContext = localTargetContext(options.homeDir, accounts)
 ): Promise<OpenLinkOrFileResult> {
   if (!input || typeof input.target !== 'string' || !input.target.trim()) {
     throw new Error('无效的目标链接或路径');
@@ -35,9 +36,12 @@ export async function openExternalTarget(
     let requested = rawTarget;
     try { if (/^file:/i.test(rawTarget)) requested = fileURLToPath(rawTarget); }
     catch { throw new Error('无效的本地文件 URL'); }
-    const snapshot = await verifyPlan({ profileId: owner.profileId, sessionId: owner.sessionId });
+    const snapshot = await verifyPlan(owner);
     if (snapshot.status !== 'ready' || !snapshot.filePath || snapshot.owner.sessionId !== owner.sessionId ||
-        snapshot.owner.profileId !== owner.profileId || (owner.revision !== undefined && owner.revision !== snapshot.revision) ||
+        snapshot.owner.profileId !== owner.profileId || (owner.epoch !== undefined && owner.epoch !== snapshot.epoch) ||
+        (owner.summaryRevision !== undefined && owner.summaryRevision !== snapshot.summaryRevision) ||
+        (owner.contentRevision !== undefined && owner.contentRevision !== snapshot.contentRevision) ||
+        (owner.revision !== undefined && owner.revision !== snapshot.summaryRevision && owner.revision !== snapshot.contentRevision) ||
         (accounts && (accounts.busy || accounts.activeProfileId !== owner.profileId)) ||
         !isAbsolute(requested) || isUnsafeLocalFile(requested) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(rawTarget.replace(/%2e/ig, '.')) ||
         !sameLocalPath(snapshot.filePath, requested)) throw new Error('Plan 产物归属、路径或修订已改变');
@@ -64,7 +68,7 @@ export async function openExternalTarget(
     return { opened: true, modeUsed: mode, resolvedTarget: parsed.toString() };
   }
 
-  const result = resolveLocalTarget(rawTarget, input, localTargetContext(options.homeDir, accounts));
+  const result = resolveLocalTarget(rawTarget, input, context);
   if (result.kind === 'forbidden') throw new Error('拒绝打开敏感凭据或私有状态文件');
   if (result.kind === 'missing' && (!result.path || input.action !== 'copy')) {
     throw new Error('本地文件或目录不存在，或相对路径缺少工作区');

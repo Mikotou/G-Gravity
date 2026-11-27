@@ -4,7 +4,7 @@ import { readSessionCheckpointLimit } from './checkpoint-limit-reader';
 import type { CoreServiceOptions, TelemetryHost } from '../core-contracts';
 
 export class TelemetryCoordinator {
-  constructor(private app: TelemetryHost, private options: CoreServiceOptions) {}
+  constructor(private app: TelemetryHost, private options: CoreServiceOptions, private voiceUsage?: TelemetryStore['voiceUsage']) {}
   private checkpointReading = new Map<string, symbol>();
   private checkpointResolvedModel = new Map<string, string>();
   private checkpointSyncAt = new Map<string, number>();
@@ -13,6 +13,7 @@ export class TelemetryCoordinator {
   private telemetryClock?: NodeJS.Timeout;
   createTelemetryStore(profileId: string): TelemetryStore {
     const telemetry = new TelemetryStore({ store: this.app.store, profileId, now: this.options.now });
+    telemetry.voiceUsage = this.voiceUsage;
     const changed = new Set<string>();
     const partitions = new Set<string>();
     const native = new Set<string>();

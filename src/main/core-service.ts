@@ -1,3 +1,7 @@
+import { VoiceService } from './voice/voice-service';
+import type { VoiceOwner } from '../shared/session-owner';
+import type { VoiceAbortInput, VoiceAppendInput, VoiceArmCaptureInput, VoiceConfigPatch, VoiceDiscoverModelsInput,
+  VoiceFinishInput, VoiceInstallModelInput, VoiceTestConnectionInput } from '../shared/voice-contract';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import type { AgentExecutionMode, AgentReasoningEffort } from '../shared/acp-protocol';
@@ -17,7 +21,7 @@ import type { ClientPreferences, GravityIconPreference } from '../shared/theme-i
 import { APP_BRAND } from '../shared/theme-i18n-contract';
 import type { ExternalTranslatorConfig, TranslationConfigPatch } from '../shared/translation-contract';
 import type { ModelRateCard } from '../shared/telemetry-contract';
-import type { AccountQuotaReadResult, CreateAccountProfileInput } from '../shared/accounts-history-contract';
+import type { CreateAccountProfileInput } from '../shared/accounts-history-contract';
 import type { PluginActionInput, McpActionInput } from '../shared/plugins-contract';
 import type { SwarmHistoryCursor } from '../shared/swarm-contract';
 import type { SwitchConversationBranchInput } from '../shared/conversation-tree';
@@ -31,7 +35,7 @@ import { TitleOrganizer } from './organizer/title-organizer';
 import { TelemetryStore } from './telemetry/telemetry-store';
 import { ThoughtTranslator } from './translation/thought-translator';
 import { SwarmWorkerClient } from './swarm/swarm-worker-client';
-import { AccountQuotaUnavailable, MacQuotaNotReported, readAccountQuota } from './accounts/account-quota';
+import { QuotaService } from './accounts/quota-service';
 import { AccountManager } from './accounts/account-manager';
 import { PluginsManager } from './plugins/plugins-manager';
 import { WorkspaceFiles } from './workspace/workspace-files';
@@ -46,7 +50,7 @@ import { TitleOrganizerService } from './services/title-organizer-service';
 import { ApprovalCoordinator } from './services/approval-coordinator';
 import { SecretVault, publicApprovalConfig, publicTranslationConfig } from './services/secret-vault';
 import { openExternalTarget, localTargetContext } from './services/external-opener';
-import { diagnosticDetail, officialLoginRequiredMessage } from './services/session-diagnostics';
+import { diagnosticDetail } from './services/session-diagnostics';
 import { inspectLocalTargets } from './services/local-media-inspector';
 import type { InspectLocalTargetsInput, InspectLocalTargetsResult } from '../shared/media-contract';
 import type { CoreServiceOptions } from './core-contracts';
@@ -68,28 +72,49 @@ export class CoreService extends EventEmitter {
   get inspector(): InspectorStore { return this.lifecycle.profileData.inspector; }
   get trees(): ConversationTreeStore { return this.lifecycle.profileData.trees; }
   disposed = false;
+  readonly voice: VoiceService;
+  private sequence = 1;
+  private profileEpoch = 1;
+  private sessionEpochs = new Map<string, number>();
+  epochForSession(owner: VoiceOwner): number | undefined {
+    if (this.disposed || this.stoppingProducers || this.accounts.busy || owner.profileId !== this.accounts.activeProfileId ||
+        this.sessions.profileId !== owner.profileId) return;
+    let epoch = this.profileEpoch;
+    if (owner.sessionId !== undefined) {
+      if (!this.sessions.ownsSession(owner.sessionId) || this.sessions.sessions.get(owner.sessionId)?.profileId !== owner.profileId) return;
+      epoch = this.sessionEpochs.get(owner.sessionId) ?? ++this.sequence;
+      this.sessionEpochs.set(owner.sessionId, epoch);
+    }
+    return owner.epoch === undefined || owner.epoch === epoch ? epoch : undefined;
+  }
+  retireSession(id: string): void {
+    this.voice.revoke('session-closed', id);
+    this.planArtifacts.remove(id);
+    this.sessionEpochs.delete(id);
+  }
   private readonly planArtifacts = new PlanArtifactReader(owner => {
-    if (this.disposed || this.accounts.busy || owner.profileId !== this.accounts.activeProfileId ||
-        owner.profileId !== this.sessions.profileId || !this.sessions.ownsSession(owner.sessionId)) return;
-    const session = this.sessions.sessions.get(owner.sessionId);
-    if (!session || session.profileId !== owner.profileId) return;
-    const messages = this.messages;
-    return { ...this.mediaContext(), cwd: session.cwd, generation: messages, references: readArchives => messages.planReferences(owner.sessionId, readArchives) };
+    const epoch = this.epochForSession(owner);
+    if (epoch !== undefined) return { ...this.mediaContext(), epoch };
   }, changed => this.emit('plan-artifact-changed', changed));
   private readonly turns = new TurnOrchestrator(this);
   private readonly monitor: TelemetryCoordinator;
   private readonly lifecycle: SessionLifecycleService;
   private readonly branches: ConversationBranches;
   private readonly titleOrganizer: TitleOrganizerService;
-  private quotaRequests = new Map<string, { controller: AbortController; result: Promise<AccountQuotaReadResult> }>();
-  private quotaResumedAfter = 0;
+  private readonly quota = new QuotaService(this);
+  private closing?: Promise<void>;
+  private stoppingProducers = false;
+  private producersStopped = false;
+  get savingForQuit(): boolean { return !!this.closing || this.stoppingProducers; }
   private lastPublishedConnection?: string;
   private bootstrapping?: Promise<AppBootstrapPayload>;
   private autoUpdateTimer?: NodeJS.Timeout;
   constructor(private options: CoreServiceOptions) {
     super(); this.store = new ClientStore(options.dataDir);
-    this.monitor = new TelemetryCoordinator(this, options);
+    this.monitor = new TelemetryCoordinator(this, options, () => this.voice.ledger.snapshot());
     const vault = new SecretVault(this.store, options.secretCipher);
+    this.voice = new VoiceService(this.store, vault, options, owner => owner.sessionId && (!this.sessions.isActive(owner.sessionId) || this.sessions.get(owner.sessionId).readOnly) ? undefined : this.epochForSession(owner),
+      (event, payload) => this.emit(event, payload), () => this.telemetry.emit('changed', undefined, 'voice'), () => this.accounts.activeProfileId);
     this.settings = new WorkspaceSettings(this, vault, options, () => this.disposed);
     this.lifecycle = new SessionLifecycleService(this, this.turns, this.monitor, this.settings, options);
     this.client = options.acp || new AcpClient({ ...options.acpOptions, args: options.acpOptions?.args || ['acp', ...(this.settings.preferences.processPerSession ? ['--process-per-session'] : [])] });
@@ -133,10 +158,14 @@ export class CoreService extends EventEmitter {
       beforeSwitch: async () => {
         if (this.plugins.changingCli) throw new Error('官方 CLI 管理操作正在执行，请稍后切换账号');
         if (this.lifecycle.managing.size || this.branches.revising.size || this.sessions.isOpeningSession || this.titleOrganizer.organizingTitles) throw new Error('正在创建、恢复或整理会话，请稍后切换账号');
+        this.voice.revoke('profile-switched');
+        this.planArtifacts.clear();
+        this.sessionEpochs.clear();
+        this.profileEpoch = ++this.sequence;
         await this.lifecycle.completePendingDeletions();
         await this.flushSwarm();
         this.settings.profileWillChange();
-        await this.cancelQuotaRequests();
+        await this.quota.cancel();
         this.store.flushPending();
         this.turns.prepareDisconnect();
         this.messages.save();
@@ -163,14 +192,17 @@ export class CoreService extends EventEmitter {
     });
     this.client.on('before-connect', () => {
       // An in-flight restore or profile change may still be awaiting the previous transport's shutdown.
-      if (this.disposed) throw new AcpRequestNotSentError('ACP 正在关闭');
+      if (this.disposed || this.stoppingProducers) throw new AcpRequestNotSentError('ACP 正在关闭');
       this.settings.syncAcpArgs();
     });
     this.client.on('connected', () => this.publishConnection());
     this.client.on('connection-changed', () => this.publishConnection());
-    this.on('message-upserted', ({ sessionId, message }) => {
-      this.planArtifacts.messageChanged({ profileId: this.accounts.activeProfileId, sessionId }, message);
+    this.client.on('disconnected', () => {
+      this.voice.revoke('session-closed');
+      this.planArtifacts.clear();
+      this.sessionEpochs.clear();
     });
+    this.sessions.on('closed', (id: string) => this.retireSession(id));
     this.turns.bindEvents();
   }
   getPreferences(): ClientPreferences { return structuredClone(this.settings.preferences); }
@@ -178,10 +210,10 @@ export class CoreService extends EventEmitter {
   async getBootstrap(): Promise<AppBootstrapPayload> {
     if (this.bootstrapping) return this.bootstrapping;
     this.bootstrapping = (async () => {
-      await this.lifecycle.completePendingDeletions();
+      if (!this.savingForQuit) await this.lifecycle.completePendingDeletions();
       try {
         this.accounts.assertReady();
-        await this.sessions.listSessions(true);
+        if (!this.savingForQuit) await this.sessions.listSessions(true);
       } catch (error) {
         this.client.lastError = diagnosticDetail(error) || 'ACP 连接失败';
       }
@@ -203,44 +235,7 @@ export class CoreService extends EventEmitter {
     })();
     try { return await this.bootstrapping; } finally { this.bootstrapping = undefined; }
   }
-  private async cancelQuotaRequests(): Promise<void> {
-    const requests = [...this.quotaRequests.values()];
-    for (const { controller } of requests) controller.abort();
-    await Promise.allSettled(requests.map(request => request.result));
-  }
-
-  async getAccountQuota(manual = false): Promise<AccountQuotaReadResult> {
-    this.accounts.assertReady();
-    if (this.disposed) throw new Error('客户端正在退出。');
-    if (typeof manual !== 'boolean') throw new Error('额度刷新参数无效');
-    const deadline = this.client.cooldownUntilMs;
-    const assertAllowed = () => {
-      this.client.assertRequestAllowed();
-      if (this.client.cooldownUntilMs !== deadline || (!manual && this.quotaResumedAfter < deadline)) {
-        throw new Error('额度自动刷新已暂停，请手动刷新。');
-      }
-    };
-    assertAllowed();
-    const state = this.accounts.getState();
-    const profile = state.profiles.find(p => p.profileId === state.activeProfileId)!;
-    const existing = this.quotaRequests.get(profile.profileId);
-    if (existing) return existing.result;
-    const controller = new AbortController();
-    const result = readAccountQuota(profile, this.client.options.binaryPath, controller.signal, assertAllowed)
-      .catch((error): AccountQuotaReadResult => {
-        if (error instanceof AccountQuotaUnavailable) return { profileId: profile.profileId, unavailable: error.reason };
-        if (error instanceof MacQuotaNotReported && this.client.lastErrorCode === 'auth_required_401') {
-          throw new Error(officialLoginRequiredMessage);
-        }
-        throw error;
-      }).then(value => {
-        if (manual && !('unavailable' in value) && !controller.signal.aborted && !this.disposed &&
-            this.accounts.activeProfileId === profile.profileId && this.client.cooldownUntilMs === deadline) this.quotaResumedAfter = deadline;
-        return value;
-      }).finally(() => this.quotaRequests.delete(profile.profileId));
-    this.quotaRequests.set(profile.profileId, { controller, result });
-    return result;
-  }
+  getAccountQuota(manual = false) { return this.quota.getAccountQuota(manual); }
   private connectionStatus(): AcpConnectionStatus {
     const version = this.client.initializeResult?.agentInfo?.version;
     return { connected: this.client.connected, agyBinaryPath: this.client.binaryPath, agyVersion: version || '',
@@ -265,7 +260,12 @@ export class CoreService extends EventEmitter {
   async downloadUpdate(): Promise<AppUpdateState> { return this.updater.downloadUpdate(); }
   async installUpdate(): Promise<{ launched: boolean; message: string }> { return this.updater.installUpdate(); }
   async launchOfficialLogin(profileId?: string) { return this.accounts.login(profileId); }
-  async listSessions(includeHiddenPollution = false) { this.accounts.assertReady(); await this.lifecycle.completePendingDeletions(); return (await this.sessions.listSessions(includeHiddenPollution)).map(item => this.enrichSession(item)); }
+  async listSessions(includeHiddenPollution = false) {
+    this.accounts.assertReady();
+    if (this.savingForQuit) return this.sessions.localSessionSummaries(includeHiddenPollution).map(item => this.enrichSession(item));
+    await this.lifecycle.completePendingDeletions();
+    return (await this.sessions.listSessions(includeHiddenPollution)).map(item => this.enrichSession(item));
+  }
   async getSessionMessagePage(sessionId: string, before?: number) { return structuredClone(this.messages.page(sessionId, before)); }
   async reviseMessage(input: ReviseMessageInput) { return this.branches.reviseMessage(input); }
   async getConversationTree(sessionId: string) { return this.branches.getConversationTree(sessionId); }
@@ -286,6 +286,15 @@ export class CoreService extends EventEmitter {
   async updateTranslationConfig(patch: TranslationConfigPatch) { return this.translation.updateTranslationConfig(patch); }
   async discoverExternalTranslationModels(input: ExternalReviewerModelsDiscoveryInput) { return this.translation.discoverExternalTranslationModels(input); }
   async testExternalTranslatorConnection(input?: Partial<ExternalTranslatorConfig>) { return this.translation.testExternalTranslatorConnection(input); }
+  getVoiceState() { return this.voice.state(); }
+  updateVoiceConfig(input: VoiceConfigPatch) { return this.voice.update(input); }
+  discoverVoiceModels(input: VoiceDiscoverModelsInput) { return this.voice.discover(input); }
+  testVoiceConnection(input?: VoiceTestConnectionInput) { return this.voice.test(input); }
+  installVoiceModel(input?: VoiceInstallModelInput) { return this.voice.local.install(input); }
+  voiceArmCapture(input: VoiceArmCaptureInput) { return this.voice.captures.arm(input); }
+  async voiceAppend(input: VoiceAppendInput) { return this.voice.captures.append(input); }
+  voiceFinish(input: VoiceFinishInput) { return this.voice.captures.finish(input); }
+  async voiceAbort(input: VoiceAbortInput) { return this.voice.captures.abort(input.captureId); }
   async getTelemetryDashboard() { return this.telemetry.snapshot(); }
   async updateModelRateCards(rates: ModelRateCard[]) { return this.telemetry.updateModelRateCards(rates); }
   async setAppIcon(iconId: GravityIconPreference) { return this.updatePreferences({ appIcon: iconId }); }
@@ -296,12 +305,19 @@ export class CoreService extends EventEmitter {
     if (!this.options.copyTextHandler) throw new Error('系统剪贴板不可用');
     await this.options.copyTextHandler(text);
   }
-  readonly mediaContext = () => localTargetContext(this.options.homeDir, this.accounts);
+  readonly mediaContext = () => ({ ...localTargetContext(this.options.homeDir, this.accounts),
+    profileId: this.accounts.activeProfileId, owns: (owner: VoiceOwner) => this.epochForSession(owner) !== undefined });
   async inspectLocalTargets(input: InspectLocalTargetsInput): Promise<InspectLocalTargetsResult> {
+    const id = input?.sessionId ?? input?.owner?.sessionId;
+    if (id) {
+      const owner = input.owner ?? { sessionId: id, profileId: input.profileId ?? this.accounts.activeProfileId };
+      const epoch = this.epochForSession(owner);
+      if (epoch !== undefined) input = { ...input, owner: { ...owner, epoch } };
+    }
     return inspectLocalTargets(input, this.mediaContext());
   }
   async openLinkOrFileTarget(input: OpenLinkOrFileInput): Promise<OpenLinkOrFileResult> {
-    return openExternalTarget(input, this.options, this.accounts, owner => this.planArtifacts.get(owner));
+    return openExternalTarget(input, this.options, this.accounts, owner => this.planArtifacts.get(owner), this.mediaContext());
   }
   async getAccountsState() { return this.accounts.getState(); }
   async createAccountProfile(input: CreateAccountProfileInput) { return this.accounts.createProfile(input); }
@@ -310,13 +326,15 @@ export class CoreService extends EventEmitter {
   async officialLogout() { return this.accounts.logout(); }
   async getSessionInspector(sessionId: string) {
     this.planArtifacts.observe({ profileId: this.accounts.activeProfileId, sessionId });
-    return this.inspector.get(sessionId);
+    const owner = { profileId: this.accounts.activeProfileId, sessionId };
+    const epoch = this.epochForSession(owner);
+    return { ...this.inspector.get(sessionId), ...owner, epoch, owner: { ...owner, epoch } };
   }
   async getSessionPlanArtifact(input: GetSessionPlanArtifactInput): Promise<PlanArtifactSnapshot> {
     return this.planArtifacts.get(input);
   }
   async listWorkspaceFiles(cwd: string, query?: string) { return this.workspaceFiles.list(cwd, query); }
-  async getPluginsSnapshot(workspaceCwd?: string) { return this.plugins.getSnapshot(workspaceCwd); }
+  async getPluginsSnapshot(workspaceCwd?: string) { return this.savingForQuit ? this.plugins.getCachedSnapshot() : this.plugins.getSnapshot(workspaceCwd); }
   async runPluginAction(input: PluginActionInput) { return this.plugins.runPluginAction(input); }
   async runMcpAction(input: McpActionInput) { return this.plugins.runMcpAction(input); }
   async toggleSkillEnabled(skillId: string, enabled: boolean) { return this.plugins.toggleSkillEnabled(skillId, enabled); }
@@ -330,21 +348,51 @@ export class CoreService extends EventEmitter {
     const failed = await this.swarm.flush();
     if (failed.length) throw new Error('Swarm 未能保存以下会话，请重试：' + failed.join(', '));
   }
-  /** 退出时先终止定时器与事件来源，再刷新用量账本。即便写盘抛错，finally 也会关闭 ACP 连接。 */
-  async dispose(): Promise<void> {
+  private async checkpoint(): Promise<void> {
+    this.store.write('layout.json', this.settings.layout);
+    await this.lifecycle.completePendingDeletions();
+    this.messages.save();
+    this.inspector.flush();
+    this.telemetry.flush();
+    await this.flushSwarm();
+    await this.store.drain();
+  }
+  dispose(stopDesktop?: () => Promise<void>): Promise<void> {
+    if (this.closing) return this.closing;
+    if (this.disposed) return Promise.resolve();
+    this.closing = this.shutdown(stopDesktop).finally(() => { this.closing = undefined; });
+    return this.closing;
+  }
+  private async shutdown(stopDesktop?: () => Promise<void>): Promise<void> {
+    // Complete pending durable work while the live window, router, ACP and workers can still be used.
+    if (!this.stoppingProducers) await this.checkpoint();
+    try {
+      this.stoppingProducers = true;
+      if (!this.producersStopped) {
+        await this.quota.cancel();
+        await stopDesktop?.();
+        await this.voice.dispose();
+        await this.client.stop();
+        this.turns.releaseProfile();
+        this.thoughts.dispose();
+        this.translation.dispose();
+        this.approval.dispose();
+        this.producersStopped = true;
+      }
+      // Stopping producers can itself finalize turns or accounting records.
+      await this.checkpoint();
+      await this.swarm.clear();
+      this.store.dispose();
+      await this.store.drain();
+    } catch (error) {
+      this.publishConnection(true);
+      throw error;
+    }
     this.disposed = true;
-    this.planArtifacts.clear();
-    const quotaStopped = this.cancelQuotaRequests();
     this.monitor.dispose();
-    if (this.autoUpdateTimer) { clearTimeout(this.autoUpdateTimer); this.autoUpdateTimer = undefined; }
-    const stopped = await Promise.allSettled([quotaStopped, this.client.stop()]);
-    const results = [...stopped, ...await Promise.allSettled([
-      () => this.turns.releaseProfile(), () => this.thoughts.dispose(), () => this.translation.dispose(), () => this.approval.dispose(),
-      () => this.messages.save(), () => this.inspector.flush(), () => this.telemetry.dispose(),
-      () => this.lifecycle.waitForDeletions(), async () => { await this.flushSwarm(); await this.swarm.clear(); },
-    ].map(clean => Promise.resolve().then(clean)))];
-    try { this.store.dispose(); } finally { await this.store.drain(); this.monitor.dispose(); }
-    for (const result of results) if (result.status === 'rejected') throw result.reason;
+    this.planArtifacts.clear();
+    clearTimeout(this.autoUpdateTimer);
+    this.telemetry.dispose(false);
   }
   enrichSession(session: ManagedSessionSummary) { return this.lifecycle.enrichSession(session); }
   isEphemeral(id: string) { return this.sessions.slots.find(id)?.hidden === true; }

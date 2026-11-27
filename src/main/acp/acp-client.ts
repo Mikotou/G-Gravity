@@ -279,9 +279,13 @@ export class AcpClient extends EventEmitter {
           this.cooldownUntil = until;
           this.cooldownKind = permission ? 'permission_403' : 'rate_limit_429';
         }
-        this.lastError = `官方服务 HTTP ${permission ? 403 : 429}，已熔断连续请求。请检查官方账号权限或等待配额恢复。`;
+        const permissionCooldown = this.cooldownKind === 'permission_403';
+        this.lastErrorCode = permissionCooldown ? 'permission_denied_403' : 'rate_limited_429';
+        this.lastError = `官方服务 HTTP ${permissionCooldown ? 403 : 429}，已熔断连续请求。请检查官方账号权限或等待配额恢复。`;
         this.emit('rateLimited', this.lastError);
-        pending?.reject(new AcpRpcError(code, this.lastError, data));
+        const dominant = permissionCooldown ? 403 : 429;
+        pending?.reject(diagnostic === this.lastErrorCode ? new AcpRpcError(code, this.lastError, data) :
+          new AcpRpcError(dominant, this.lastError));
       } else if (diagnostic === 'auth_required_401') {
         // Authentication errors may quote private account details. Only the public reason crosses IPC.
         this.lastError = officialLoginRequiredMessage;

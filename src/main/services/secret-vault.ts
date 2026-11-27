@@ -1,7 +1,9 @@
-import { randomUUID } from 'node:crypto';
+import type { VoiceConfig } from '../../shared/voice-contract';
+import { validateExternalEndpoint } from '../llm/external-llm-transport';
+import { createHash, randomUUID } from 'node:crypto';
 import { DEFAULT_APPROVAL_CONFIG, MAX_APPROVAL_PATTERNS_PER_KIND } from '../../shared/approval-contract';
 import { compileSafePattern } from '../approval/shell-screening';
-import { alignedRiskCeiling, validateExternalEndpoint } from '../approval/external-reviewer';
+import { alignedRiskCeiling } from '../approval/external-reviewer';
 import type { ClientStore } from '../storage/client-store';
 import {
   hasReviewerConnectionSettings, isExternalReviewerConnected, sameExternalService,
@@ -198,6 +200,11 @@ export function publicTranslationConfig(config: TranslationConfig): TranslationC
   return snapshot;
 }
 
+type SecretField = 'externalReviewer' | 'externalTranslator' | 'externalProvider';
+type ServiceCredential = Pick<ExternalTranslatorConfig, 'provider' | 'endpoint' | 'apiKey'>;
+function voiceProof(value: Partial<VoiceConfig['externalProvider']>, id?: string): string {
+  return createHash('sha256').update(JSON.stringify([value.provider, value.endpoint, value.model, value.timeoutMs, id])).digest('hex');
+}
 export class SecretVault {
   constructor(private store: ClientStore, private cipher?: SecretCipher) {}
 
@@ -210,8 +217,8 @@ export class SecretVault {
     const raw = this.store.read<unknown>(TRANSLATION_CONFIG_FILE, null);
     return sanitizeStoredTranslationConfig(raw, this.loadStoredServiceKey(TRANSLATOR_SECRET_FILE, raw, 'externalTranslator'));
   }
-  private loadStoredServiceKey(file: string, raw: unknown, field: 'externalReviewer' | 'externalTranslator'): string | undefined {
-    const saved = raw as { storedCredential?: boolean; credentialId?: string; externalTranslator?: ExternalTranslatorConfig; externalReviewer?: ExternalTranslatorConfig } | null;
+  private loadStoredServiceKey(file: string, raw: unknown, field: SecretField): string | undefined {
+    const saved = raw as { storedCredential?: boolean; credentialId?: string; externalTranslator?: ExternalTranslatorConfig; externalReviewer?: ServiceCredential; externalProvider?: ServiceCredential } | null;
     const service = saved?.[field];
     if (!service || saved?.storedCredential === false) return undefined;
     const cipher = this.cipher;
@@ -220,7 +227,7 @@ export class SecretVault {
     if (!blob || blob.length === 0) return undefined;
     try {
       const plain = cipher.decrypt(blob).trim();
-      if (!plain.startsWith('gravity-key-v1:')) return saved?.credentialId ? undefined : plain || undefined;
+      if (!plain.startsWith('gravity-key-v1:')) return field === 'externalProvider' || saved?.credentialId ? undefined : plain || undefined;
       const envelope = JSON.parse(plain.slice('gravity-key-v1:'.length));
       if (saved?.credentialId !== envelope.credentialId) return undefined;
       return typeof envelope.key === 'string' && sameExternalService(envelope, service) ? envelope.key : undefined;
@@ -229,10 +236,10 @@ export class SecretVault {
     }
   }
   private saveServiceConfig(
-    file: string, secretFile: string, persisted: object, field: 'externalReviewer' | 'externalTranslator',
-    service: ExternalTranslatorConfig, clear: boolean
+    file: string, secretFile: string, persisted: object, field: SecretField,
+    service: ServiceCredential, clear: boolean
   ): void {
-    const previous = this.store.read<Partial<Record<typeof field, ExternalTranslatorConfig>> & { storedCredential?: boolean; credentialId?: string }>(file, {});
+    const previous = this.store.read<Partial<Record<typeof field, ServiceCredential>> & { storedCredential?: boolean; credentialId?: string }>(file, {});
     const previousService = previous?.[field];
     let storedCredential = !clear && previousService && sameExternalService(previousService, service)
       ? previous.storedCredential : false;
@@ -258,8 +265,12 @@ export class SecretVault {
         }
       }
     }
+    if (field === 'externalProvider' && key && !storedCredential) throw Error('系统安全加密不可用，无法保存语音密钥');
     try {
-      this.store.write(file, { ...persisted, storedCredential, credentialId, requiresStoredCredential: Boolean(key || storedCredential) });
+      const voice = field === 'externalProvider' ? (persisted as VoiceConfig).externalProvider : undefined;
+      const verified = voice?.verifiedBy === 'transcription-call' ? voiceProof(voice, credentialId) : undefined;
+      this.store.write(file, { ...persisted, storedCredential, credentialId, requiresStoredCredential: Boolean(key || storedCredential),
+        ...(verified && { voiceProof: verified }) });
     } catch (error) {
       if (replaced) {
         try {
@@ -270,6 +281,28 @@ export class SecretVault {
       throw error;
     }
     if (storedCredential === false) this.store.deleteEncryptedBlob(secretFile);
+  }
+  encryptionAvailable(): boolean { return this.cipher?.isAvailable() === true; }
+  loadVoiceConfig(): Partial<VoiceConfig> {
+    const raw = this.store.read<Partial<VoiceConfig> & { requiresStoredCredential?: boolean; storedCredential?: boolean; voiceProof?: string; credentialId?: string }>('voice-config.json', {});
+    if (!raw?.externalProvider || typeof raw.externalProvider.endpoint !== 'string') return {};
+    const apiKey = this.loadStoredServiceKey('voice-secret.enc', raw, 'externalProvider');
+    const service = { ...raw.externalProvider, hasApiKey: undefined, apiKey };
+    if ((!apiKey && (raw.requiresStoredCredential || raw.storedCredential)) || raw.voiceProof !== voiceProof(service, raw.credentialId)) {
+      service.enabled = false;
+      service.connectionStatus = 'untested';
+      delete service.verifiedBy;
+      delete service.lastVerifiedAt;
+    }
+    return { ...raw, externalProvider: service };
+  }
+  persistVoiceConfig(config: VoiceConfig): void {
+    const persisted = structuredClone(config);
+    delete persisted.externalProvider.apiKey;
+    delete persisted.externalProvider.hasApiKey;
+    if (config.externalProvider.enabled && !this.encryptionAvailable()) throw Error('启用外部转写需要系统安全存储');
+    this.saveServiceConfig('voice-config.json', 'voice-secret.enc', persisted, 'externalProvider', config.externalProvider,
+      !config.externalProvider.apiKey);
   }
   persistApprovalConfig(config: ApproveForMeConfig): void {
     // approval-config.json 永不存明文密钥；系统支持 safeStorage 时将密文单独存入 reviewer-secret.enc，更新重启自动恢复。

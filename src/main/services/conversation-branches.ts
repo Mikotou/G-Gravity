@@ -1,3 +1,5 @@
+import { prepareAttachments } from '../session/message-images';
+import { modelMessage } from '../session/annotation-prompt';
 import { randomUUID } from 'node:crypto';
 import type { ReviseMessageInput, SwitchConversationBranchResult } from '../../shared/ipc-channels';
 import type { ManagedSessionSummary, ChatMessageItem } from '../../shared/session-contract';
@@ -31,8 +33,7 @@ export class ConversationBranches {
   private findCanonicalBranchForMessage(rootId: string, originMessageId: string | null, fallbackBranchId: string): string {
     if (!originMessageId) return rootId;
     for (const bid of this.app.trees.listBranchIds(rootId)) {
-      const list = this.context.messages().get(bid) || [];
-      if (list.some(m => !m.revisionHistory && (m.originMessageId === originMessageId || m.id === originMessageId))) {
+      if (this.context.messages().findWhere(bid, m => !m.revisionHistory && (m.originMessageId === originMessageId || m.id === originMessageId))) {
         return bid;
       }
     }
@@ -72,6 +73,10 @@ export class ConversationBranches {
     }
     const originMessages = this.context.messages().get(origin.sessionId) || [];
     const { prefix, references, attachments, annotations } = prepareRevision(originMessages, input);
+    const original = originMessages.find(m => m.id === input.messageId)!;
+    const selected = original.attachments?.filter(a => !input.attachmentIds || input.attachmentIds.includes(a.id));
+    if (input.attachmentIds?.some(id => !selected?.some(a => a.id === id))) throw new Error('选中的附件不存在');
+    if (modelMessage(input.text, annotations).length > 1_000_000) throw new Error('修订内容超过上限');
     const rootId = this.app.trees.resolveRootId(origin.sessionId);
     const rootSession = this.app.sessions.sessions.get(rootId) || origin;
     const rootTitle = this.app.titles.apply(rootSession).title;
@@ -79,7 +84,7 @@ export class ConversationBranches {
     const lastPrefix = prefix.at(-1);
     const forkAfterMessageId = lastPrefix ? (lastPrefix.originMessageId || lastPrefix.id) : null;
     const canonicalParentBranchId = this.findCanonicalBranchForMessage(rootId, forkAfterMessageId, origin.sessionId);
-    const rootFirstUser = (this.context.messages().get(rootId) || originMessages).find(m => m.role === 'user');
+    const rootFirstUser = this.context.messages().firstTurns(rootId).find(m => m.role === 'user');
     const rootPromptPreview = summarizeBranchSnippet(
       rootFirstUser?.content || rootFirstUser?.annotations?.[0]?.comment || rootFirstUser?.annotations?.[0]?.excerpt,
       72
@@ -94,6 +99,10 @@ export class ConversationBranches {
     this.revising.add(origin.sessionId);
     try {
       // The edited branch replaces this live tab. Release the official worker first and restore it on failure.
+      const prepared = attachments.length ? await prepareAttachments(attachments, origin.cwd) : [];
+      this.app.accounts.assertReady();
+      if (profile !== this.app.accounts.activeProfileId || !this.app.sessions.isActive(origin.sessionId) ||
+          this.context.isSessionTurnActive(origin.sessionId)) throw new Error('原会话状态已改变');
       await this.app.closeSession(origin.sessionId);
       this.app.accounts.assertReady();
       if (profile !== this.app.accounts.activeProfileId) throw new Error('账号资料已切换');
@@ -143,11 +152,11 @@ export class ConversationBranches {
       const enrichedBranch = this.context.enrich(this.app.sessions.get(id));
       this.app.emit('session-updated', enrichedBranch);
       this.emitTreeUpdate(rootId);
-      const revision = { sessionId: id, text: input.text, references, attachments, annotations };
+      const revision = { sessionId: id, text: input.text, references, attachments: prepared, annotations };
       void this.app.sendPrompt(revision).catch(error => {
         if (this.context.isDisposed() || this.app.accounts.activeProfileId !== profile || !this.app.sessions.sessions.has(id)) return;
         if (!(this.context.messages().get(id) || []).some(m => m.role === 'user' && !m.revisionHistory)) {
-          this.context.upsert({ id: randomUUID(), sessionId: id, role: 'user', content: revision.text, annotations, references, createdAt: new Date().toISOString(), sendFailed: true });
+          this.context.upsert({ id: randomUUID(), sessionId: id, role: 'user', content: revision.text, annotations, references, attachments: structuredClone(selected), createdAt: new Date().toISOString(), sendFailed: true });
         }
         this.context.upsert({ id: randomUUID(), sessionId: id, role: 'system', createdAt: new Date().toISOString(),
           content: '修订消息发送失败。' + (diagnosticDetail(error) ?? '未知错误') });

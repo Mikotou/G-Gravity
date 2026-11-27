@@ -42,13 +42,34 @@ export class HistoryReplay {
     }
   }
 
+  all(): ChatMessageItem[] { return this.messages.map(restoreAnnotatedMessage); }
+  dispose(): void { this.inspector.clear(); }
+
   prefixFor(local: ChatMessageItem[]): ChatMessageItem[] | undefined {
-    const replay = this.messages.map(restoreAnnotatedMessage);
+    const replay = this.all();
     // Identify a unique overlapping sequence. Ambiguous or unrecognizable copies remain untouched.
     const anchor = local.filter(m => m.role !== 'system').slice(0, 3);
-    if (!anchor.length || !anchor.some(m => m.content.trim())) return undefined;
-    const matches = replay.flatMap((_, i) => anchor.every((m, j) =>
-      m.role === replay[i + j]?.role && m.content === replay[i + j]?.content) ? [i] : []);
-    return matches.length === 1 ? replay.slice(0, matches[0]) : undefined;
+    if (!anchor.length || !anchor.some(m => m.content.trim() || m.annotations?.length || m.attachments?.length || m.references?.length)) return;
+    const fingerprint = (m: ChatMessageItem) => JSON.stringify([m.role, m.content,
+      m.annotations?.map(a => [a.excerpt, a.comment, a.originMessageId || a.messageId, a.messageNumber]) ?? [],
+      m.references?.map(r => [r.kind, r.value]) ?? [],
+      m.attachments?.map(a => [a.name, a.mimeType, a.sizeBytes, a.uri, a.textContent, a.dataUrl, a.dataBase64]) ?? []]);
+    const keys = anchor.map(fingerprint);
+    const replayKeys = replay.map(fingerprint);
+    const matches = replayKeys.flatMap((_, i) => keys.every((key, j) => key === replayKeys[i + j]) ? [i] : []);
+    if (matches.length === 1) return replay.slice(0, matches[0]);
+    if (matches.length || local.length < 8) return;
+    // Some legacy ACP servers echoed plain text but omitted client-only decorations. Recover only
+    // when the entire tail aligns, with a long unique fully matching suffix and no conflicting metadata.
+    const tail = local.filter(m => m.role !== 'system');
+    const offset = replay.length - tail.length;
+    if (offset < 0 || tail.length < 8) return;
+    const bare = (m: ChatMessageItem) => !m.annotations?.length && !m.references?.length && !m.attachments?.length;
+    if (!tail.every((m, i) => fingerprint(m) === replayKeys[offset + i] ||
+        (bare(replay[offset + i]) && m.role === replay[offset + i].role && m.content.trim() && m.content === replay[offset + i].content))) return;
+    const suffix = tail.slice(-6).map(fingerprint);
+    if (new Set(suffix).size !== suffix.length || !suffix.every((key, i) => key === replayKeys[replay.length - 6 + i])) return;
+    const suffixStarts = replayKeys.filter((key, i) => key === suffix[0] && suffix.every((s, j) => s === replayKeys[i + j]));
+    return suffixStarts.length === 1 ? replay.slice(0, offset) : undefined;
   }
 }

@@ -9,6 +9,7 @@ import type { SwarmCommand, SwarmReply, SwarmWorkerData } from './swarm-worker-p
 export class SwarmWorkerClient extends EventEmitter {
   private worker?: Worker;
   private closing?: Promise<void>;
+  private terminating?: Worker;
   private sequence = 0;
   private fatal?: Error;
   private waiters = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
@@ -24,9 +25,10 @@ export class SwarmWorkerClient extends EventEmitter {
     const worker = new Worker(entry, { workerData: this.data });
     this.worker = worker;
     const failed = (error: Error) => {
-      if (this.worker !== worker) return;
+      if (this.worker !== worker || this.terminating === worker) return;
       this.worker = undefined;
-      this.fatal = error;
+      if (this.waiters.size) this.fatal = error;
+      this.snapshots.clear();
       for (const waiter of this.waiters.values()) waiter.reject(error);
       this.waiters.clear();
       this.emit('storage-failed', error);
@@ -115,9 +117,10 @@ export class SwarmWorkerClient extends EventEmitter {
     if (!worker) return;
     this.closing = this.request<string[]>({ method: 'clear', args: [] }).then(async failed => {
       if (failed.length) throw new Error('Swarm 仍有未保存记录：' + failed.join(', '));
+      this.terminating = worker;
+      try { await worker.terminate(); } finally { this.terminating = undefined; }
       this.worker = undefined;
       this.snapshots.clear();
-      await worker.terminate();
     });
     try { await this.closing; } finally { this.closing = undefined; }
   }

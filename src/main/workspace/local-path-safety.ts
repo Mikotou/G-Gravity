@@ -114,13 +114,14 @@ export async function readPrefix(handle: FileHandle, length: number): Promise<Bu
 export const isAnyAbsolutePath = (value: string): boolean =>
   isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\');
 
-export async function readBoundedLocalFile(real: string, limit: number): Promise<Buffer> {
+export async function readBoundedLocalFile(real: string, limit: number, singleLink = false): Promise<Buffer> {
   const { handle, stat } = await openLocalFile(real);
   try {
+    if (singleLink && stat.nlink !== 1) throw new LocalFileChangedError();
     if (stat.size > limit) throw new Error('文件超过 ' + Math.ceil(limit / 1024) + ' KB 大小限制');
     const data = await readPrefix(handle, stat.size);
     const after = await handle.stat();
-    if (data.length !== stat.size || after.size !== stat.size || after.ctimeMs !== stat.ctimeMs ||
+    if ((singleLink && after.nlink !== 1) || data.length !== stat.size || after.size !== stat.size || after.ctimeMs !== stat.ctimeMs ||
         relative(real, realpathSync.native(real)) !== '' || lstatSync(real).ino !== stat.ino) throw new LocalFileChangedError();
     return data;
   } finally { await handle.close(); }

@@ -398,12 +398,14 @@ export class TelemetryStore extends SessionTelemetry {
         .map(([id, counts]) => [id, modelBreakdowns(counts, this.rateCards)])),
     };
   }
+  voiceUsage?: () => TelemetryDashboardSnapshot['externalVoice'];
   delta(ids: ReadonlySet<string>, native: ReadonlySet<string>, partitions: ReadonlySet<string>): TelemetryDelta {
     const now = this.now();
     return {
       profileId: this.options.profileId || 'default', sequence: ++snapshotSequence, generatedAt: new Date(now).toISOString(),
       changedSessionIds: [...native], ...this.sessionMaps(native),
       ...(partitions.has('native') ? { nativeCharts: this.charts(now) } : {}),
+      ...(partitions.has('voice') && { externalVoice: this.voiceUsage?.() }),
       ...(partitions.has('reviewer') ? { externalReviewer: this.reviewer.snapshot(ids) } : {}),
       ...(partitions.has('translator') ? { externalTranslator: this.translator.snapshot(ids) } : {}),
     };
@@ -413,7 +415,7 @@ export class TelemetryStore extends SessionTelemetry {
     return {
       profileId: this.options.profileId || 'default', sequence: ++snapshotSequence, generatedAt: new Date(now).toISOString(),
       ...(sessionIds && { changedSessionIds: [...sessionIds] }), ...this.sessionMaps(sessionIds), ...this.charts(now),
-      externalReviewer: this.reviewer.snapshot(sessionIds), externalTranslator: this.translator.snapshot(sessionIds),
+      externalVoice: this.voiceUsage?.(), externalReviewer: this.reviewer.snapshot(sessionIds), externalTranslator: this.translator.snapshot(sessionIds),
       rateCards: structuredClone(this.rateCards), pricingSource: this.customRates ? 'user-custom-rate' : 'reference-api-estimate',
     };
   }
