@@ -44,7 +44,7 @@ export class VoiceCapture {
   private settled = new Map<string, { result: VoiceFinishResult; owner: VoiceOwner }>();
   private pending = new Set<Promise<VoiceFinishResult>>();
   constructor(private host: CaptureHost) {}
-  private owned(c: Capture) { return this.host.epoch(c.owner) === c.epoch; }
+  private owned(c: Capture) { return !c.controller.signal.aborted && this.host.epoch(c.owner) === c.epoch; }
   get hasLease(): boolean {
     const c = this.active;
     return !!c && c.state === 'armed' && c.expires > Date.now() && this.owned(c);
@@ -100,8 +100,8 @@ export class VoiceCapture {
         c.state = 'sealed';
         this.setDeadline(c, HELD_MS);
         this.host.emit('voice-capture-revoked', { captureId: c.captureId, epoch: c.epoch, owner: c.owner, reason: 'preempted', held: true });
-      } else if (c.purpose !== 'dictation') {
-        this.settle(c, 'completed');
+      } else if (c.purpose !== 'dictation' || (c.state === 'armed' && !input.hold)) {
+        this.settle(c, c.state === 'armed' ? 'aborted' : 'completed');
         return this.armResult(c, 'released');
       } else if (input.hold) this.revokeOne(c, 'permission-revoked');
       else if (c.state !== 'sealed') this.seal(c);
@@ -136,9 +136,15 @@ export class VoiceCapture {
   append(input: VoiceAppendInput): VoiceAppendResult {
     const c = this.find(input.captureId);
     if (!c || c !== this.active || c.purpose === 'device-list' || !isValidVoicePcm16Buffer(input.pcm16)) throw Error('语音分片无效');
-    const ack = (accepted: boolean): VoiceAppendResult => ({ captureId: c.captureId, accepted, seq: input.seq, expectedSeq: c.acceptedSeq + 1,
-      acceptedBytes: c.acceptedBytes, remainingBytes: c.maxBytes - c.acceptedBytes, capped: c.acceptedBytes === c.maxBytes });
-    if (c.state !== 'capturing' || c.expires <= Date.now() || input.seq !== c.acceptedSeq + 1) return ack(false);
+    const ack = (reason?: 'capped' | 'seq-mismatch' | 'not-capturing'): VoiceAppendResult => ({
+      captureId: c.captureId, accepted: reason === undefined, seq: input.seq, expectedSeq: c.acceptedSeq + 1,
+      acceptedBytes: c.acceptedBytes, remainingBytes: c.maxBytes - c.acceptedBytes,
+      capped: c.acceptedBytes === c.maxBytes || c.state === 'sealed' || c.expires <= Date.now(), ...(reason && { reason }),
+    });
+    if (c.expires <= Date.now() && c.state === 'capturing') this.seal(c);
+    if (c.state === 'sealed' || c.expires <= Date.now()) return ack('capped');
+    if (c.state !== 'capturing') return ack('not-capturing');
+    if (input.seq !== c.acceptedSeq + 1) return ack('seq-mismatch');
     const source = input.pcm16 instanceof Uint8Array ? input.pcm16 : new Uint8Array(input.pcm16);
     const bytes = Buffer.from(source.subarray(0, c.maxBytes - c.acceptedBytes));
     if (c.stream) c.stream.append(bytes);
@@ -146,7 +152,7 @@ export class VoiceCapture {
     c.acceptedBytes += bytes.length;
     c.acceptedSeq = input.seq;
     if (c.acceptedBytes === c.maxBytes) this.seal(c);
-    return ack(true);
+    return ack();
   }
   private seal(c: Capture): void {
     c.state = 'sealed';
@@ -166,7 +172,7 @@ export class VoiceCapture {
     void c.stream?.close().catch(() => {});
   }
   private publish(c: Capture, raw: string): void {
-    if (c.controller.signal.aborted || !this.owned(c)) return;
+    if (!this.owned(c)) return;
     const text = normalizeDictationText(c.text, raw, c.locale);
     if (!text) return;
     c.text += text;
@@ -185,9 +191,13 @@ export class VoiceCapture {
     return result;
   }
   private revokeOne(c: Capture, reason: VoiceRevokeReason): void {
+    if (c.controller.signal.aborted) return;
     c.controller.abort();
-    this.settle(c, 'aborted');
-    this.host.emit('voice-capture-revoked', { captureId: c.captureId, owner: c.owner, epoch: c.epoch, reason });
+    try {
+      this.host.emit('voice-capture-revoked', { captureId: c.captureId, owner: c.owner, epoch: c.epoch, reason });
+    } finally {
+      this.settle(c, 'aborted');
+    }
   }
   revoke(reason: VoiceRevokeReason, sessionId?: string): void {
     this.ticket++;
@@ -211,15 +221,19 @@ export class VoiceCapture {
     const pcm = Buffer.concat(c.chunks);
     c.finishing = (async () => {
       try {
+        let finalText: string | undefined;
         if (c.stream) {
           await (c.localTail ?? c.stream.finish());
           await c.stream.close();
         } else if (pcm.length && c.external) {
-          this.publish(c, await this.host.transcribe(c.owner, pcm, c.locale, c.controller.signal, c.external));
+          finalText = await this.host.transcribe(c.owner, pcm, c.locale, c.controller.signal, c.external);
         }
-        if (!c.controller.signal.aborted && this.owned(c)) return this.settle(c, 'completed', incomplete);
+        if (this.owned(c)) {
+          if (finalText !== undefined) c.text = normalizeDictationText('', finalText, c.locale);
+          return this.settle(c, 'completed', incomplete);
+        }
       } catch {
-        if (!c.controller.signal.aborted && this.owned(c)) return this.settle(c, 'error', incomplete, '语音转写失败');
+        if (this.owned(c)) return this.settle(c, 'error', incomplete, '语音转写失败');
       } finally { pcm.fill(0); }
       return { status: 'aborted' as const, captureId: c.captureId, acceptedBytes: c.acceptedBytes, acceptedSeq: c.acceptedSeq, finalSeq: c.finalSeq };
     })();

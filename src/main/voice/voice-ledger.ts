@@ -37,6 +37,10 @@ function add(total: VoiceRangeUsageSummary, row: VoiceRangeUsageSummary): void {
 function dayKey(date: Date, offset = 0): string {
   return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate() + offset)).toISOString().slice(0, 10);
 }
+function aggregateCostBasis(hasUnknown: boolean, hasEstimate: boolean): VoiceCostBasis {
+  if (hasUnknown) return 'unknown';
+  return hasEstimate ? 'estimated-per-minute' : 'provider-direct';
+}
 class VoiceBook {
   private data: Saved;
   constructor(private store: ClientStore, private now: () => number, private changed: () => void, private file: string) {
@@ -96,7 +100,7 @@ class VoiceBook {
     }
     row.hasUnknownCost = (counts.unknown ?? 0) > 0;
     daily.hasUnknownCost = (unknownDays[day] ?? 0) > 0;
-    row.costBasis = Object.values(counts).filter(n => n > 0).length === 1 ? basis : 'unknown';
+    row.costBasis = aggregateCostBasis(row.hasUnknownCost, (counts['estimated-per-minute'] ?? 0) > 0);
     for (const k of Object.keys(data.days)) if (k < dayKey(new Date(this.now()), -29)) { delete data.days[k]; delete unknownDays[k]; }
     this.store.write(this.file, data);
     this.data = data;
@@ -112,6 +116,10 @@ class VoiceBook {
       if (key >= dayKey(date, -29)) add(byRange['30d'], day);
     }
     const providers = structuredClone(this.data.providers);
+    for (const row of providers) {
+      const counts = this.data.bases?.[row.key];
+      if (counts) row.costBasis = aggregateCostBasis((counts.unknown ?? 0) > 0, (counts['estimated-per-minute'] ?? 0) > 0);
+    }
     for (const attempt of this.data.attempts ?? []) {
       if (attempt.outcome) continue;
       const { host, provider, model, rate, durationMs } = attempt;
@@ -122,7 +130,10 @@ class VoiceBook {
       if (!row) {
         row = { ...empty(), key, endpointHost: host, provider, modelId: model, completedCount: 0, errorCount: 0, costBasis: basis };
         providers.push(row);
-      } else if (row.costBasis !== basis) row.costBasis = 'unknown';
+      } else {
+        row.costBasis = aggregateCostBasis(row.hasUnknownCost || sample.hasUnknownCost,
+          row.costBasis === 'estimated-per-minute' || basis === 'estimated-per-minute');
+      }
       add(row, sample);
       const day = dayKey(new Date(attempt.startedAt));
       if (day > dayKey(date)) continue;

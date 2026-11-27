@@ -36,7 +36,7 @@ export class LocalVoice {
     return Promise.all(this.paths().map(async ([, file]) => {
       try {
         const stat = await lstat(file, { bigint: true });
-        return [await realpath(file), stat.dev, stat.ino, stat.nlink, stat.size, stat.ctimeNs].join(':');
+        return [await realpath(file).catch(() => ''), stat.dev, stat.ino, stat.nlink, stat.size, stat.ctimeNs].join(':');
       } catch { return ''; }
     }));
   }
@@ -89,6 +89,7 @@ export class LocalVoice {
     }, this.fetcher).then(() => {
       this.model = { ...this.model, status: 'ready', sha256Verified: true, source: 'user-data' };
     }).catch(() => {
+      if (controller.signal.aborted) this.stamp = undefined;
       this.model = { ...this.model, status: controller.signal.aborted ? 'missing' : 'error', downloadedBytes: 0, progressPercent: 0,
         sha256Verified: false, error: controller.signal.aborted ? undefined : '语音模型下载或完整性校验失败' };
     }).finally(() => { this.download = undefined; });
