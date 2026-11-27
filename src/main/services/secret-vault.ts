@@ -16,7 +16,7 @@ import {
 } from '../../shared/translation-contract';
 
 export interface SecretCipher {
-  isAvailable(): boolean;
+  isAvailable(options?: { passive?: boolean }): boolean;
   encrypt(plaintext: string): Buffer;
   decrypt(ciphertext: Buffer): string;
 }
@@ -221,10 +221,10 @@ export class SecretVault {
     const saved = raw as { storedCredential?: boolean; credentialId?: string; externalTranslator?: ExternalTranslatorConfig; externalReviewer?: ServiceCredential; externalProvider?: ServiceCredential } | null;
     const service = saved?.[field];
     if (!service || saved?.storedCredential === false) return undefined;
-    const cipher = this.cipher;
-    if (!cipher?.isAvailable()) return undefined;
     const blob = this.store.readEncryptedBlob(file);
     if (!blob || blob.length === 0) return undefined;
+    const cipher = this.cipher;
+    if (!cipher?.isAvailable()) return undefined;
     try {
       const plain = cipher.decrypt(blob).trim();
       if (!plain.startsWith('gravity-key-v1:')) return field === 'externalProvider' || saved?.credentialId ? undefined : plain || undefined;
@@ -282,7 +282,7 @@ export class SecretVault {
     }
     if (storedCredential === false) this.store.deleteEncryptedBlob(secretFile);
   }
-  encryptionAvailable(): boolean { return this.cipher?.isAvailable() === true; }
+  encryptionAvailable(passive = false): boolean { return this.cipher?.isAvailable(passive ? { passive: true } : undefined) === true; }
   loadVoiceConfig(): Partial<VoiceConfig> {
     const raw = this.store.read<Partial<VoiceConfig> & { requiresStoredCredential?: boolean; storedCredential?: boolean; voiceProof?: string; credentialId?: string }>('voice-config.json', {});
     if (!raw?.externalProvider || typeof raw.externalProvider.endpoint !== 'string') return {};

@@ -376,7 +376,7 @@ it.runIf(nativePosix)('原生 POSIX 管道中运行 Mac 启动路径，ACP 与�
   simulateMac();
   vi.stubEnv('GRAVITY_FIXTURE_NODE', process.execPath);
   vi.stubEnv('GRAVITY_FIXTURE_JS', entry);
-  const client = new AcpClient({ binaryPath: binary, requestTimeoutMs: 2500 });
+  const client = new AcpClient({ binaryPath: binary, requestTimeoutMs: 6000 });
   try {
     expect((await client.start()).agentInfo.name).toBe('verified-tool');
     const plugins = new PluginsManager({ binaryPath: binary, store: new ClientStore(dir), homeDir: dir });

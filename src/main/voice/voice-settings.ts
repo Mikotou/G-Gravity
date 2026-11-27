@@ -94,5 +94,5 @@ export class VoiceSettings {
     delete info.externalProvider.apiKey;
     return info;
   }
-  encryptionAvailable(): boolean { return this.vault.encryptionAvailable(); }
+  encryptionAvailable(passive = false): boolean { return this.vault.encryptionAvailable(passive); }
 }

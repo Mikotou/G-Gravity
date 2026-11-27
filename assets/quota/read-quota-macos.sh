@@ -9,15 +9,23 @@ if [ "$1" = "--inside-pty" ]; then
   printf '%s\n' "$$" > "$GRAVITY_QUOTA_CONTROL/leader" || exit 1
   group=$$
   # If the supervisor is killed outright, its EXIT trap cannot release this separate PTY group.
-  (
-    trap '' HUP
+  # Run the watchdog via /bin/sh -c so $$ is its own PID and it can SIGKILL all other group members without killing itself.
+  /bin/sh -c '
+    group=$1
+    trap "" HUP
     while kill -0 "$GRAVITY_QUOTA_SUPERVISOR" 2>/dev/null; do /bin/sleep 0.2; done
-    trap '' TERM
-    # SIGKILL bypasses the supervisor's EXIT trap, even during the start handshake.
-    # Terminate the PTY process group before cleaning this mktemp control directory.
+    trap "" TERM
     kill -s TERM -- "-$group" 2>/dev/null || :
     /bin/sleep 0.5
-    kill -s KILL -- "-$group" 2>/dev/null || :
+    for pass in 1 2; do
+      pids=$(/bin/ps -ax -o pid=,pgid= 2>/dev/null | /usr/bin/awk -v g="$group" -v s="$$" '\''$2 == g && $1 != s { print $1 }'\'')
+      [ -n "$pids" ] || break
+      for pid in $pids; do
+        case "$pid" in ""|*[!0-9]*) continue ;; esac
+        kill -s KILL "$pid" 2>/dev/null || :
+      done
+      [ "$pass" -eq 1 ] && /bin/sleep 0.1
+    done
     case "$GRAVITY_QUOTA_CONTROL" in
       "$GRAVITY_QUOTA_CWD"/pty.????????)
         for name in feed recorder leader start finished reading.json; do
@@ -27,7 +35,7 @@ if [ "$1" = "--inside-pty" ]; then
         /bin/rmdir "$GRAVITY_QUOTA_CONTROL" 2>/dev/null || :
         ;;
     esac
-  ) </dev/null >/dev/null 2>&1 &
+  ' gravity-quota-watchdog "$group" </dev/null >/dev/null 2>&1 &
   while [ ! -f "$GRAVITY_QUOTA_CONTROL/start" ]; do
     kill -0 "$GRAVITY_QUOTA_SUPERVISOR" 2>/dev/null || exit 1
     /bin/sleep 0.1

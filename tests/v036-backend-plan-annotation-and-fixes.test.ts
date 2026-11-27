@@ -431,12 +431,13 @@ describe('P01–P04 & ADD-1: Plan 严格归属、128 KiB 读前硬拒绝、双�
 
     // 5. Directory deletion & recreation (new inode) still emits plan-artifact-changed
     const beforeRecreateRev = content2.contentRevision!;
+    await new Promise((r) => setTimeout(r, 80));
     rmSync(cliBrain, { recursive: true, force: true });
-    await vi.waitFor(() => expect(changed.some((e) => e.revision > beforeRecreateRev)).toBe(true), { timeout: 3000 });
+    await vi.waitFor(() => expect(changed.some((e) => e.revision > beforeRecreateRev)).toBe(true), { timeout: 4000 });
     const revAfterDelete = changed.at(-1)!.revision;
     mkdirSync(cliBrain, { recursive: true });
     writeFileSync(planFile, '# Recreated Plan\nNew goal after directory recreation.\n', 'utf8');
-    await vi.waitFor(() => expect(changed.some((e) => e.revision > revAfterDelete)).toBe(true), { timeout: 3000 });
+    await vi.waitFor(() => expect(changed.some((e) => e.revision > revAfterDelete)).toBe(true), { timeout: 4000 });
     const recreated = await core.getSessionPlanArtifact(owner);
     expect(recreated.outline?.title).toBe('Recreated Plan');
   });

@@ -14,6 +14,7 @@ let openingWindow: Promise<void> | undefined;
 let lifecycle: ReturnType<typeof registerAppWindowLifecycle>;
 function ensureService(): CoreService {
   if (service) return service;
+  let macKeychainOk: boolean | undefined;
   // 把剪贴板、文件对话框等桌面能力注入业务层，测试可以替换这些回调而不用创建窗口。
   service = new CoreService({
     dataDir: app.getPath('userData'), appRoot: app.getAppPath?.(), requestMicrophone,
@@ -24,11 +25,13 @@ function ensureService(): CoreService {
     appVersion: app.getVersion(),
     enableAutoUpdateCheck: app.isPackaged,
     secretCipher: {
-      isAvailable: () => {
-        try { return safeStorage.isEncryptionAvailable(); } catch { return false; }
+      isAvailable: (opts?: { passive?: boolean }) => {
+        if (opts?.passive && process.platform === 'darwin' && macKeychainOk === undefined) return true;
+        try { const ok = safeStorage.isEncryptionAvailable(); if (process.platform === 'darwin') macKeychainOk = ok; return ok; }
+        catch { if (process.platform === 'darwin') macKeychainOk = false; return false; }
       },
-      encrypt: (plaintext: string) => safeStorage.encryptString(plaintext),
-      decrypt: (ciphertext: Buffer) => safeStorage.decryptString(ciphertext),
+      encrypt: (plaintext: string) => { const b = safeStorage.encryptString(plaintext); if (process.platform === 'darwin') macKeychainOk = true; return b; },
+      decrypt: (ciphertext: Buffer) => { const s = safeStorage.decryptString(ciphertext); if (process.platform === 'darwin') macKeychainOk = true; return s; },
     },
     updaterOptions: {
       canInstallDirectly: canInstallUpdateDirectly(),

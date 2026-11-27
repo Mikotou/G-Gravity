@@ -46,7 +46,8 @@ export class VoiceService {
     const model = await this.local.state();
     const config = this.settings.publicConfig();
     const circuit = cooldown(config.externalProvider.endpoint);
-    const encryptionAvailable = this.settings.encryptionAvailable();
+    const needsKeychain = config.engine === 'external-api' || Boolean(config.externalProvider.hasApiKey);
+    const encryptionAvailable = this.settings.encryptionAvailable(!needsKeychain);
     return { config, model, external: { ready: encryptionAvailable && isExternalVoiceConnected(config.externalProvider) &&
       !circuit.cooldownUntil, encryptionAvailable, ...circuit }, ...this.captures.summaries(), updatedAt: new Date().toISOString() };
   }

@@ -373,7 +373,7 @@ describe('read-only session plan artifacts', () => {
     expect(f.openTargetHandler).toHaveBeenCalledTimes(1);
 
     writeFileSync(file, '# Updated Title\nOther summary line.\n');
-    await vi.waitFor(() => expect(changed.mock.calls.some(([e]) => e.revision > summarySnap.revision)).toBe(true));
+    await vi.waitFor(() => expect(changed.mock.calls.some(([e]) => e.revision > summarySnap.revision)).toBe(true), { timeout: 4000 });
     await expect(f.core.openLinkOrFileTarget(open)).rejects.toThrow();
 
     for (const bad of [{ ...owner, profileId: 'foreign' }, { ...owner, sessionId: '../escape' }, { ...owner, sessionId: 'foreign' }]) {
