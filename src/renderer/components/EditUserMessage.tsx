@@ -1,6 +1,6 @@
 import { getComponentCopy } from '../i18n/domains/copy';
 import React, { useEffect, useRef, useState } from 'react';
-import { SquarePen } from 'lucide-react';
+import { SquarePen, X } from 'lucide-react';
 import type { ChatMessageItem, ReviseMessageInput } from '@shared';
 import { canResendAttachment } from '../../shared/message-revision';
 import { useI18n } from '../i18n/I18nContext';
@@ -52,7 +52,9 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
       const { comment: _drop, ...rest } = a;
       return comment ? { ...rest, comment } : rest;
     });
-    try { await submit({ sessionId: message.sessionId, messageId: message.id, text: draft, attachmentIds: attachments, ...(normalized.length ? { annotations: normalized } : {}) }); setEditing(false); }
+    // QA1-FE-04：原消息带标注时，清空也必须显式传递 annotations: []（否则契约视 undefined 为保留原标注）
+    const hadOriginalAnnotations = Boolean(message.annotations?.length);
+    try { await submit({ sessionId: message.sessionId, messageId: message.id, text: draft, attachmentIds: attachments, ...(hadOriginalAnnotations || normalized.length ? { annotations: normalized } : {}) }); setEditing(false); }
     catch (e) { setError(stripIpcErrorPrefix(e)); }
     finally { lock.current = false; setPending(false); }
   }
@@ -69,6 +71,17 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
     {annotations.length > 0 && <ol className="annotation-list is-editing">
       {annotations.map((item, index) => <li className="sent-annotation" key={item.id ?? index}>
         <span className="annotation-num">#{index + 1}</span>
+        <button
+          type="button"
+          className="icon-btn icon-btn-sm annotation-remove-btn"
+          aria-label={t6.annRemove(index + 1)}
+          title={t6.annRemove(index + 1)}
+          disabled={pending}
+          data-testid={`edit-annotation-remove-${item.id ?? index}`}
+          onClick={() => setAnnotations(annotations.filter((_, i) => i !== index))}
+        >
+          <Icon icon={X} size="xs" />
+        </button>
         <blockquote>{item.excerpt}</blockquote>
         <textarea className="annotation-edit-input" aria-label={(getComponentCopy(zh).editAnnotation) + (index + 1)} placeholder={t6.annEditOptional}
           rows={1} disabled={pending} value={item.comment ?? ''} onKeyDown={editorKeys}

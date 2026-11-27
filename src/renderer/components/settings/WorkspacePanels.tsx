@@ -411,7 +411,7 @@ export function ApprovalsPanel({
   onUpdateConfig: (patch: Partial<ApproveForMeConfig>) => Promise<void>;
 }): React.ReactElement {
   const { locale, dict } = useI18n();
-  const { busy, error, run } = useAction();
+  const { busy, error, errorKey, run } = useAction();
   const [tab, setTab] = useState<ApprovalTab>(initialTab);
   const [hybridConnectPrompt, setHybridConnectPrompt] = useState(false);
 
@@ -550,7 +550,7 @@ export function ApprovalsPanel({
     void run(async () => {
       await onUpdateConfig(patch);
       setPolicyNotice(dict.ui.v032.policySaved);
-    });
+    }, 'rules');
   }
   /** 数字输入框失焦 / 回车：解析字符串草稿（空值或非法值回退到当前生效值），钳制后交给统一提交。 */
   function commitScoreText(): void {
@@ -801,12 +801,12 @@ export function ApprovalsPanel({
     void run(async () => {
       await onUpdateConfig({ [field]: [...config[field], check.normalized] });
       setDrafts((prev) => ({ ...prev, [field]: '' }));
-    });
+    }, 'rules');
   }
 
   return (
     <div className="settings-section" data-testid="approval-drawer">
-      {error && (
+      {error && (!errorKey || errorKey === tab) && (
         <div role="alert" className="alert">
           {error}
         </div>
@@ -859,7 +859,7 @@ export function ApprovalsPanel({
                       return;
                     }
                     setHybridConnectPrompt(false);
-                    void run(() => onUpdateConfig({ mode }));
+                    void run(() => onUpdateConfig({ mode }), 'rules');
                   }}
                   title={dict.approvalModes[mode].shortDesc}
                   data-testid={`approval-mode-option-${mode}`}
@@ -906,7 +906,7 @@ export function ApprovalsPanel({
                 checked={config.enableSafeDownloadAutoApprove}
                 disabled={busy}
                 label={dict.safeDownloadToggle}
-                onChange={(v) => void run(() => onUpdateConfig({ enableSafeDownloadAutoApprove: v }))}
+                onChange={(v) => void run(() => onUpdateConfig({ enableSafeDownloadAutoApprove: v }), 'rules')}
               />
             </div>
           </div>
@@ -1095,7 +1095,7 @@ export function ApprovalsPanel({
                             disabled={busy}
                             data-testid={`delete-pattern-${g.field}-${idx}`}
                             onClick={() =>
-                              void run(() => onUpdateConfig({ [g.field]: list.filter((_, i) => i !== idx) }))
+                              void run(() => onUpdateConfig({ [g.field]: list.filter((_, i) => i !== idx) }), 'rules')
                             }
                           >
                             <Icon icon={X} size="xs" />
@@ -1318,7 +1318,7 @@ export function ApprovalsPanel({
                 type="button"
                 className="btn btn-sm"
                 disabled={busy}
-                onClick={() => void run(() => onUpdateConfig({ mode: 'hybrid' }))}
+                onClick={() => void run(() => onUpdateConfig({ mode: 'hybrid' }), 'reviewer')}
                 data-testid="switch-to-hybrid-mode-btn"
               >
                 {dict.ui.switchToMode(dict.approvalModes.hybrid.label)}
@@ -1751,7 +1751,7 @@ export function PluginsPanel({
   onToggleSkill: (skillId: string, enabled: boolean) => Promise<void>;
 }): React.ReactElement {
   const { locale, dict, mac } = useI18n();
-  const { busy, error, run } = useAction();
+  const { busy, error, errorKey, run } = useAction();
   const [tab, setTab] = useState<PluginsTab>('builtins');
   const [target, setTarget] = useState('');
   const [mcpName, setMcpName] = useState('');
@@ -1885,7 +1885,7 @@ export function PluginsPanel({
         </div>
       )}
 
-      {error && (
+      {error && (!errorKey || errorKey === tab) && (
         <div role="alert" className="alert">
           {error}
         </div>
@@ -1934,7 +1934,7 @@ export function PluginsPanel({
               void run(async () => {
                 await onRunPluginAction({ action: 'install', target: target.trim() });
                 setTarget('');
-              });
+              }, 'plugins');
             }}
           >
             <input
@@ -1972,14 +1972,14 @@ export function PluginsPanel({
                       checked={pl.enabled}
                       disabled={busy}
                       label={pl.enabled ? dict.pluginDisableBtn : dict.pluginEnableBtn}
-                      onChange={(v) => void run(() => onRunPluginAction({ action: v ? 'enable' : 'disable', target: pl.name }))}
+                      onChange={(v) => void run(() => onRunPluginAction({ action: v ? 'enable' : 'disable', target: pl.name }), 'plugins')}
                     />
                     <ConfirmDeleteButton
                       label={dict.pluginUninstallBtn}
                       name={pl.name}
                       disabled={busy}
                       testId={`uninstall-plugin-${pl.name}`}
-                      onConfirm={() => void run(() => onRunPluginAction({ action: 'uninstall', target: pl.name }))}
+                      onConfirm={() => void run(() => onRunPluginAction({ action: 'uninstall', target: pl.name }), 'plugins')}
                     />
                   </div>
                 </div>
@@ -2009,7 +2009,7 @@ export function PluginsPanel({
                 });
                 setMcpName('');
                 setMcpCmd('');
-              });
+              }, 'mcp');
             }}
           >
             <input
@@ -2069,14 +2069,14 @@ export function PluginsPanel({
                       checked={srv.enabled}
                       disabled={busy}
                       label={srv.enabled ? dict.pluginDisableBtn : dict.pluginEnableBtn}
-                      onChange={(v) => void run(() => onRunMcpAction({ action: v ? 'enable' : 'disable', name: srv.name }))}
+                      onChange={(v) => void run(() => onRunMcpAction({ action: v ? 'enable' : 'disable', name: srv.name }), 'mcp')}
                     />
                     <ConfirmDeleteButton
                       label={dict.mcpRemoveBtn}
                       name={srv.name}
                       disabled={busy}
                       testId={`remove-mcp-${srv.name}`}
-                      onConfirm={() => void run(() => onRunMcpAction({ action: 'remove', name: srv.name }))}
+                      onConfirm={() => void run(() => onRunMcpAction({ action: 'remove', name: srv.name }), 'mcp')}
                     />
                   </div>
                 </div>
@@ -2108,7 +2108,7 @@ export function PluginsPanel({
                   checked={sk.enabled}
                   disabled={busy}
                   label={sk.name}
-                  onChange={(v) => void run(() => onToggleSkill(sk.id, v))}
+                  onChange={(v) => void run(() => onToggleSkill(sk.id, v), 'skills')}
                 />
               </div>
             ))

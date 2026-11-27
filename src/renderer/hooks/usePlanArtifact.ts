@@ -41,11 +41,11 @@ export interface UsePlanArtifactResult {
 }
 
 const CACHE_LIMIT = 16;
-const summaryCache = new Map<string, { summary: PlanSummaryState; content: PlanContentState | null }>();
+const summaryCache = new Map<string, { epoch?: number; summary: PlanSummaryState; content: PlanContentState | null }>();
 
-function remember(key: string, summary: PlanSummaryState, content: PlanContentState | null): void {
+function remember(key: string, summary: PlanSummaryState, content: PlanContentState | null, epoch?: number): void {
   summaryCache.delete(key);
-  summaryCache.set(key, { summary, content });
+  summaryCache.set(key, { ...(epoch !== undefined ? { epoch } : {}), summary, content });
   while (summaryCache.size > CACHE_LIMIT) {
     const oldest = summaryCache.keys().next().value;
     if (oldest === undefined) break;
@@ -84,14 +84,34 @@ export function usePlanArtifact({
   contentOpen: boolean;
 }): UsePlanArtifactResult {
   const supported = typeof getDesktopBridge().getSessionPlanArtifact === 'function';
-  const key = sessionId ? planArtifactKey(profileId, sessionId, epoch) : '';
-  const cached = key ? summaryCache.get(key) : undefined;
+  const baseKey = sessionId ? `${profileId}:${sessionId}` : '';
+  // QA1-FE-18：epoch 由 undefined 首次收敛为定义值 N 时不重建 key、不二次拉取；仅当两个不同定义值间切换时才失效重拉
+  const epochTrackRef = useRef<{ base: string; definedEpoch?: number; generation: number }>({ base: '', generation: 0 });
+  if (epochTrackRef.current.base !== baseKey) {
+    epochTrackRef.current = { base: baseKey, definedEpoch: epoch, generation: 0 };
+  } else if (epoch !== undefined) {
+    if (epochTrackRef.current.definedEpoch !== undefined && epochTrackRef.current.definedEpoch !== epoch) {
+      epochTrackRef.current = { base: baseKey, definedEpoch: epoch, generation: epochTrackRef.current.generation + 1 };
+    } else if (epochTrackRef.current.definedEpoch === undefined) {
+      epochTrackRef.current.definedEpoch = epoch;
+    }
+  }
+  const key = baseKey ? `${baseKey}#${epochTrackRef.current.generation}` : '';
+  const rawCached = baseKey ? summaryCache.get(baseKey) : undefined;
+  const cached =
+    rawCached && !(epoch !== undefined && rawCached.epoch !== undefined && rawCached.epoch !== epoch)
+      ? rawCached
+      : undefined;
   const [summary, setSummary] = useState<PlanSummaryState | null>(cached?.summary ?? null);
   const [content, setContent] = useState<PlanContentState | null>(cached?.content ?? null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [loadingContent, setLoadingContent] = useState(false);
   const [error, setError] = useState('');
   const keyRef = useRef(key);
+  const baseKeyRef = useRef(baseKey);
+  baseKeyRef.current = baseKey;
+  const epochRef = useRef(epoch);
+  epochRef.current = epoch;
   const genRef = useRef(0);
   const summaryRef = useRef<PlanSummaryState | null>(summary);
   const contentRef = useRef<PlanContentState | null>(content);
@@ -125,11 +145,22 @@ export function usePlanArtifact({
           view: 'summary',
           ...(known !== undefined ? { knownRevision: known } : {}),
         });
-        if (stale() || !ownerMatches(result, profileId, sessionId, epoch)) return;
+        if (stale() || !ownerMatches(result, profileId, sessionId, epochRef.current)) return;
         if (result.status === 'unchanged') {
-          if (summaryRef.current) return;
+          if (summaryRef.current) {
+            // QA1-FE-12：摘要未变但正文 revision 递增时，仍需将已缓存正文标脏，防止抽屉永不刷新
+            if (
+              typeof result.contentRevision === 'number' &&
+              contentRef.current &&
+              result.contentRevision !== contentRef.current.revision
+            ) {
+              contentStaleRef.current = true;
+              if (contentOpenRef.current) void loadContent(false);
+            }
+            return;
+          }
           result = await fetcher({ profileId, sessionId, view: 'summary' });
-          if (stale() || !ownerMatches(result, profileId, sessionId, epoch)) return;
+          if (stale() || !ownerMatches(result, profileId, sessionId, epochRef.current)) return;
           if (result.status === 'unchanged') result = { ...result, status: 'missing' };
         }
         const revision = result.summaryRevision ?? result.revision;
@@ -159,14 +190,19 @@ export function usePlanArtifact({
         else if (contentRef.current && result.contentRevision !== undefined && result.contentRevision !== contentRef.current.revision) {
           contentStaleRef.current = true;
         }
-        remember(myKey, next, legacyContent ?? (result.status === 'ready' ? contentRef.current : null));
+        remember(
+          baseKeyRef.current,
+          next,
+          legacyContent ?? (result.status === 'ready' ? contentRef.current : null),
+          result.epoch ?? result.owner?.epoch ?? epochRef.current
+        );
       } catch (reason) {
         if (!stale()) setError(stripIpcErrorPrefix(reason));
       } finally {
         if (!stale()) setLoadingSummary(false);
       }
     },
-    [commitContent, commitSummary, epoch, profileId, sessionId]
+    [commitContent, commitSummary, profileId, sessionId]
   );
 
   const contentGenRef = useRef(0);
@@ -186,7 +222,7 @@ export function usePlanArtifact({
           view: 'content',
           ...(known !== undefined ? { knownRevision: known } : {}),
         });
-        if (stale() || !ownerMatches(result, profileId, sessionId, epoch)) return;
+        if (stale() || !ownerMatches(result, profileId, sessionId, epochRef.current)) return;
         if (result.status === 'unchanged' && contentRef.current) return;
         contentStaleRef.current = false;
         if (result.status === 'ready' && typeof result.content === 'string') {
@@ -197,7 +233,9 @@ export function usePlanArtifact({
             updatedAt: result.updatedAt,
           };
           commitContent(next);
-          if (summaryRef.current) remember(myKey, summaryRef.current, next);
+          if (summaryRef.current) {
+            remember(baseKeyRef.current, summaryRef.current, next, result.epoch ?? result.owner?.epoch ?? epochRef.current);
+          }
         } else if (result.status !== 'unchanged') {
           commitContent(null);
           if (result.status === 'missing' || result.status === 'unavailable') {
@@ -210,7 +248,7 @@ export function usePlanArtifact({
         if (!stale()) setLoadingContent(false);
       }
     },
-    [commitContent, commitSummary, epoch, profileId, sessionId]
+    [commitContent, commitSummary, profileId, sessionId]
   );
 
   // 归属切换：复位并以缓存（若有）作为首帧，随后增量刷新摘要
@@ -218,7 +256,11 @@ export function usePlanArtifact({
     keyRef.current = key;
     genRef.current++;
     contentGenRef.current++;
-    const hit = key ? summaryCache.get(key) : undefined;
+    const rawHit = baseKey ? summaryCache.get(baseKey) : undefined;
+    const hit =
+      rawHit && !(epochRef.current !== undefined && rawHit.epoch !== undefined && rawHit.epoch !== epochRef.current)
+        ? rawHit
+        : undefined;
     commitSummary(hit?.summary ?? null);
     commitContent(hit?.content ?? null);
     contentStaleRef.current = false;
@@ -229,7 +271,7 @@ export function usePlanArtifact({
     void loadSummary(false);
     const unsubscribe = getDesktopBridge().onPlanArtifactChanged?.((event: PlanArtifactChangedEvent) => {
       if (event.sessionId !== sessionId || (event.profileId && event.profileId !== profileId)) return;
-      if (epoch !== undefined && event.epoch !== undefined && event.epoch !== epoch) return;
+      if (epochRef.current !== undefined && event.epoch !== undefined && event.epoch !== epochRef.current) return;
       const summaryRev = event.summaryRevision ?? event.revision;
       if (summaryRef.current?.revision === undefined || summaryRev !== summaryRef.current.revision) void loadSummary(false);
       const contentRev = event.contentRevision ?? event.revision;

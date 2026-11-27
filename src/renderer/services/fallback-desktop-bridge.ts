@@ -2981,14 +2981,25 @@ function createFallbackVoice(): Pick<
       return snapshot();
     },
     async updateVoiceConfig(patch: VoiceConfigPatch) {
-      const { apiKey, ...ext } = patch.externalProvider ?? {};
+      const { apiKey, ratePerMinuteUsd, ...ext } = patch.externalProvider ?? {};
+      const nextRate =
+        ratePerMinuteUsd === null
+          ? undefined
+          : ratePerMinuteUsd !== undefined
+            ? ratePerMinuteUsd
+            : config.externalProvider.ratePerMinuteUsd;
       config = {
         ...config,
         ...(patch.engine ? { engine: patch.engine } : {}),
         ...(patch.locale ? { locale: patch.locale } : {}),
         ...(patch.preferredDeviceId !== undefined ? { preferredDeviceId: patch.preferredDeviceId ?? undefined } : {}),
         ...(patch.preferredDeviceLabel !== undefined ? { preferredDeviceLabel: patch.preferredDeviceLabel ?? undefined } : {}),
-        externalProvider: { ...config.externalProvider, ...ext, ...(apiKey ? { hasApiKey: true } : {}) },
+        externalProvider: {
+          ...config.externalProvider,
+          ...ext,
+          ratePerMinuteUsd: nextRate,
+          ...(apiKey ? { hasApiKey: true } : {}),
+        },
       };
       return snapshot();
     },

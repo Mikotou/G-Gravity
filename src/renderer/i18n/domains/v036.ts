@@ -17,6 +17,8 @@ export interface V036Strings {
   planNow: (step: string) => string;
   planDoneGroup: (n: number) => string;
   planDocLine: string;
+  planDocWithSections: (n: number) => string;
+  planOutlineFooterHint: string;
   planChip: (done: number, total: number) => string;
   planChipNow: (step: string) => string;
   planChipOpen: string;
@@ -70,6 +72,10 @@ export interface V036Strings {
   voiceMicTest: string;
   voiceMicTesting: string;
   voiceMicTestDone: (text: string) => string;
+  voiceMicTestPass: (seconds: string) => string;
+  voiceMicTestSilent: string;
+  voiceEncryptionUnavailable: string;
+  voiceCooldownActive: (kind: string, until: string) => string;
   voiceModelStatus: Record<'ready' | 'missing' | 'downloading' | 'verifying' | 'loading' | 'error', string>;
   voiceModelInstall: string;
   voiceModelInstallConfirm: (mb: string) => string;
@@ -126,6 +132,8 @@ export const V036_ZH: V036Strings = {
   planNow: (s) => `正在：${s}`,
   planDoneGroup: (n) => `已完成 ${n} 步`,
   planDocLine: '计划文档',
+  planDocWithSections: (n) => `计划文档 · ${n} 个章节`,
+  planOutlineFooterHint: '执行开始后显示实时进度',
   planChip: (d, t) => `Plan ${d}/${t}`,
   planChipNow: (s) => `正在：${s}`,
   planChipOpen: '在 Plan 页签查看',
@@ -177,6 +185,10 @@ export const V036_ZH: V036Strings = {
   voiceMicTest: '3 秒试录',
   voiceMicTesting: '试录中…',
   voiceMicTestDone: (t) => (t ? `试录结果：${t}` : '试录完成，未识别到语音'),
+  voiceMicTestPass: (sec) => `麦克风工作正常（已采集 ${sec} 秒音频，仅本地检测未外发）`,
+  voiceMicTestSilent: '试录完成，未检测到声音输入，请检查麦克风设备或系统音量',
+  voiceEncryptionUnavailable: '当前系统安全加密仓不可用，无法保存外部语音 API 密钥或启用外部转写。',
+  voiceCooldownActive: (kind, until) => `外部语音服务触发 ${kind} 冷却保护，暂不可调用（预计恢复：${until}）`,
   voiceModelStatus: {
     ready: '本地模型已就绪',
     missing: '本地模型未安装',
@@ -244,6 +256,8 @@ export const V036_EN: V036Strings = {
   planNow: (s) => `Now: ${s}`,
   planDoneGroup: (n) => `${n} steps done`,
   planDocLine: 'Plan document',
+  planDocWithSections: (n) => `Plan document · ${n} ${n === 1 ? 'section' : 'sections'}`,
+  planOutlineFooterHint: 'Live progress will appear once execution begins.',
   planChip: (d, t) => `Plan ${d}/${t}`,
   planChipNow: (s) => `Now: ${s}`,
   planChipOpen: 'Open in the Plan tab',
@@ -295,6 +309,10 @@ export const V036_EN: V036Strings = {
   voiceMicTest: '3-second test',
   voiceMicTesting: 'Testing…',
   voiceMicTestDone: (t) => (t ? `Test result: ${t}` : 'Test finished; no speech recognized'),
+  voiceMicTestPass: (sec) => `Microphone is working (${sec}s captured locally, nothing uploaded)`,
+  voiceMicTestSilent: 'Test finished with no sound detected. Check your microphone device or input volume.',
+  voiceEncryptionUnavailable: 'OS credential encryption is unavailable; external voice keys cannot be stored or enabled.',
+  voiceCooldownActive: (kind, until) => `External voice service is in ${kind} cooldown until ${until}.`,
   voiceModelStatus: {
     ready: 'Local model ready',
     missing: 'Local model not installed',

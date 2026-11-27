@@ -157,14 +157,35 @@ interface SessionReadUpdates {
   tree?: ConversationTreeState;
 }
 
+type ProfileDraftRegistry = NonNullable<React.ContextType<typeof ComposerDrafts>>;
+
 export function App(): React.ReactElement {
   const [workspace, setWorkspace] = useState<{ revision: number; notice?: WorkspaceNotice }>({ revision: 0 });
+  // QA1-FE-11：按 profileId 隔离并在 App 根层常驻草稿表；切 Profile 重挂载工作区时不串号，切回原 Profile 仍保留本地草稿
+  const draftsByProfileRef = useRef(new Map<string, ProfileDraftRegistry>());
+  const getProfileDrafts = useCallback((profileId: string): ProfileDraftRegistry => {
+    const key = profileId || 'default';
+    let map = draftsByProfileRef.current.get(key);
+    if (!map) {
+      map = new Map();
+      draftsByProfileRef.current.set(key, map);
+    }
+    return map;
+  }, []);
   const reloadProfile = useCallback((notice?: WorkspaceNotice) => {
     // 切号后整棵工作区重新挂载：上一 Profile 的本地媒体预览缓存一并清空。
     clearLocalTargetInspectionCache();
     setWorkspace(previous => ({ revision: previous.revision + 1, notice }));
   }, []);
-  return <ProfileWorkspace key={workspace.revision} reopenAccounts={workspace.revision > 0} initialNotice={workspace.notice} reloadProfile={reloadProfile} />;
+  return (
+    <ProfileWorkspace
+      key={workspace.revision}
+      reopenAccounts={workspace.revision > 0}
+      initialNotice={workspace.notice}
+      reloadProfile={reloadProfile}
+      getProfileDrafts={getProfileDrafts}
+    />
+  );
 }
 
 interface WorkspaceNotice {
@@ -174,8 +195,11 @@ interface WorkspaceNotice {
 
 const toastLifeMs = (tone: ToastTone) => (tone === 'error' ? 5200 : 3200);
 
-function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
-  reopenAccounts: boolean; initialNotice?: WorkspaceNotice; reloadProfile: (notice?: WorkspaceNotice) => void;
+function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile, getProfileDrafts }: {
+  reopenAccounts: boolean;
+  initialNotice?: WorkspaceNotice;
+  reloadProfile: (notice?: WorkspaceNotice) => void;
+  getProfileDrafts: (profileId: string) => ProfileDraftRegistry;
 }): React.ReactElement {
   const [ready, setReady] = useState(false);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
@@ -212,7 +236,10 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     structuredClone(DEFAULT_TRANSLATION_CONFIG)
   );
   const [translationSettingsFocusSeq, setTranslationSettingsFocusSeq] = useState(0);
-  const [composerDrafts] = useState(() => new Map() as NonNullable<React.ContextType<typeof ComposerDrafts>>);
+  const composerDrafts = useMemo(
+    () => getProfileDrafts(preferences.activeProfileId || 'default'),
+    [getProfileDrafts, preferences.activeProfileId]
+  );
   const [sessions, setSessions] = useState<ManagedSessionSummary[]>([]);
   const tabSessions = useMemo(() => sessions.filter(s => !s.archivedAt), [sessions]);
   const [layout, setLayout] = useState<WorkspaceLayoutState>({

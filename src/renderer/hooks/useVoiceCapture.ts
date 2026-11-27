@@ -34,6 +34,7 @@ export interface UseVoiceCaptureResult {
   toggle: () => void;
   stop: () => void;
   abort: () => void;
+  flushImeBuffer: () => void;
 }
 
 interface Target {
@@ -46,10 +47,12 @@ export function useVoiceCapture({
   profileId,
   sessionId,
   textareaRef,
+  composingRef,
 }: {
   profileId: string;
   sessionId: string;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  composingRef?: React.RefObject<boolean>;
 }): UseVoiceCaptureResult {
   const { dict } = useI18n();
   const t6 = dict.ui.v036;
@@ -62,6 +65,7 @@ export function useVoiceCapture({
   const [notice, setNotice] = useState('');
   const target = useRef<Target | null>(null);
   const dictation = useRef<DictationState>({ text: '', ranges: [] });
+  const pendingImeOps = useRef<Array<() => void>>([]);
   const segCounter = useRef(0);
   const sessionRef = useRef(sessionId);
   sessionRef.current = sessionId;
@@ -104,6 +108,22 @@ export function useVoiceCapture({
     writeBack(tg, state, caret);
   }, [syncFromDraft, textareaRef, writeBack]);
 
+  const runOrQueueForIme = useCallback(
+    (op: () => void) => {
+      if (composingRef?.current && sessionRef.current === target.current?.id) {
+        pendingImeOps.current.push(op);
+        return;
+      }
+      op();
+    },
+    [composingRef]
+  );
+
+  const flushImeBuffer = useCallback(() => {
+    const ops = pendingImeOps.current.splice(0);
+    for (const op of ops) op();
+  }, []);
+
   const controller = useMemo(() => {
     if (!bridge) return null;
     return new VoiceCaptureController(
@@ -114,22 +134,27 @@ export function useVoiceCapture({
           setBackpressure(Boolean(info.backpressure));
           setStartedAt(info.startedAt ?? 0);
         },
-        onSegment: (captureId, _seq, text) => insertText(captureId, text),
-        onSettled: (captureId, event, missing) => {
-          const tg = target.current;
-          if (!tg) return;
-          syncFromDraft(tg);
-          const hadSegments = dictation.current.ranges.some((r) => r.captureId === captureId);
-          if (missing && event.text) {
-            // 分段缺失：以 settled 全文为准，替换本次未编辑的插入段
-            const rolled = rollbackCapture(dictation.current, captureId);
-            dictation.current = rolled.state;
-            insertText(captureId, event.text);
-          } else if (!hadSegments && event.text) {
-            insertText(captureId, event.text);
-          }
-          writeBack(tg, sealCapture(dictation.current, captureId));
-          if (!event.text && event.outcome === 'completed') setNotice('');
+        onSegment: (captureId, _seq, text) => runOrQueueForIme(() => insertText(captureId, text)),
+        onSettled: (captureId, event, missing) =>
+          runOrQueueForIme(() => {
+            const tg = target.current;
+            if (!tg) return;
+            syncFromDraft(tg);
+            const hadSegments = dictation.current.ranges.some((r) => r.captureId === captureId);
+            if (missing && event.text) {
+              // QA1-FE-03：先回写回滚后的草稿再插入全量 settled 文本，防止 syncFromDraft 读回旧分段导致翻倍
+              const rolled = rollbackCapture(dictation.current, captureId);
+              dictation.current = rolled.state;
+              writeComposerDraftText(tg.drafts, tg.id, rolled.state.text);
+              insertText(captureId, event.text);
+            } else if (!hadSegments && event.text) {
+              insertText(captureId, event.text);
+            }
+            writeBack(tg, sealCapture(dictation.current, captureId));
+            if (!event.text && event.outcome === 'completed') setNotice('');
+          }),
+        onAborted: () => {
+          pendingImeOps.current = [];
         },
         onNotice: (kind, message) => {
           const t = tRef.current;
@@ -140,7 +165,7 @@ export function useVoiceCapture({
       },
       { workletUrl }
     );
-  }, [bridge, insertText, syncFromDraft, writeBack]);
+  }, [bridge, insertText, runOrQueueForIme, syncFromDraft, writeBack]);
 
   useEffect(() => () => controller?.dispose(), [controller]);
 
@@ -221,6 +246,7 @@ export function useVoiceCapture({
     toggle,
     stop,
     abort,
+    flushImeBuffer,
   };
 }
 

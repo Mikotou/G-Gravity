@@ -91,9 +91,14 @@
 @container pane (max-width: 340px) {
   .pane .composer-dock { padding: 0 6px 8px; }
   .pane .composer-input { padding-inline: 10px; }
-  .pane .composer-bar { padding-inline: 6px; }
-  .pane .voice-status { max-width: 92px; }
-  .pane .model-chip-name { max-width: 84px; }
+  .pane .composer-bar { padding-inline: 5px; gap: 2px; }
+  .pane .mode-pill { padding-inline: 6px; max-width: 78px; }
+  .pane .mode-pill > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pane .approval-pill { padding-inline: 5px; }
+  .pane .voice-status { max-width: 68px; padding: 0 5px; font-size: 11px; }
+  .pane .model-chip { padding: 0 5px; max-width: 66px; }
+  .pane .model-chip-name { max-width: 44px; }
+  .pane .send-btn { width: 28px; height: 28px; }
   .pane .status-link > span { display: none; }
 }
 .send-btn{width:32px;height:32px}

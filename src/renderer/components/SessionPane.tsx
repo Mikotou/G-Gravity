@@ -994,10 +994,11 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
     function onKey(e: KeyboardEvent): void {
       // macOS 输入法用 Esc 取消候选时同样派发 keydown（isComposing 或 keyCode 229），不能借此中断回合。
       if (e.key !== 'Escape' || e.repeat || e.defaultPrevented || isImeComposing(e)) return;
-      if (document.querySelector('dialog[open], [aria-modal="true"], .popover, [role="menu"], .target-context-menu, .selection-floating-bar')) return;
+      if (document.querySelector('dialog[open], [aria-modal="true"], .target-context-menu, .selection-floating-bar')) return;
       const target = e.target instanceof Element ? e.target : null;
-      // U5：仅当焦点位于本窗格内（或无焦点）时才中断；侧栏 / 检视器 / 另一窗格中的 Esc 绝不连带中止本窗格回合。
+      // U5（QA1-FE-06）：仅检查本窗格内的 .popover / [role="menu"]，Split-2 下另一窗格展开菜单绝不阻断本窗格 Esc。
       const paneEl = streamRef.current?.closest('.pane');
+      if (paneEl?.querySelector('.popover, [role="menu"]')) return;
       if (target && target !== document.body && paneEl && !paneEl.contains(target)) return;
       // 批注编辑、窗格会话切换下拉、拒绝反馈框等局部控件的 Esc 只取消自身，绝不连带中止运行中的回合。
       if (target?.closest('.composer-input, .question-bar, .message-editor, .turn-notation-edit-row, .pane-switch, .feedback-box')) return;
@@ -1087,6 +1088,12 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
 
     selectionRange.current = range?.cloneRange() || null;
     const anchor = range ? anchorFromRange(bodyEl, range) : null;
+    // QA1-FE-05：使用跳过 [data-annotation-skip] 与按钮后的清洗文本；若选区全为 UI 噪音则不弹悬浮条
+    if (range && anchor && !anchor.anchorText.trim()) {
+      setSelectionBar(null);
+      return;
+    }
+    const cleanExcerpt = anchor?.anchorText.trim() || selectedText;
     let x = 'clientX' in e ? e.clientX : 120;
     let y = Math.max(16, ('clientY' in e ? e.clientY : 120) - 44);
     try {
@@ -1107,7 +1114,7 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
       x,
       y,
       messageId,
-      text: selectedText,
+      text: cleanExcerpt,
       ...(anchor ? { start: anchor.start, anchorText: anchor.anchorText, prefix: anchor.prefix, suffix: anchor.suffix } : {}),
     }));
   }
@@ -1139,12 +1146,17 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
       setAnnotationFocus((prev) => ({ id: existing.id, seq: (prev?.seq ?? 0) + 1, notice: dict.ui.v036.annAlreadyQuoted(existingIndex + 1) }));
       return;
     }
+    const sourceMsg = messages.find((m) => m.id === selectionBar.messageId);
+    const visibleIndex = messages
+      .filter((m) => (m.content || m.annotations?.length) && (m.role === 'user' || m.role === 'assistant'))
+      .findIndex((m) => m.id === selectionBar.messageId);
     const item: AnnotationDraftItem = {
       id: newAnnotationId(),
       messageId: selectionBar.messageId,
+      ...(sourceMsg ? { originMessageId: sourceMsg.originMessageId || sourceMsg.id } : {}),
       excerpt: selectionBar.text,
       comment: '',
-      messageNumber: (props.messagePosition?.earlierVisibleCount || 0) + messages.filter(m => m.content && (m.role === 'user' || m.role === 'assistant')).findIndex(m => m.id === selectionBar.messageId) + 1,
+      messageNumber: visibleIndex >= 0 ? (props.messagePosition?.earlierVisibleCount || 0) + visibleIndex + 1 : undefined,
       ...(selectionBar.start !== undefined ? { start: selectionBar.start } : {}),
       ...(selectionBar.anchorText ? { anchorText: selectionBar.anchorText } : {}),
       ...(selectionBar.prefix !== undefined ? { prefix: selectionBar.prefix } : {}),

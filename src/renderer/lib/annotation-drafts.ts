@@ -12,6 +12,7 @@ import { rangeFromAnchor } from './annotation-text';
 export interface AnnotationDraftItem {
   id: string;
   messageId: string;
+  originMessageId?: string;
   messageNumber?: number;
   excerpt: string;
   /** 批注；空串表示「仅引用」 */
@@ -219,6 +220,7 @@ export function toWireAnnotations(items: readonly AnnotationDraftItem[]) {
     return {
       ...(i.id.startsWith('ann-') ? { id: i.id } : {}),
       messageId: i.messageId,
+      ...(i.originMessageId ? { originMessageId: i.originMessageId } : {}),
       ...(i.messageNumber !== undefined ? { messageNumber: i.messageNumber } : {}),
       excerpt: i.excerpt,
       ...(comment ? { comment } : {}),

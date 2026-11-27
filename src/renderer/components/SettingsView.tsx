@@ -534,7 +534,7 @@ function GeneralPanel({
           <div className="segmented">
             <button
               type="button"
-              className={`segmented-btn ${dict.ui.copy.labelItem}`}
+              className={`segmented-btn ${locale === 'zh-CN' ? 'is-active' : ''}`}
               onClick={() => setLocale('zh-CN')}
             >
               {dict.localeZhLabel}
@@ -1832,6 +1832,8 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
       // 输入法组词中的 Esc 只取消候选，不关闭设置中心。
       if (isImeComposing(e)) return;
       if (e.key === 'Escape') {
+        // QA1-FE-14 (B3)：行内二次确认打开时将 Esc 留给 ConfirmDeleteButton 收回，不关闭整个设置弹窗
+        if (document.activeElement?.closest('.inline-confirm')) return;
         e.preventDefault();
         // 确认条打开时再次 Esc 表示「继续编辑」。
         if (pendingRef.current) setPendingSection(null);
@@ -1863,7 +1865,7 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
           onUpdatePreferences={props.onUpdatePreferences}
           onUpdateTranslationConfig={props.onUpdateTranslationConfig}
           onOpenTranslatorStats={props.onOpenTranslatorStats}
-          onOpenProjectsTab={() => onSectionChange('projects')}
+          onOpenProjectsTab={() => requestSection('projects')}
         />
       );
       content = (
@@ -2060,7 +2062,7 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
                       aria-controls="settings-appearance-panel"
                       tabIndex={section === id ? 0 : -1}
                       className={`segmented-btn ${section === id ? 'is-active' : ''}`}
-                      onClick={() => onSectionChange(id)}
+                      onClick={() => requestSection(id)}
                       data-testid={id === 'themes' ? 'settings-subtab-themes' : `settings-tab-${id}`}
                     >
                       <UiIcon icon={id === 'themes' ? Palette : id === 'tokens' ? Paintbrush : Sparkles} size="sm" />

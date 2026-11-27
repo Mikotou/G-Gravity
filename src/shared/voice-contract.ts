@@ -91,7 +91,9 @@ export interface VoiceConfigPatch {
   locale?: VoiceLocale;
   preferredDeviceId?: string | null;
   preferredDeviceLabel?: string | null;
-  externalProvider?: Partial<ExternalVoiceProviderConfig>;
+  externalProvider?: Omit<Partial<ExternalVoiceProviderConfig>, 'ratePerMinuteUsd'> & {
+    ratePerMinuteUsd?: number | null;
+  };
 }
 
 export const DEFAULT_VOICE_CONFIG: VoiceConfig = {

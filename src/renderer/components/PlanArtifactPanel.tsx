@@ -248,6 +248,20 @@ function renderInline(text: string, onOpenLink: (target: string) => void, keyPre
   return out;
 }
 
+const TABLE_SEP_RE = /^\s*\|?\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)*\s*\|?\s*$/;
+
+function isTableStart(lines: string[], idx: number): boolean {
+  if (idx + 1 >= lines.length) return false;
+  const header = lines[idx];
+  const sep = lines[idx + 1];
+  return header.includes('|') && TABLE_SEP_RE.test(sep) && sep.includes('-');
+}
+
+function splitTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return trimmed.split(/(?<!\\)\|/).map((cell) => cell.replace(/\\\|/g, '|').trim());
+}
+
 export function PlanDocument({
   text,
   onOpenLink,
@@ -362,8 +376,47 @@ export function PlanDocument({
       i += 1;
       continue;
     }
+    if (isTableStart(lines, i)) {
+      const headers = splitTableRow(lines[i]);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes('|')) {
+        rows.push(splitTableRow(lines[i++]));
+      }
+      const tableKey = k++;
+      blocks.push(
+        <div key={tableKey} className="md-table-wrap" tabIndex={0}>
+          <table className="md-table">
+            <thead>
+              <tr>
+                {headers.map((h, ci) => (
+                  <th key={ci}>{renderInline(h, onOpenLink, `th${tableKey}-${ci}`)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ri) => (
+                <tr key={ri}>
+                  {headers.map((_, ci) => (
+                    <td key={ci}>{renderInline(row[ci] ?? '', onOpenLink, `td${tableKey}-${ri}-${ci}`)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
     const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*(?:[-*+]|\d+[.)])\s+|\s*>|\s*(`{3,}|~{3,}))/.test(lines[i])) para.push(lines[i++]);
+    while (
+      i < lines.length &&
+      lines[i].trim() &&
+      !isTableStart(lines, i) &&
+      !/^(#{1,6}\s|\s*(?:[-*+]|\d+[.)])\s+|\s*>|\s*(`{3,}|~{3,}))/.test(lines[i])
+    ) {
+      para.push(lines[i++]);
+    }
     blocks.push(<p key={k++}>{renderInline(para.join(' '), onOpenLink, `p${k}`)}</p>);
   }
   return (

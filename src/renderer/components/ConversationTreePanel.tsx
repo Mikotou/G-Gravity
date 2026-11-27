@@ -127,7 +127,6 @@ export function ConversationTreePanel({
               key={node.branchId}
               className={`conv-tree-row ${isActive ? 'is-active' : ''} ${node.isOnActivePath ? 'is-on-path' : ''}`}
               role="listitem"
-              aria-current={isActive ? 'true' : undefined}
               data-depth={node.depth}
               data-has-children={hasChildren || undefined}
             >

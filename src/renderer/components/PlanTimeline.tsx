@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ChevronRight,
   Circle,
@@ -60,6 +60,12 @@ export function PlanTimeline({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [openError, setOpenError] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  // QA1-FE-18 / TC-PLAN-15：直接 rerender 切换会话/Profile 时立即复位抽屉与折叠态
+  useEffect(() => {
+    setDrawerOpen(false);
+    setOpenError('');
+    setExpandedGroups({});
+  }, [profileId, sessionId]);
   const artifact = usePlanArtifact({ profileId, sessionId, epoch, contentOpen: drawerOpen });
   const summary = artifact.summary;
   const outline = summary?.status === 'ready' ? summary.outline : undefined;
@@ -107,11 +113,19 @@ export function PlanTimeline({
     );
   }
 
-  const sourceFooter = hasDoc ? (
+  // QA1-FE-13 / TC-PLAN-01：仅状态 ②（概要）与状态 ③（实时执行）展示底部文件入口；① 纯空与 ④ 显式清空 DOM 严格 0 文件栏
+  const showSourceFooter = hasDoc && (kind === 'outline' || kind === 'execution');
+  const sourceFooter = showSourceFooter ? (
     <div className="plan-source-line" data-testid="plan-source-line">
       <button type="button" className="plan-source-open" onClick={() => setDrawerOpen(true)} data-testid="plan-source-open">
         <Icon icon={FileText} size="xs" />
-        <span>{kind === 'execution' ? t6.planDocLine : t6.planViewSource}</span>
+        <span>
+          {kind === 'execution'
+            ? outline && outline.sectionCount > 0
+              ? t6.planDocWithSections(outline.sectionCount)
+              : t6.planDocLine
+            : t6.planViewSource}
+        </span>
       </button>
       {updated && <span className="plan-source-meta truncate">{t6.planUpdated(updated)}</span>}
       {summary?.filePath && (
@@ -172,6 +186,7 @@ export function PlanTimeline({
           {outline.sectionCount > outline.sections.length && (
             <p className="plan-note">{t6.planSectionsMore(outline.sectionCount - outline.sections.length)}</p>
           )}
+          <p className="plan-note">{t6.planOutlineFooterHint}</p>
         </section>
       )}
       {kind === 'execution' && (

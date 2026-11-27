@@ -61,7 +61,11 @@ export class VoiceCaptureController {
   private inflight = 0;
   private seq = 0;
   private bytes = 0;
+  private peakLevel = 0;
   private maxBytes = Infinity;
+  private purpose: VoiceCapturePurpose = 'dictation';
+  private lastAbortedCaptureId: string | null = null;
+  captureMode: 'worklet' | 'script-processor' | null = null;
   private capTimer: ReturnType<typeof setTimeout> | null = null;
   private drainWaiters: Array<() => void> = [];
   private seenSegments = new Set<number>();
@@ -81,9 +85,25 @@ export class VoiceCaptureController {
         this.events.onSegment?.(e.captureId, e.seq, e.text);
       }),
       bridge.onVoiceSettled((e) => {
-        if (e.captureId === this.captureId && (this.phase === 'finishing' || this.phase === 'recording')) this.settle(e);
+        if (e.captureId !== this.captureId) return;
+        if (e.outcome === 'aborted') {
+          // QA1-FE-01：先收到 aborted settled 时也立即释放媒体轨道，并记住 ID 以便紧随其后的 revoked 补充原因提示
+          const id = e.captureId;
+          this.lastAbortedCaptureId = id;
+          this.teardownMedia();
+          this.reset();
+          this.events.onNotice?.('revoked', e.error);
+          this.events.onAborted?.(id);
+          return;
+        }
+        if (this.phase === 'finishing' || this.phase === 'recording') this.settle(e);
       }),
       bridge.onVoiceCaptureRevoked((e) => {
+        if (e.captureId === this.lastAbortedCaptureId) {
+          this.lastAbortedCaptureId = null;
+          if (e.held || e.message) this.events.onNotice?.(e.held ? 'held' : 'revoked', e.message);
+          return;
+        }
         if (e.captureId !== this.captureId) return;
         const id = e.captureId;
         this.teardownMedia();
@@ -137,7 +157,10 @@ export class VoiceCaptureController {
     }
     this.captureId = armed.captureId;
     this.engine = armed.engine;
+    this.purpose = armed.purpose ?? input.purpose ?? 'dictation';
     this.maxBytes = armed.maxPcmBytes;
+    this.peakLevel = 0;
+    this.lastAbortedCaptureId = null;
     this.setPhase('probing');
     try {
       const gum = this.deps.getUserMedia ?? ((c) => navigator.mediaDevices.getUserMedia(c));
@@ -178,7 +201,16 @@ export class VoiceCaptureController {
   private async startGraph(stream: MediaStream): Promise<void> {
     const ctx = this.deps.createAudioContext ? this.deps.createAudioContext() : new AudioContext();
     this.ctx = ctx;
+    // QA1-FE-15：确保挂起的 AudioContext 恢复拉流，并经静音 GainNode(0) 接入输出图防止 Chromium 悬空回收
+    if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+      await ctx.resume().catch(() => undefined);
+    }
     const source = ctx.createMediaStreamSource(stream);
+    const mute = typeof ctx.createGain === 'function' ? ctx.createGain() : null;
+    if (mute) {
+      mute.gain.value = 0;
+      mute.connect(ctx.destination);
+    }
     const onChunk = (chunk: ArrayBuffer) => this.enqueue(chunk);
     try {
       if (!this.deps.workletUrl || !ctx.audioWorklet) throw new Error('no-worklet');
@@ -191,23 +223,37 @@ export class VoiceCaptureController {
         } else if (event.data instanceof ArrayBuffer) onChunk(event.data);
       };
       source.connect(node);
+      if (mute) node.connect(mute);
       this.node = node;
+      this.captureMode = 'worklet';
     } catch {
       // 降级：ScriptProcessorNode（已弃用但 Chromium 仍支持），经静音增益节点驱动回调
       const node = ctx.createScriptProcessor(4096, 1, 1);
       this.chunker = new Pcm16Chunker(ctx.sampleRate, onChunk);
       node.onaudioprocess = (ev) => this.chunker?.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
-      const mute = ctx.createGain();
-      mute.gain.value = 0;
       source.connect(node);
-      node.connect(mute);
-      mute.connect(ctx.destination);
+      if (mute) node.connect(mute);
+      else node.connect(ctx.destination);
       this.node = node;
+      this.captureMode = 'script-processor';
     }
+  }
+
+  get capturedBytes(): number {
+    return this.bytes;
+  }
+
+  get peakAmplitude(): number {
+    return this.peakLevel;
   }
 
   private enqueue(chunk: ArrayBuffer): void {
     if (!this.captureId || (this.phase !== 'recording' && this.phase !== 'finishing')) return;
+    const view = new Int16Array(chunk);
+    for (let i = 0; i < view.length; i += 8) {
+      const mag = Math.abs(view[i]);
+      if (mag > this.peakLevel) this.peakLevel = mag;
+    }
     if (this.bytes + chunk.byteLength > this.maxBytes) {
       if (this.phase === 'recording') {
         this.events.onNotice?.('cap');
@@ -278,13 +324,33 @@ export class VoiceCaptureController {
     if (this.phase !== 'recording') return;
     const token = this.token;
     const captureId = this.captureId!;
+    const purpose = this.purpose;
+    const capturedBytes = this.bytes;
     this.setPhase('finishing');
     if (this.capTimer) clearTimeout(this.capTimer);
+    // QA1-FE-02：严格按序 flushTail → teardownMedia → await drained → await release-media → voiceFinish
     await this.flushTail();
     this.teardownMedia();
-    void this.bridge.voiceArmCapture({ op: 'release-media', captureId }).catch(() => undefined);
     await this.drained();
     if (token !== this.token) return;
+    await this.bridge.voiceArmCapture({ op: 'release-media', captureId }).catch(() => undefined);
+    if (token !== this.token) return;
+    if (purpose === 'mic-test') {
+      // QA1-FE-10：3 秒试录仅做本机采音通路验证，0 外联 0 voiceFinish
+      if ((this.phase as VoicePhase) === 'finishing') {
+        this.settle({
+          owner: { profileId: '' },
+          epoch: 0,
+          captureId,
+          finalSeq: 0,
+          text: '',
+          durationMs: Math.round((Math.max(capturedBytes, this.bytes) / 32000) * 1000),
+          engine: this.engine === 'external-api' ? 'external-api' : 'local',
+          outcome: 'completed',
+        });
+      }
+      return;
+    }
     try {
       const res = await this.bridge.voiceFinish({ captureId, finalChunkSeq: this.seq });
       if (token !== this.token) return;
@@ -380,6 +446,8 @@ export class VoiceCaptureController {
   }
 
   private reset(): void {
+    // QA1-FE-01：任意状态归零前无条件释放媒体轨道与 AudioContext，杜绝麦克风泄漏
+    this.teardownMedia();
     if (this.capTimer) clearTimeout(this.capTimer);
     this.capTimer = null;
     this.captureId = null;

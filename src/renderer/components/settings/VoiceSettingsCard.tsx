@@ -14,10 +14,31 @@ import {
 } from '@shared';
 import { useI18n } from '../../i18n/I18nContext';
 import { stripIpcErrorPrefix } from '../../i18n/locales';
+import { formatLocalDateTime } from '../../lib/time-format';
 import { VoiceCaptureController, listInputDevicesWithLease } from '../../lib/voice/controller';
 import { getVoiceBridge } from '../../services/desktop-bridge';
 import { formatUsd } from '../ContextStatusBar';
+import { useSettingsDirty } from './settings-dirty';
 import workletUrl from '../../lib/voice/pcm-worklet.ts?worker&url';
+
+interface ExtVoiceDraft {
+  provider: VoiceExternalProviderId;
+  endpoint: string;
+  model: string;
+  apiKey: string;
+  rate: string;
+}
+
+function extDraftFromSnapshot(next: VoiceStateSnapshot): ExtVoiceDraft {
+  const p = next.config.externalProvider;
+  return {
+    provider: p.provider,
+    endpoint: p.endpoint,
+    model: p.model,
+    apiKey: '',
+    rate: p.ratePerMinuteUsd !== undefined ? String(p.ratePerMinuteUsd) : '',
+  };
+}
 
 /**
  * v0.3.6「设置 → 通用」语音听写卡片。
@@ -42,43 +63,63 @@ export function VoiceSettingsCard({
   const [devices, setDevices] = useState<Array<{ deviceId: string; label: string }> | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
-  const [ext, setExt] = useState({ provider: EXTERNAL_VOICE_DEFAULTS.provider as VoiceExternalProviderId, endpoint: '', model: '', apiKey: '', rate: '' });
+  const [ext, setExt] = useState<ExtVoiceDraft>({
+    provider: EXTERNAL_VOICE_DEFAULTS.provider as VoiceExternalProviderId,
+    endpoint: '',
+    model: '',
+    apiKey: '',
+    rate: '',
+  });
+  const savedExtRef = useRef<ExtVoiceDraft | null>(null);
   const [models, setModels] = useState<ExternalReviewerModelOption[]>([]);
   const [connNotice, setConnNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const cardRef = useRef<HTMLElement | null>(null);
   const inflight = useRef(false);
 
-  const apply = useCallback((next: VoiceStateSnapshot) => {
+  const dirty =
+    savedExtRef.current !== null &&
+    (ext.provider !== savedExtRef.current.provider ||
+      ext.endpoint !== savedExtRef.current.endpoint ||
+      ext.model !== savedExtRef.current.model ||
+      ext.apiKey !== '' ||
+      ext.rate !== savedExtRef.current.rate);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useSettingsDirty('voice', dirty);
+
+  // QA1-FE-09：仅同步运行态快照（不冲刷正在编辑的外部表单草稿）
+  const applySnapshotOnly = useCallback((next: VoiceStateSnapshot) => {
     setState(next);
-    const p = next.config.externalProvider;
-    setExt((prev) => ({
-      provider: p.provider,
-      endpoint: p.endpoint,
-      model: p.model,
-      apiKey: prev.apiKey,
-      rate: p.ratePerMinuteUsd !== undefined ? String(p.ratePerMinuteUsd) : '',
-    }));
+  }, []);
+
+  const applyWithForm = useCallback((next: VoiceStateSnapshot, forceForm = false) => {
+    setState(next);
+    const synced = extDraftFromSnapshot(next);
+    if (forceForm || !savedExtRef.current || !dirtyRef.current) {
+      savedExtRef.current = synced;
+      setExt(synced);
+    }
   }, []);
 
   useEffect(() => {
     if (!bridge) return;
-    void bridge.getVoiceState().then(apply, (e) => setError(stripIpcErrorPrefix(e)));
-  }, [apply, bridge]);
+    void bridge.getVoiceState().then((snap) => applyWithForm(snap, false), (e) => setError(stripIpcErrorPrefix(e)));
+  }, [applyWithForm, bridge]);
 
-  // 安装中且卡片可见：1 s 单飞轮询
+  // 安装中且卡片可见：1 s 单飞轮询（只更新模型状态，不冲刷未保存外部表单）
   const installing = state?.model.status === 'downloading' || state?.model.status === 'verifying' || state?.model.status === 'loading';
   useEffect(() => {
     if (!bridge || !installing) return;
     const timer = window.setInterval(() => {
       if (inflight.current || document.visibilityState === 'hidden' || !cardRef.current?.isConnected) return;
       inflight.current = true;
-      void bridge.getVoiceState().then(apply, () => undefined).finally(() => {
+      void bridge.getVoiceState().then(applySnapshotOnly, () => undefined).finally(() => {
         inflight.current = false;
       });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [apply, bridge, installing]);
+  }, [applySnapshotOnly, bridge, installing]);
 
   if (!bridge) {
     return (
@@ -101,7 +142,8 @@ export function VoiceSettingsCard({
       setBusy(false);
     }
   };
-  const update = (patch: VoiceConfigPatch) => run(async () => apply(await bridge.updateVoiceConfig(patch)));
+  const update = (patch: VoiceConfigPatch, commitExtForm = false) =>
+    run(async () => applyWithForm(await bridge.updateVoiceConfig(patch), commitExtForm));
 
   const pickDevices = () =>
     run(async () => {
@@ -112,7 +154,8 @@ export function VoiceSettingsCard({
     run(async () => {
       setTesting(true);
       setTestResult(null);
-      const text = await new Promise<string>((resolve, reject) => {
+      // QA1-FE-10：3 秒试录仅做本机采音验证（0 外联 / 0 voiceFinish），按实际采集时长与峰值给出真实反馈
+      const outcome = await new Promise<{ text: string; durationMs: number; peak: number }>((resolve, reject) => {
         let out = '';
         const controller = new VoiceCaptureController(
           bridge,
@@ -121,12 +164,14 @@ export function VoiceSettingsCard({
               out += seg;
             },
             onSettled: (_id, event) => {
+              const peak = controller.peakAmplitude;
               controller.dispose();
-              resolve(event.text || out);
+              resolve({ text: (event.text || out).trim(), durationMs: event.durationMs, peak });
             },
             onAborted: () => {
+              const peak = controller.peakAmplitude;
               controller.dispose();
-              resolve(out);
+              resolve({ text: out.trim(), durationMs: 0, peak });
             },
             onNotice: (kind, message) => {
               if (kind === 'error') {
@@ -146,10 +191,16 @@ export function VoiceSettingsCard({
             ...(state?.config.locale ? { locale: state.config.locale } : {}),
           })
           .then((ok) => {
-            if (!ok && controller.phase === 'idle') resolve(out);
+            if (!ok && controller.phase === 'idle') resolve({ text: out.trim(), durationMs: 0, peak: 0 });
           });
       }).finally(() => setTesting(false));
-      setTestResult(t.voiceMicTestDone(text.trim()));
+      if (outcome.text) {
+        setTestResult(t.voiceMicTestDone(outcome.text));
+      } else if (outcome.durationMs > 0 || outcome.peak > 0) {
+        setTestResult(t.voiceMicTestPass(Math.max(0.1, outcome.durationMs / 1000).toFixed(1)));
+      } else {
+        setTestResult(t.voiceMicTestSilent);
+      }
     });
 
   const install = () => {
@@ -161,17 +212,27 @@ export function VoiceSettingsCard({
     });
   };
 
-  const extPatch = () => ({
+  const extTestInput = () => ({
     provider: ext.provider,
     endpoint: ext.endpoint.trim(),
     model: ext.model.trim(),
     ...(ext.apiKey.trim() ? { apiKey: ext.apiKey.trim() } : {}),
-    ...(ext.rate.trim() && Number.isFinite(Number(ext.rate)) ? { ratePerMinuteUsd: Number(ext.rate) } : {}),
   });
+
+  const extSavePatch = () => {
+    const trimmedRate = ext.rate.trim();
+    return {
+      ...extTestInput(),
+      ratePerMinuteUsd: trimmedRate && Number.isFinite(Number(trimmedRate)) ? Number(trimmedRate) : null,
+    };
+  };
 
   const cfg = state?.config;
   const model = state?.model;
   const cost = telemetry;
+  const encryptionUnavailable = state?.external.encryptionAvailable === false;
+  const cooldownUntil = state?.external.cooldownUntil;
+  const cooldownActive = Boolean(cooldownUntil && Date.parse(cooldownUntil) > Date.now());
   return (
     <section className="settings-section" data-testid="voice-settings-card" ref={cardRef}>
       <h3 className="settings-group-title">{t.voiceSettingsTitle}</h3>
@@ -241,6 +302,19 @@ export function VoiceSettingsCard({
       </div>
 
       <h3 className="settings-group-title">{t.voiceExternalTitle}</h3>
+      {encryptionUnavailable && (
+        <div className="alert" role="alert" data-testid="voice-encryption-unavailable">
+          {t.voiceEncryptionUnavailable}
+        </div>
+      )}
+      {cooldownActive && cooldownUntil && (
+        <div className="alert alert-warning" role="status" data-testid="voice-cooldown-banner">
+          {t.voiceCooldownActive(
+            state?.external.cooldownKind === 'permission_403' ? '403' : '429',
+            formatLocalDateTime(cooldownUntil, locale)
+          )}
+        </div>
+      )}
       <div className="settings-group" data-testid="voice-external-group">
         <div className="setting-row">
           <span className="setting-text"><span className="setting-label">{t.voiceExternalProvider}</span></span>
@@ -265,7 +339,7 @@ export function VoiceSettingsCard({
         <div className="setting-row">
           <span className="setting-text"><span className="setting-label">{t.voiceExternalModel}</span></span>
           {models.length ? (
-            <select className="input input-mono w-260" value={ext.model} onChange={(e) => setExt((p) => ({ ...p, model: e.target.value }))}>
+            <select className="input input-mono w-260" value={ext.model} onChange={(e) => setExt((p) => ({ ...p, model: e.target.value }))} data-testid="voice-ext-model">
               {models.map((m) => <option key={m.id} value={m.id}>{m.displayName || m.id}</option>)}
             </select>
           ) : (
@@ -285,17 +359,17 @@ export function VoiceSettingsCard({
         </label>
         <label className="setting-row">
           <span className="setting-text"><span className="setting-label">{t.voiceExternalRate}</span></span>
-          <input className="input input-mono w-120" inputMode="decimal" value={ext.rate} onChange={(e) => setExt((p) => ({ ...p, rate: e.target.value }))} />
+          <input className="input input-mono w-120" inputMode="decimal" value={ext.rate} onChange={(e) => setExt((p) => ({ ...p, rate: e.target.value }))} data-testid="voice-ext-rate" />
         </label>
         <div className="setting-row">
           <span className="setting-desc" role="status" data-testid="voice-ext-status">{connNotice}</span>
           <span className="spacer" />
           <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void run(async () => {
-            const res = await bridge.testVoiceConnection(extPatch());
+            const res = await bridge.testVoiceConnection(extTestInput());
             setConnNotice(res.ok ? t.voiceTestOk(res.latencyMs) : t.voiceTestFail(res.error ?? ''));
-            apply(await bridge.getVoiceState());
+            applySnapshotOnly(await bridge.getVoiceState());
           })} data-testid="voice-ext-test">{t.voiceTest}</button>
-          <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void update({ externalProvider: extPatch() })} data-testid="voice-ext-save">{t.voiceSave}</button>
+          <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void update({ externalProvider: extSavePatch() }, true)} data-testid="voice-ext-save">{t.voiceSave}</button>
         </div>
       </div>
 

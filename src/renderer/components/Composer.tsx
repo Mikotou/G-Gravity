@@ -336,9 +336,14 @@ export function Composer({
   }, [focusTrigger]);
 
   // v0.3.6：合规语音听写（F5 / /voice / /record / 麦克风按钮）；停录只保留文本，绝不自动发送
-  const voice = useVoiceCapture({ profileId: session.profileId || 'default', sessionId: session.sessionId, textareaRef });
+  const composingRef = useRef(false);
+  const voice = useVoiceCapture({ profileId: session.profileId || 'default', sessionId: session.sessionId, textareaRef, composingRef });
   const voiceToggleRef = useRef(voice.toggle);
   voiceToggleRef.current = voice.toggle;
+  const voicePhaseRef = useRef(voice.phase);
+  voicePhaseRef.current = voice.phase;
+  const voiceAbortRef = useRef(voice.abort);
+  voiceAbortRef.current = voice.abort;
   useEffect(() => {
     if (!paneFocused) return;
     const onKey = (e: KeyboardEvent) => {
@@ -350,6 +355,20 @@ export function Composer({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [paneFocused]);
+
+  // QA1-FE-08：语音采集非 idle 时，在 window 捕获阶段先拦截 Esc，确保无论焦点在按钮还是输入框都仅中止听写，绝不穿透到 SessionPane 中断 AI
+  useEffect(() => {
+    if (voice.phase === 'idle') return;
+    const onCaptureEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || isImeComposing(e) || voicePhaseRef.current === 'idle') return;
+      if (document.querySelector('dialog[open], [aria-modal="true"]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      voiceAbortRef.current();
+    };
+    window.addEventListener('keydown', onCaptureEsc, true);
+    return () => window.removeEventListener('keydown', onCaptureEsc, true);
+  }, [voice.phase]);
 
   // v0.3.6：引用后聚焦该条自己的批注框；重复引用时提示「已引用为 #n」
   const annotationInputs = useRef(new Map<string, HTMLTextAreaElement>());
@@ -604,6 +623,13 @@ export function Composer({
   const sendLabel = annotationItems.length ? ui.v035.composerSendAnnotations(annotationItems.length) : dict.sendMessageBtn;
   async function submit(): Promise<void> {
     const text = draft.trim();
+    // QA1-FE-18 / TC-VOICE-31：AI 生成中仍允许通过 /voice 或 /record 启动/停止纯本地听写草稿，不向 agy 发送任何内容
+    if ((text === '/voice' || text === '/record') && !hasQuotesOrNotations && !isSending()) {
+      setError(null);
+      setDraft('');
+      voice.toggle();
+      return;
+    }
     if ((!text && attachments.length === 0 && !hasQuotesOrNotations) || isSending() || turnActive) return;
     setError(null);
 
@@ -623,11 +649,6 @@ export function Composer({
         compactingRef.current = false;
         setSending(false);
       }
-      return;
-    }
-    if ((text === '/voice' || text === '/record') && !hasQuotesOrNotations) {
-      setDraft('');
-      voice.toggle();
       return;
     }
     if (text === '/plan' && !hasQuotesOrNotations) {
@@ -761,6 +782,11 @@ export function Composer({
         return;
       }
       e.preventDefault();
+      const trimmed = draft.trim();
+      if ((trimmed === '/voice' || trimmed === '/record') && !hasQuotesOrNotations) {
+        void submit();
+        return;
+      }
       if (turnActive) {
         setRunningEnterNotice(true);
         return;
@@ -998,6 +1024,13 @@ export function Composer({
             onChange={(e) => {
               setDraft(e.target.value);
               if (error) setErrorState(null);
+            }}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+              queueMicrotask(() => voice.flushImeBuffer());
             }}
             onPaste={handlePaste}
             onKeyDown={onKeyDown}
