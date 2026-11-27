@@ -1088,8 +1088,8 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
 
     selectionRange.current = range?.cloneRange() || null;
     const anchor = range ? anchorFromRange(bodyEl, range) : null;
-    // QA1-FE-05：使用跳过 [data-annotation-skip] 与按钮后的清洗文本；若选区全为 UI 噪音则不弹悬浮条
-    if (range && anchor && !anchor.anchorText.trim()) {
+    // QA1-FE-05 / QA2-FE-BUG-01：使用跳过 [data-annotation-skip] 与按钮后的清洗文本；若选区全为 UI 噪音（anchor 为 null 或空串）则不弹悬浮条
+    if (range && (!anchor || !anchor.anchorText.trim())) {
       setSelectionBar(null);
       return;
     }
