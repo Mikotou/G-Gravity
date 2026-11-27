@@ -1,6 +1,6 @@
 .app-shell{display:flex;height:100vh;width:100vw;overflow:hidden;position:relative;background:var(--studio-canvas)}
 .app-boot{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;height:100vh;padding:24px;color:var(--muted-text)}
-.app-boot-logo{width:44px;height:44px;animation:pulse var(--dur-1600) ease-in-out infinite}
+.app-boot-logo{width:44px;height:44px;animation:pulse var(--dur-loop) ease-in-out infinite}
 .main{display:flex;flex-direction:column;flex:1;min-width:0;height:100%;background:var(--studio-canvas)}
 .main-header{display:flex;align-items:center;flex-shrink:0;height:var(--header-h);padding:0 12px;gap:8px;background:var(--studio-canvas);border-bottom:1px solid var(--hairline)}
 .tab-strip{display:flex;align-items:center;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none;gap:4px}
@@ -24,16 +24,14 @@ body.gv-resizing{user-select:none}
 body.gv-resizing-x, body.gv-resizing-x *{cursor:col-resize !important}
 body.gv-resizing-y, body.gv-resizing-y *{cursor:row-resize !important}
 .resize-handle{position:absolute;top:0;bottom:0;left:auto;width:9px;z-index:25;cursor:col-resize;touch-action:none}
-.resize-handle.edge-left{left:0}
-.resize-handle.edge-right{right:0}
-.resize-handle::after{content:'';position:absolute;top:0;bottom:0;width:2px;border-radius:2px;background:transparent;transition:background var(--dur-2) var(--ease-out) var(--dur-0)}
-.resize-handle.edge-left::after{left:0}
-.resize-handle.edge-right::after{right:0}
+.resize-handle::after{content:'';position:absolute;top:0;bottom:0;width:2px;border-radius:2px;background:transparent;transition:background var(--dur-2) var(--ease-out)}
+.resize-handle.edge-left, .resize-handle.edge-left::after{left:0}
+.resize-handle.edge-right, .resize-handle.edge-right::after{right:0}
 .resize-handle::before{content:'';position:absolute;top:50%;width:4px;height:34px;margin-top:-17px;border-radius:99px;background:var(--border-strong);opacity:0;transition:opacity var(--dur-2) var(--ease-out), background var(--dur-2)}
 .resize-handle.edge-left::before{left:-1px}
 .resize-handle.edge-right::before{right:-1px}
-.resize-handle:hover::after, .resize-handle:focus-visible::after, .resize-handle.is-dragging::after{background:var(--accent-primary);box-shadow:0 0 0 1px var(--accent-glow);transition-delay:var(--dur-90)}
-.resize-handle:hover::before, .resize-handle:focus-visible::before, .resize-handle.is-dragging::before{opacity:1;background:var(--accent-primary);transition-delay:var(--dur-90)}
+.resize-handle:hover::after, .resize-handle:focus-visible::after, .resize-handle.is-dragging::after{background:var(--accent-primary);box-shadow:0 0 0 1px var(--accent-glow);transition-delay:var(--dur-1)}
+.resize-handle:hover::before, .resize-handle:focus-visible::before, .resize-handle.is-dragging::before{opacity:1;background:var(--accent-primary);transition-delay:var(--dur-1)}
 .resize-handle:focus-visible{box-shadow:none}
 .resize-handle.split-handle{right:-5px;width:10px;z-index:30}
 .resize-handle.split-handle::after{right:4px}

@@ -30,6 +30,7 @@ code, pre, kbd { font-family: var(--font-mono); }
   100% { opacity: 1; transform: translateX(0); }
 }
 ::highlight(gravity-annotations) { background-color: color-mix(in srgb, var(--accent-primary) 32%, transparent); }
+::highlight(gravity-annotation-active) { background-color: color-mix(in srgb, var(--accent-primary) 55%, transparent); color: var(--text-primary); }
 @keyframes gv-spin {
   to { transform: rotate(360deg); }
 }
@@ -41,16 +42,15 @@ code, pre, kbd { font-family: var(--font-mono); }
   from { opacity: 0; transform: translateX(-4px); }
   to { opacity: 1; transform: none; }
 }
-@keyframes gv-sweep {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(260%); }
-}
 @keyframes gv-activity-flow {
   from { transform: translateX(-100%); }
   to { transform: translateX(250%); }
 }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: var(--dur-instant) !important; animation-iteration-count: 1 !important; transition-duration: var(--dur-instant) !important; }
+  *, *::before, *::after { animation-duration: var(--dur-instant) !important; animation-iteration-count: 1 !important; animation-delay: var(--dur-instant) !important; transition-duration: var(--dur-instant) !important; transition-delay: var(--dur-instant) !important; scroll-behavior: auto !important; }
+  .cc-tool.is-active::after, .composer-busy-rail > span, .pane-activity-rail > span, .send-btn.is-stop::after, .guardian-review-orb::after, .guardian-review-shimmer, .tab[data-tab-state='streaming']::after, .cc-thinking.is-zh-track.is-translating .cc-thinking-body::before, .cc-thinking.is-zh-track.is-zh-morphing .cc-thinking-body::before { animation: none; opacity: 0; }
+  .guardian-review-card, .welcome-quick, .quota-view, .cc-thinking.is-zh-reveal .cc-thinking-body, .cc-thinking.is-zh-reveal .cc-thinking-preview, .turn-diagnostic-card, .status-dot.is-waiting_question, .turn-settled-strip, .spin, .cc-streaming-cursor::after, .cc-bullet.is-streaming { animation: none; }
+  .command-output-chevron, .gauge > span, .quota-mini-bar > span, .conv-tree-progress-bar > span, .conv-tree-mini-bar > span, .request-score-meter > span, .plan-progressbar > span, .update-progress-fill, .edit-message, .settings-discard-bar, [data-state='closing'] { transition: none; animation: none; }
 }
 @keyframes gv-fade {
   from { opacity: 0; }
@@ -72,10 +72,6 @@ code, pre, kbd { font-family: var(--font-mono); }
   from { transform: translateX(-100%); }
   to { transform: translateX(400%); }
 }
-@keyframes gv-tab-breathe {
-  0%, 100% { opacity: 0.45; }
-  50% { opacity: 1; }
-}
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--text-muted) 26%, transparent); }
 :focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
@@ -92,14 +88,6 @@ body { background: var(--studio-canvas); }
 @keyframes gv-guardian-sweep {
   from { transform: translateX(-100%); }
   to { transform: translateX(260%); }
-}
-@keyframes gv-attention {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.72; }
-}
-@keyframes zh-silk-reveal {
-  from { opacity: 0; transform: translateY(2px); }
-  to { opacity: 1; transform: none; }
 }
 @keyframes gv-exit {
   to { opacity: 0; transform: translateY(4px) scale(0.98); }

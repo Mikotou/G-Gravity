@@ -12,7 +12,8 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
   latest?: boolean; editRequest?: number;
   message: ChatMessageItem; busy: boolean; submit: (input: ReviseMessageInput) => Promise<void>; children: React.ReactNode;
 }) {
-  const { locale, mac } = useI18n();
+  const { locale, mac, dict } = useI18n();
+  const t6 = dict.ui.v036;
   const zh = locale === 'zh-CN';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -45,7 +46,13 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
   async function send() {
     if (busy || lock.current || (!draft.trim() && !attachments.length && !annotations.length)) return;
     lock.current = true; setPending(true); setError('');
-    try { await submit({ sessionId: message.sessionId, messageId: message.id, text: draft, attachmentIds: attachments, ...(annotations.length ? { annotations } : {}) }); setEditing(false); }
+    // 批注 trim 后为空归一为 undefined（仅引用）；保持条目原序
+    const normalized = annotations.map(a => {
+      const comment = a.comment?.trim();
+      const { comment: _drop, ...rest } = a;
+      return comment ? { ...rest, comment } : rest;
+    });
+    try { await submit({ sessionId: message.sessionId, messageId: message.id, text: draft, attachmentIds: attachments, ...(normalized.length ? { annotations: normalized } : {}) }); setEditing(false); }
     catch (e) { setError(stripIpcErrorPrefix(e)); }
     finally { lock.current = false; setPending(false); }
   }
@@ -53,19 +60,23 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
     data-testid={'edit-msg-' + message.id} aria-label={getComponentCopy(zh).editMessage} title={latest ? (getComponentCopy(zh).editLastMessageInEmpty) : (getComponentCopy(zh).editMessage)}
     onClick={start}>
     <Icon icon={SquarePen} size="sm" /></button></>;
+  const editorKeys = (e: React.KeyboardEvent) => {
+    if (isImeComposing(e)) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
+    if (e.key === 'Enter' && isPrimaryModifier(e, mac)) { e.preventDefault(); void send(); }
+  };
   return <form className="message-editor" onSubmit={e => { e.preventDefault(); void send(); }}>
+    {annotations.length > 0 && <ol className="annotation-list is-editing">
+      {annotations.map((item, index) => <li className="sent-annotation" key={item.id ?? index}>
+        <span className="annotation-num">#{index + 1}</span>
+        <blockquote>{item.excerpt}</blockquote>
+        <textarea className="annotation-edit-input" aria-label={(getComponentCopy(zh).editAnnotation) + (index + 1)} placeholder={t6.annEditOptional}
+          rows={1} disabled={pending} value={item.comment ?? ''} onKeyDown={editorKeys}
+          onChange={e => setAnnotations(annotations.map((a, i) => i === index ? { ...a, comment: e.target.value } : a))} />
+      </li>)}
+    </ol>}
     <textarea ref={editor} autoFocus aria-label={getComponentCopy(zh).editOriginalMessage} value={draft} disabled={pending} rows={4}
-      onChange={e => setDraft(e.target.value)} onKeyDown={e => {
-        if (isImeComposing(e)) return;
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
-        if (e.key === 'Enter' && isPrimaryModifier(e, mac)) { e.preventDefault(); void send(); }
-      }} />
-    {annotations.map((item, index) => <div className="sent-annotation" key={index}>
-      <blockquote>{item.excerpt}</blockquote>
-      {item.comment !== undefined && <textarea aria-label={(getComponentCopy(zh).editAnnotation) + (index + 1)}
-        disabled={pending} value={item.comment} onChange={e => setAnnotations(annotations.map((a, i) =>
-          i === index ? { ...a, comment: e.target.value } : a))} />}
-    </div>)}
+      onChange={e => setDraft(e.target.value)} onKeyDown={editorKeys} />
     {message.attachments?.map(a => <label key={a.id}><input type="checkbox" checked={attachments.includes(a.id)}
       disabled={pending || !canResendAttachment(a)} onChange={e => setAttachments(e.target.checked ? [...attachments, a.id] : attachments.filter(id => id !== a.id))} />
       {a.name}{!canResendAttachment(a) && (getComponentCopy(zh).originalUnavailable)}</label>)}

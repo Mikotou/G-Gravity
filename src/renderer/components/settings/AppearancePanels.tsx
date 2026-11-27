@@ -455,21 +455,26 @@ export function IconsPanel({
   return (
     <div className="settings-section">
       {feedback}
+      {/* v0.3.6：「跟随主题」改为网格上方独立开关；下方 6 套原创 Gravity 图标保持 3×2 网格 */}
+      <div className="setting-row icon-auto-row">
+        <span className="setting-text">
+          <span className="setting-label">{dict.ui.v036.iconAutoToggle}</span>
+          <span className="setting-desc">{v034.iconAutoDesc(nameOf(autoVariant))}</span>
+        </span>
+        <label className="switch">
+          <input
+            type="checkbox"
+            checked={isAuto}
+            aria-label={dict.ui.v036.iconAutoToggle}
+            onChange={(e) => void save({ appIcon: e.target.checked ? 'auto' : autoVariant.id })}
+            data-testid="icon-variant-auto"
+          />
+          <span className="switch-track" />
+        </label>
+      </div>
       <div className="icon-grid" role="radiogroup" aria-label={dict.settingsNav.icons} data-testid="app-icons-grid">
-        <button
-          type="button"
-          role="radio"
-          aria-checked={isAuto}
-          className={`icon-card icon-card-auto ${isAuto ? 'is-selected' : ''}`}
-          onClick={() => void save({ appIcon: 'auto' })}
-          data-testid="icon-variant-auto"
-        >
-          <img src={autoVariant.publicSvgUrl} alt="" />
-          <span title={v034.iconAutoName}>{v034.iconAutoName}</span>
-          <small className="icon-card-sub">{v034.iconAutoDesc(nameOf(autoVariant))}</small>
-        </button>
         {GRAVITY_ICON_VARIANTS.map((v) => {
-          const selected = preferences.appIcon === v.id;
+          const selected = isAuto ? autoVariant.id === v.id : preferences.appIcon === v.id;
           return (
             <button
               key={v.id}

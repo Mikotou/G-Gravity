@@ -151,7 +151,7 @@ export function ToolCallCard({ tool, onInspectDiff, nested = false, settled = fa
 
       {!expanded && summary && tool.status !== 'pending' && (
         <div className={`cc-tool-result ${failed ? 'is-failed' : ''}`}>
-          <span className="cc-tool-result-glyph">⎿</span>
+          <span className="cc-tool-result-glyph" aria-hidden="true">⎿</span>
           <span className="truncate">{summary}</span>
         </div>
       )}

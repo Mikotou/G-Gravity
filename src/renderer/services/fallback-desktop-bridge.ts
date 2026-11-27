@@ -7,6 +7,32 @@ import {
 import { APP_BRAND, clampUiScale, UI_SCALE_LIMITS, type GravityIconPreference } from '../../shared/theme-i18n-contract';
 import { prepareRevision } from '../../shared/message-revision';
 import {
+  DEFAULT_VOICE_CONFIG,
+  VOICE_LOCAL_MODEL_SPEC,
+  VOICE_MAX_DURATION_MS,
+  VOICE_MAX_PCM_BYTES,
+  VOICE_MIC_TEST_MAX_BYTES,
+  VOICE_MIC_TEST_MAX_DURATION_MS,
+  VOICE_SAMPLE_RATE,
+  isExternalVoiceConnected,
+  isVoiceCaptureControlRequest,
+  type VoiceAbortInput,
+  type VoiceAppendInput,
+  type VoiceArmCaptureInput,
+  type VoiceCapturePurpose,
+  type VoiceCaptureRevokedEvent,
+  type VoiceConfig,
+  type VoiceConfigPatch,
+  type VoiceDiscoverModelsInput,
+  type VoiceFinishInput,
+  type VoiceModelState,
+  type VoiceSegmentEvent,
+  type VoiceSettledEvent,
+  type VoiceStateSnapshot,
+} from '../../shared/voice-contract';
+import type { VoiceOwner } from '../../shared/session-owner';
+import { outlineFromMarkdown } from '../lib/plan-view';
+import {
   calculateTokenCost,
   computeHeatLevel,
   computeUnifiedLineDiff,
@@ -2057,16 +2083,21 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       const owner = { profileId: input.profileId || 'default', sessionId: input.sessionId };
       const doc = planArtifactsBySession[input.sessionId];
       if (!doc) return { status: 'missing', owner, revision: 0 };
+      const view = input.view ?? 'summary';
       if (input.knownRevision !== undefined && input.knownRevision === doc.revision) {
-        return { status: 'unchanged', owner, revision: doc.revision };
+        return { status: 'unchanged', view, owner, revision: doc.revision, summaryRevision: doc.revision, contentRevision: doc.revision };
       }
       return {
         status: 'ready',
+        view,
         owner,
         revision: doc.revision,
+        summaryRevision: doc.revision,
+        contentRevision: doc.revision,
         source: 'brain-artifact',
         filePath: 'implementation_plan.md',
-        content: doc.content,
+        // summary 视图严禁携带正文；content 视图按需返回原文
+        ...(view === 'content' ? { content: doc.content } : { outline: outlineFromMarkdown(doc.content) }),
         truncated: false,
         updatedAt: doc.updatedAt,
       };
@@ -2877,6 +2908,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     onMessageUpserted: messageEvents.subscribe,
     onInspectorUpdated: inspectorEvents.subscribe,
     onPlanArtifactChanged: planArtifactEvents.subscribe,
+    ...createFallbackVoice(),
     onApprovalRequested: approvalReqEvents.subscribe,
     onApprovalConfigUpdated: approvalConfigEvents.subscribe,
     onApprovalResolved: approvalResEvents.subscribe,
@@ -2911,4 +2943,102 @@ export function peekFallbackDesktopBridge(): FallbackDesktopBridge | null {
 export function resetFallbackDesktopBridge(): FallbackDesktopBridge {
   sharedFallbackInstance = createFallbackDesktopBridge();
   return sharedFallbackInstance;
+}
+
+/* ---------------------------------------------------------------------------
+ * 演示语音听写（9 invoke + 3 event）：纯内存状态机，绝不访问麦克风或网络，生产包整体剔除。
+ * ------------------------------------------------------------------------- */
+function createFallbackVoice(): Pick<
+  GravityDesktopBridge,
+  | 'getVoiceState' | 'updateVoiceConfig' | 'discoverVoiceModels' | 'testVoiceConnection' | 'installVoiceModel'
+  | 'voiceArmCapture' | 'voiceAppend' | 'voiceFinish' | 'voiceAbort'
+  | 'onVoiceSegment' | 'onVoiceSettled' | 'onVoiceCaptureRevoked'
+> {
+  const segmentEvents = createEventChannel<VoiceSegmentEvent>();
+  const settledEvents = createEventChannel<VoiceSettledEvent>();
+  const revokedEvents = createEventChannel<VoiceCaptureRevokedEvent>();
+  let config: VoiceConfig = structuredClone(DEFAULT_VOICE_CONFIG);
+  const model: VoiceModelState = {
+    status: 'ready',
+    modelId: VOICE_LOCAL_MODEL_SPEC.id,
+    fileName: VOICE_LOCAL_MODEL_SPEC.fileName,
+    source: 'bundled',
+    expectedBytes: VOICE_LOCAL_MODEL_SPEC.sizeBytes,
+    sha256Verified: true,
+  };
+  const captures = new Map<string, { owner: VoiceOwner; purpose: VoiceCapturePurpose; bytes: number; seq: number; state: string }>();
+  let n = 0;
+  const snapshot = (): VoiceStateSnapshot => ({
+    config: structuredClone(config),
+    model: { ...model },
+    external: { ready: isExternalVoiceConnected(config.externalProvider), encryptionAvailable: true },
+    activeCapture: null,
+    heldCapture: null,
+    updatedAt: new Date().toISOString(),
+  });
+  return {
+    async getVoiceState() {
+      return snapshot();
+    },
+    async updateVoiceConfig(patch: VoiceConfigPatch) {
+      const { apiKey, ...ext } = patch.externalProvider ?? {};
+      config = {
+        ...config,
+        ...(patch.engine ? { engine: patch.engine } : {}),
+        ...(patch.locale ? { locale: patch.locale } : {}),
+        ...(patch.preferredDeviceId !== undefined ? { preferredDeviceId: patch.preferredDeviceId ?? undefined } : {}),
+        ...(patch.preferredDeviceLabel !== undefined ? { preferredDeviceLabel: patch.preferredDeviceLabel ?? undefined } : {}),
+        externalProvider: { ...config.externalProvider, ...ext, ...(apiKey ? { hasApiKey: true } : {}) },
+      };
+      return snapshot();
+    },
+    async discoverVoiceModels(input: VoiceDiscoverModelsInput) {
+      return { provider: input.provider, endpoint: input.endpoint, models: [{ id: input.provider === 'gemini-api-key' ? 'gemini-2.5-flash' : 'gpt-4o-mini-transcribe', displayName: input.provider === 'gemini-api-key' ? 'gemini-2.5-flash' : 'gpt-4o-mini-transcribe', supportsThinking: false, supportedThinkingLevels: [] }], fetchedAt: new Date().toISOString() };
+    },
+    async testVoiceConnection() {
+      return { ok: false, latencyMs: 0, error: '演示模式不连接外部服务' };
+    },
+    async installVoiceModel() {
+      return { started: false, state: { ...model }, message: 'bundled' };
+    },
+    async voiceArmCapture(input: VoiceArmCaptureInput) {
+      if (isVoiceCaptureControlRequest(input)) {
+        const cap = captures.get(input.captureId);
+        if (!cap) throw new Error('capture not found');
+        cap.state = input.op === 'media-ready' ? 'capturing' : 'released';
+        return { captureId: input.captureId, owner: cap.owner, epoch: 0, purpose: cap.purpose, engine: config.engine, sampleRate: VOICE_SAMPLE_RATE, maxDurationMs: VOICE_MAX_DURATION_MS, maxPcmBytes: VOICE_MAX_PCM_BYTES, state: input.op === 'media-ready' ? 'capturing' : 'released' };
+      }
+      if (config.engine === 'off') throw new Error('语音听写已关闭');
+      const captureId = `cap-${++n}`;
+      const purpose = input.purpose ?? 'dictation';
+      captures.set(captureId, { owner: input.owner, purpose, bytes: 0, seq: 0, state: 'armed' });
+      return { captureId, owner: input.owner, epoch: 0, purpose, engine: config.engine, sampleRate: VOICE_SAMPLE_RATE, maxDurationMs: purpose === 'mic-test' ? VOICE_MIC_TEST_MAX_DURATION_MS : VOICE_MAX_DURATION_MS, maxPcmBytes: purpose === 'mic-test' ? VOICE_MIC_TEST_MAX_BYTES : VOICE_MAX_PCM_BYTES, state: 'armed' };
+    },
+    async voiceAppend(input: VoiceAppendInput) {
+      const cap = captures.get(input.captureId);
+      const bytes = input.pcm16.byteLength;
+      if (!cap || input.seq !== cap.seq + 1) return { captureId: input.captureId, accepted: false, seq: input.seq, expectedSeq: (cap?.seq ?? 0) + 1, acceptedBytes: cap?.bytes ?? 0, remainingBytes: 0, reason: 'sequence' };
+      cap.seq = input.seq;
+      cap.bytes += bytes;
+      return { captureId: input.captureId, accepted: true, seq: input.seq, acceptedBytes: cap.bytes, remainingBytes: Math.max(0, VOICE_MAX_PCM_BYTES - cap.bytes) };
+    },
+    async voiceFinish(input: VoiceFinishInput) {
+      const cap = captures.get(input.captureId);
+      if (!cap) return { captureId: input.captureId, status: 'already-settled', acceptedSeq: 0, acceptedBytes: 0 };
+      captures.delete(input.captureId);
+      const text = cap.bytes > 0 ? '演示听写文本' : '';
+      const durationMs = Math.round((cap.bytes / 2 / VOICE_SAMPLE_RATE) * 1000);
+      setTimeout(() => {
+        if (text) segmentEvents.emit({ owner: cap.owner, epoch: 0, captureId: input.captureId, seq: 1, text, isFinal: true });
+        settledEvents.emit({ owner: cap.owner, epoch: 0, captureId: input.captureId, finalSeq: text ? 1 : 0, text, durationMs, engine: config.engine === 'external-api' ? 'external-api' : 'local', outcome: 'completed' });
+      }, 0);
+      return { captureId: input.captureId, status: 'finishing', acceptedSeq: cap.seq, acceptedBytes: cap.bytes };
+    },
+    async voiceAbort(input: VoiceAbortInput) {
+      return { captureId: input.captureId, aborted: captures.delete(input.captureId) };
+    },
+    onVoiceSegment: segmentEvents.subscribe,
+    onVoiceSettled: settledEvents.subscribe,
+    onVoiceCaptureRevoked: revokedEvents.subscribe,
+  };
 }

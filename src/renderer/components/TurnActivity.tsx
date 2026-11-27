@@ -339,8 +339,7 @@ export function PaneStatusChip({
   /** 用户已发出停止请求，等待官方回合结算 */
   stopping?: boolean;
 }): React.ReactElement | null {
-  const { locale, dict } = useI18n();
-  const isZh = locale === 'zh-CN';
+  const { dict } = useI18n();
   // 待审请求优先决定状态芯片的文案和计时行为，即使流式会话还在等待该操作，界面也会提示用户先处理审批。
   const effective: ManagedSessionStatus = pendingApprovals > 0 ? 'waiting_approval' : status;
   const isStopping = stopping && (effective === 'streaming' || effective === 'waiting_approval' || effective === 'waiting_question');
@@ -351,9 +350,7 @@ export function PaneStatusChip({
   const label = isStopping
     ? dict.ui.v031.stoppingLabel
     : effective === 'waiting_approval'
-      ? isZh
-        ? `待审批${pendingApprovals > 1 ? ` ×${pendingApprovals}` : ''}`
-        : `Needs approval${pendingApprovals > 1 ? ` ×${pendingApprovals}` : ''}`
+      ? dict.ui.v036.needsApproval(pendingApprovals)
       : effective === 'waiting_question'
         ? dict.ui.v031.waitingAnswerChip
         : effective === 'error'

@@ -12,13 +12,14 @@ import {
   FolderOpen,
   Info,
   Languages,
+  Loader2,
   Paintbrush,
   Palette,
   Pencil,
   Pin,
+  PlugZap,
   Plus,
   RefreshCw,
-  RotateCw,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -26,6 +27,7 @@ import {
   Trash2,
   UserRound,
   X,
+  Zap,
 } from 'lucide-react';
 import {
   APP_BRAND,
@@ -75,6 +77,7 @@ import { IconsPanel, ThemesPanel, TokensPanel } from './settings/AppearancePanel
 import { AccountsPanel, ApprovalsPanel, PluginsPanel, RatesPanel, type ApprovalTab } from './settings/WorkspacePanels';
 import { ResizeHandle } from './ResizeHandle';
 import { Icon as UiIcon } from './ui/Icon';
+import { VoiceSettingsCard } from './settings/VoiceSettingsCard';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { scrollBehavior } from '../lib/motion';
 import { projectApiKeyForSubmit } from '../lib/api-key-projection';
@@ -100,6 +103,8 @@ export interface SettingsViewProps {
   rateCards: ModelRateCard[];
   updateState: AppUpdateState;
   onSectionChange: (section: SettingsSection) => void;
+  /** v0.3.6：外部语音转写独立用量（设置 → 通用 → 语音听写费用摘要） */
+  voiceTelemetry?: import('@shared').VoiceExternalTelemetrySnapshot;
   onClose: () => void;
   onUpdatePreferences: (patch: Partial<ClientPreferences>) => Promise<void>;
   onUpdateTranslationConfig?: (patch: TranslationConfigPatch) => Promise<TranslationConfig | void>;
@@ -1071,7 +1076,7 @@ function GeneralPanel({
                 onClick={() => void handleTestConnection()}
                 data-testid="test-translator-connection-btn"
               >
-                <UiIcon icon={RefreshCw} size="xs" className={testing ? 'spin' : ''} />
+                <UiIcon icon={testing ? Loader2 : PlugZap} size="xs" className={testing ? 'spin' : ''} />
                 <span>{testing ? dict.translationExternalTesting : dict.translationExternalTestBtn}</span>
               </button>
               <button
@@ -1319,7 +1324,7 @@ function ProjectsPanel({
             <option value="">{dict.ui.copy.defaultMode2}</option>
             {EXECUTION_MODE_ORDER.map((m) => (
               <option key={m} value={m}>
-                {m === 'full-access' ? `⚡ ${dict.executionModes[m].label} (full-access)` : dict.executionModes[m].label}
+                {m === 'full-access' ? `${dict.executionModes[m].label} (full-access)` : dict.executionModes[m].label}
               </option>
             ))}
           </select>
@@ -1390,7 +1395,7 @@ function ProjectsPanel({
                   <div className="list-row-title">
                     <span>{proj.name}</span>
                     {proj.pinned && <span className="badge badge-accent">{dict.ui.copy.pinned}</span>}
-                    {proj.defaultMode && <span className={`badge badge-mono${proj.defaultMode === 'full-access' ? ' badge-turbo' : ''}`}>{proj.defaultMode === 'full-access' ? `⚡ ${dict.executionModes[proj.defaultMode].label}` : proj.defaultMode}</span>}
+                    {proj.defaultMode && <span className={`badge badge-mono${proj.defaultMode === 'full-access' ? ' badge-turbo' : ''}`}>{proj.defaultMode === 'full-access' ? <><UiIcon icon={Zap} size="xs" />{dict.executionModes[proj.defaultMode].label}</> : proj.defaultMode}</span>}
                     {isDef && <span className="badge badge-success">{dict.ui.copy.default}</span>}
                   </div>
                   <div className="list-row-desc mono truncate" title={proj.path}>
@@ -1647,7 +1652,7 @@ function AboutPanel({
             )}
             {updateState.status === 'installing' && (
               <span className="update-status-line muted">
-                <UiIcon icon={RotateCw} size="sm" className="spin" />
+                <UiIcon icon={Loader2} size="sm" className="spin" />
                 <span>{dict.updatesInstalling}</span>
               </span>
             )}
@@ -1680,7 +1685,7 @@ function AboutPanel({
                 onClick={() => void onInstallUpdate()}
                 data-testid="install-update-btn"
               >
-                <UiIcon icon={RotateCw} size="sm" />
+                <UiIcon icon={Download} size="sm" />
                 <span>
                   {updateState.canInstallDirectly
                     ? dict.updatesInstallRestartBtn
@@ -1787,9 +1792,31 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
   dirtyRef.current = dirty;
   const confirmRef = useRef(confirmClose);
   confirmRef.current = confirmClose;
+  const pendingRef = useRef<SettingsSection | null>(null);
   useEffect(() => {
-    if (!dirty) setConfirmClose(false);
+    if (!dirty) {
+      setConfirmClose(false);
+      setPendingSection(null);
+    }
   }, [dirty]);
+  // B1：存在未保存草稿时切换分组先提示（继续编辑 / 放弃修改），避免卸载分区静默丢稿
+  const [pendingSection, setPendingSection] = useState<SettingsSection | null>(null);
+  pendingRef.current = pendingSection;
+  const requestSection = useCallback((id: SettingsSection) => {
+    if (id === section) return;
+    if (dirtyRef.current) {
+      setPendingSection(id);
+      return;
+    }
+    onSectionChange(id);
+  }, [onSectionChange, section]);
+  const discardAndSwitch = useCallback(() => {
+    const target = pendingSection;
+    dirtyKeysRef.current.clear();
+    setDirtyCount(0);
+    setPendingSection(null);
+    if (target) onSectionChange(target);
+  }, [onSectionChange, pendingSection]);
 
   const requestClose = useCallback(() => {
     if (dirtyRef.current) {
@@ -1807,7 +1834,8 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
       if (e.key === 'Escape') {
         e.preventDefault();
         // 确认条打开时再次 Esc 表示「继续编辑」。
-        if (confirmRef.current) setConfirmClose(false);
+        if (pendingRef.current) setPendingSection(null);
+        else if (confirmRef.current) setConfirmClose(false);
         else requestClose();
         return;
       }
@@ -1837,6 +1865,12 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
           onOpenTranslatorStats={props.onOpenTranslatorStats}
           onOpenProjectsTab={() => onSectionChange('projects')}
         />
+      );
+      content = (
+        <>
+          {content}
+          <VoiceSettingsCard profileId={props.accounts.activeProfileId} telemetry={props.voiceTelemetry} />
+        </>
       );
       break;
     case 'themes':
@@ -1940,7 +1974,7 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
                   type="button"
                   className={`settings-nav-item ${navActive(id) ? 'is-active' : ''}`}
                   aria-current={navActive(id) ? 'page' : undefined}
-                  onClick={() => onSectionChange(id)}
+                  onClick={() => requestSection(id)}
                   data-testid={`settings-tab-${id}`}
                 >
                   <UiIcon icon={Icon} size="md" />
@@ -1973,13 +2007,26 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
           />
         </nav>
         <section className="settings-main">
+          {/* v0.3.6：分组名已在左侧导航高亮显示，标题栏不再重复同一文字 */}
           <header className="settings-head">
-            <h2>{dict.settingsNav[isAppearance ? 'themes' : section]}</h2>
             <button type="button" className="icon-btn" onClick={requestClose} aria-label={dict.closeAction} title="Esc"
               data-testid="settings-close-btn">
               <UiIcon icon={X} size="md" />
             </button>
           </header>
+          {pendingSection && (
+            <div className="settings-discard-bar" role="alertdialog" aria-live="assertive"
+              aria-label={dict.ui.v036.settingsDirtyLeave} data-testid="settings-section-dirty-confirm">
+              <span>{dict.ui.v036.settingsDirtyLeave}</span>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setPendingSection(null)} autoFocus
+                data-testid="settings-section-dirty-stay">
+                {dict.ui.v036.settingsDirtyStay}
+              </button>
+              <button type="button" className="btn btn-sm danger" onClick={discardAndSwitch} data-testid="settings-section-dirty-discard">
+                {dict.ui.v036.settingsDirtyDiscard}
+              </button>
+            </div>
+          )}
           {confirmClose && (
             <div className="settings-discard-bar" role="alertdialog" aria-live="assertive"
               aria-label={dict.ui.v034.settingsDiscardConfirm} data-testid="settings-discard-confirm">

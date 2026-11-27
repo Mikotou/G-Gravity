@@ -1,5 +1,6 @@
 import { V034_EN, V034_ZH, type V034Strings } from './domains/v034';
 import { V035_EN, V035_ZH, type V035Strings } from './domains/v035';
+import { V036_EN, V036_ZH, type V036Strings } from './domains/v036';
 import { COPY_EN, COPY_ZH, type ComponentCopyStrings } from './domains/copy';
 import type {
   AgentExecutionMode,
@@ -567,6 +568,8 @@ export interface WorkbenchStrings {
   v034: V034Strings;
   /* ---- v0.3.5 热力图 / Plan 提问与检视器 / UI 精简（见 i18n/domains/v035.ts） ---- */
   v035: V035Strings;
+  /* ---- v0.3.6 Plan 四态 / 划词标注 / 语音听写 / 信息精简（见 i18n/domains/v036.ts） ---- */
+  v036: V036Strings;
   copy: ComponentCopyStrings;
 }
 
@@ -904,6 +907,7 @@ const WORKBENCH_ZH: WorkbenchStrings = {
   },
   v034: V034_ZH,
   v035: V035_ZH,
+  v036: V036_ZH,
   copy: COPY_ZH,
 };
 
@@ -1001,7 +1005,7 @@ const WORKBENCH_EN: WorkbenchStrings = {
   reviewerArchLayer1Body: 'Without an external reviewer only basic rules apply: read-only file/code/doc/MCP queries, read-only pipelines, custom rules and remembered session prefixes.',
   reviewerArchLayer2Title: 'Layer 2 (AI review, needs a connected reviewer)',
   reviewerArchLayer2Lead: 'Connects to local',
-  reviewerArchLayer2Rest: 'Ollama or your own public API key model to review grey-zone dev commands, non-read-only MCP tools, source edits in default mode and read-only PowerShell analysis (results are cached by TTL, usage and cost are tracked per API provider, and keys are encrypted by the OS).',
+  reviewerArchLayer2Rest: 'Ollama or your own public API key model to review grey-zone commands and edits (TTL-cached, per-provider cost tracking, OS-encrypted keys).',
   reviewerModeMismatch: (c, h) => `Approval mode is "${c}". External review only runs in "${h}" mode.`,
   switchToMode: (label) => `Switch to ${label}`,
   reviewerOllamaDiscoverHint: 'Query installed models from local Ollama',
@@ -1085,7 +1089,7 @@ const WORKBENCH_EN: WorkbenchStrings = {
     modeMenuCycleHint: (k) => `${k} cycles default / accept-edits / plan only`,
     turboActiveTitle: (k) => `Turbo is on: full access with no approval prompts (anti-ban safeguards kept). Press ${k} to return to default.`,
     turboConfirmTitle: 'Turn on Turbo · Full access',
-    turboConfirmBody: 'If the official agy session supports native full-access, the server-side full-access mode is turned on; otherwise Turbo pass-through is applied locally at the client callback layer. Commands, file writes and deletes, and MCP tool calls run without approval prompts.',
+    turboConfirmBody: 'Uses native full-access when supported, or local client pass-through otherwise. Commands, file edits/deletes, and MCP tools run without approval prompts.',
     turboConfirmSafeguards: 'The client still enforces anti-ban safeguards locally (no credential reads, no writes to the official ~/.gemini folder) and blocks system-level destructive actions.',
     turboConfirmAction: 'Turn on Turbo',
     turboConfirmCancel: 'Cancel',
@@ -1135,6 +1139,7 @@ const WORKBENCH_EN: WorkbenchStrings = {
   },
   v034: V034_EN,
   v035: V035_EN,
+  v036: V036_EN,
   copy: COPY_EN,
 };
 

@@ -285,7 +285,7 @@ export function InlineRequestView({
       requestId: request.requestId,
       sessionId: request.sessionId,
       decision: 'reject_with_feedback',
-      feedbackText: feedbackText.trim() || 'Rejected by user',
+      feedbackText: feedbackText.trim() || dict.ui.v036.rejectedByUserFallback,
     });
   }
 

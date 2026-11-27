@@ -74,6 +74,7 @@ import { SwarmDrafts } from './components/SwarmPanel';
 import type { ContextInspectorViewMode } from './components/ContextCostInspectorView';
 import { SessionWorkspaceGrid } from './components/SessionWorkspaceGrid';
 import { SettingsView, type SettingsSection } from './components/SettingsView';
+import { holdActiveVoiceCaptures } from './lib/voice/controller';
 import type { ApprovalTab } from './components/settings/WorkspacePanels';
 import { TitleOrganizerModal } from './components/TitleOrganizerModal';
 import { TopBar } from './components/TopBar';
@@ -898,8 +899,13 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     }
   };
 
+  // B11：每个分屏槽位的绑定代次——连续拖放 / 切换时，较慢返回的旧请求（恢复会话、加载数据）不得覆盖新绑定
+  const bindSeqRef = useRef(new Map<number, number>());
   const handleBindSlotSession = useCallback(
     async (slotIndex: number, sessionId: string) => {
+      const seq = (bindSeqRef.current.get(slotIndex) ?? 0) + 1;
+      bindSeqRef.current.set(slotIndex, seq);
+      const stale = () => bindSeqRef.current.get(slotIndex) !== seq;
       try {
         const bridge = getDesktopBridge();
         const target = sessions.find((s) => s.sessionId === sessionId);
@@ -911,9 +917,10 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         } else if (!layoutRef.current.openTabSessionIds.includes(sessionId)) {
           await loadSessionData(sessionId);
         }
+        if (stale()) return;
         await openSessionInWorkspace(sessionId, slotIndex);
       } catch (err) {
-        reportError(err);
+        if (!stale()) reportError(err);
       }
     },
     [loadSessionData, openSessionInWorkspace, preferences.activeProfileId, replaceSession, reportError, sessions]
@@ -1426,6 +1433,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       openInspectorAt(id, 'context');
     },
     onInspectDiffFile: (id: string, fp: string) => openInspectorAt(id, 'diff', fp),
+    onOpenPlanInspector: (id: string) => openInspectorAt(id, 'plan'),
   });
   const sidebarHandlers = useStableCallbacks({
     onToggleCollapse: () => void patchLayout({ leftSidebarCollapsed: true }),
@@ -1448,6 +1456,10 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
   /* ---------------------------------------------------------------- 快捷键 */
   const overlayOpen = settingsSection !== null || newSessionOpen || organizeOpen;
+  // v0.3.6：切入设置中心被动停录——外部引擎 release-media(hold) 封存（0 finish / 0 HTTP），本地引擎正常转写
+  useEffect(() => {
+    if (settingsSection !== null) holdActiveVoiceCaptures();
+  }, [settingsSection]);
   const macShortcuts = document.documentElement.dataset.windowChrome === 'mac-inset';
   const applyZoomCommand = useCallback((command: UiScaleCommand) => {
     const current = zoomScale.current.pending?.value ?? zoomScale.current.confirmed;
@@ -1500,9 +1512,11 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         void patchLayout({ layoutMode: SPLIT_CYCLE[(SPLIT_CYCLE.indexOf(layout.layoutMode) + 1) % SPLIT_CYCLE.length] });
         return;
       }
-      if (e.shiftKey && e.key === 'Tab' && !isTypingTarget(e.target) && !isNativeFocusControl(e.target)) {
+      // U6：仅裸 Shift+Tab 循环模式；Ctrl/⌘/Alt+Shift+Tab 留给系统与浏览器，只读或已归档会话不改模式
+      if (e.shiftKey && e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && !isTypingTarget(e.target) && !isNativeFocusControl(e.target)) {
         e.preventDefault();
         const active = sessions.find((s) => s.sessionId === focusedSessionId && s.status !== 'closed');
+        if (active && (active.readOnly || active.archivedAt)) return;
         if (active) {
           // v0.3.2：Shift+Tab 仅在 default / accept-edits / plan 三档安全循环，绝不盲切进入 Turbo（full-access）。
           // 处于 Turbo 时按 Shift+Tab 回落到 default（indexOf 返回 -1 → 0）。
@@ -1741,6 +1755,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
             approvalConfig={approvalConfig}
             approvalInitialTab={approvalSettingsTab}
             externalReviewerTelemetry={telemetry.externalReviewer}
+            voiceTelemetry={telemetry.externalVoice}
             translationConfig={translationConfig}
             externalTranslatorTelemetry={telemetry.externalTranslator}
             focusExternalTranslatorSeq={translationSettingsFocusSeq}

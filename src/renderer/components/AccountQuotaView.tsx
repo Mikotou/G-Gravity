@@ -1,7 +1,7 @@
 import { getComponentCopy } from '../i18n/domains/copy';
 import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { Clock, Gauge, RefreshCw } from 'lucide-react';
-import type { AccountQuotaUnavailableReason, AcpConnectionStatus, QuotaBucket } from '@shared';
+import type { AcpConnectionStatus, QuotaBucket } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { accountQuotaFeed, QUOTA_PROFILE_SWITCHED } from '../lib/account-quota-feed';
 import { Icon } from './ui/Icon';
@@ -16,13 +16,6 @@ function bucketLabel(id: string, zh: boolean) {
 }
 
 type QuotaLevel = 'high' | 'mid' | 'low' | 'empty' | 'unknown';
-
-const unavailableText: Record<AccountQuotaUnavailableReason, [string, string]> = {
-  platform: ['此平台暂不支持自动读取额度。在终端运行 agy，然后输入 /usage 查看。', 'Automatic quota readings are unavailable on this platform. Run agy in a terminal and enter /usage.'],
-  profile: ['当前官方 CLI 只提供默认登录资料的额度。终端里的 agy → /usage 显示默认资料的额度。', 'The official CLI reports quota for its default sign-in only. Running agy and entering /usage in a terminal shows that default account.'],
-  helper: ['此安装缺少 macOS 额度读取组件。在终端运行 agy，然后输入 /usage 查看。', 'The macOS quota reader is unavailable in this installation. Run agy in a terminal and enter /usage.'],
-  preview: ['请在 G-Gravity 桌面端查看额度，或在终端运行 agy 后输入 /usage。', 'Open G-Gravity on the desktop to view quota, or run agy in a terminal and enter /usage.'],
-};
 
 function resolveQuotaLevel(bucket?: QuotaBucket): QuotaLevel {
   if (!bucket || bucket.disabled) return 'unknown';
@@ -102,12 +95,18 @@ export function AccountQuotaFooter({
       const target = event.target as Node;
       if (!lastTrigger.current?.contains(target) && !root.current?.querySelector('.quota-view')?.contains(target)) setMode('closed');
     };
-    // F-02：额度弹层的 Esc 只关闭弹层本身。在捕获阶段截住并停止传播，避免 Composer / 窗格级 Esc 同时中断进行中的回合。
+    // F-02 & U4：仅在固定（pinned）或焦点位于弹层内时拦截 Esc；悬停预览态不吞掉 Composer 的回合中断 Esc。
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || isImeComposing(event)) return;
+      if (document.querySelector('dialog[open], [aria-modal="true"]')) return;
+      const inPopover = Boolean(root.current?.querySelector('.quota-view')?.contains(document.activeElement));
+      if (mode !== 'pinned' && !inPopover) {
+        setMode('closed');
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
-      if (root.current?.querySelector('.quota-view')?.contains(document.activeElement)) lastTrigger.current?.focus();
+      if (inPopover) lastTrigger.current?.focus();
       setMode('closed');
     };
     document.addEventListener('pointerdown', outside);
@@ -116,7 +115,7 @@ export function AccountQuotaFooter({
       document.removeEventListener('pointerdown', outside);
       window.removeEventListener('keydown', escape, true);
     };
-  }, [open]);
+  }, [mode, open]);
 
   function preview(button: HTMLButtonElement) {
     lastTrigger.current = button;
@@ -252,7 +251,7 @@ export function AccountQuotaFooter({
                 void feed.manual();
               }}
             >
-              <Icon icon={RefreshCw} size="xs" className={loading ? 'spin' : undefined} />
+              <Icon icon={RefreshCw} size="sm" className={loading ? 'spin' : undefined} />
               <span>{dict.ui.copy.refresh}</span>
             </button>
           </header>
@@ -275,7 +274,7 @@ export function AccountQuotaFooter({
               {dict.ui.v035.quotaIsolatedManual}
             </p>
           )}
-          {unavailable && <p className="quota-state-note" role="status">{unavailableText[unavailable][zh ? 0 : 1]}</p>}
+          {unavailable && <p className="quota-state-note" role="status">{dict.ui.v036.quotaUnavailable[unavailable]}</p>}
           {error && (
             <p className="quota-state-error" role="alert">
               {/* 两种语言都保留具体失败原因，并附上可执行的排查指引。 */}

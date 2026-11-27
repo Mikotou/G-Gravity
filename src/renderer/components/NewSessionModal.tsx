@@ -417,7 +417,7 @@ export function NewSessionModal({
               {EXECUTION_MODE_ORDER.map((m) => (
                 <option key={m} value={m}>
                   {m === 'full-access'
-                    ? `⚡ ${dict.executionModes[m].label} (full-access)`
+                    ? `${dict.executionModes[m].label} (full-access)`
                     : dict.executionModes[m].label}
                 </option>
               ))}

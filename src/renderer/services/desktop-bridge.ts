@@ -39,3 +39,27 @@ export function canTriggerDemoApproval(): boolean {
 export function triggerDemoApproval(sessionId: string): void {
   demoBridge()?.triggerDemoApproval(sessionId);
 }
+
+/** v0.3.6：语音听写 9 个 invoke + 3 个事件通道全部可用时返回窄化桥接，否则 null（旧桥接降级为不可用）。 */
+export type VoiceBridge = Required<
+  Pick<
+    import('@shared').GravityDesktopBridge,
+    | 'getVoiceState' | 'updateVoiceConfig' | 'discoverVoiceModels' | 'testVoiceConnection' | 'installVoiceModel'
+    | 'voiceArmCapture' | 'voiceAppend' | 'voiceFinish' | 'voiceAbort'
+    | 'onVoiceSegment' | 'onVoiceSettled' | 'onVoiceCaptureRevoked'
+  >
+>;
+const VOICE_METHODS = [
+  'getVoiceState', 'updateVoiceConfig', 'discoverVoiceModels', 'testVoiceConnection', 'installVoiceModel',
+  'voiceArmCapture', 'voiceAppend', 'voiceFinish', 'voiceAbort',
+  'onVoiceSegment', 'onVoiceSettled', 'onVoiceCaptureRevoked',
+] as const;
+export function getVoiceBridge(): VoiceBridge | null {
+  let bridge: GravityDesktopBridge;
+  try {
+    bridge = getDesktopBridge();
+  } catch {
+    return null;
+  }
+  return VOICE_METHODS.every((m) => typeof bridge[m] === 'function') ? (bridge as VoiceBridge) : null;
+}

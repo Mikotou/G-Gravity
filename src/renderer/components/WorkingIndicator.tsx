@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { Square } from 'lucide-react';
 import { useI18n } from '../i18n/I18nContext';
+import { Icon } from './ui/Icon';
 import { formatDuration } from '../lib/turn-insights';
 
 /**
@@ -23,7 +25,7 @@ export function WorkingIndicator({ startedAt, stopping = false }: { startedAt?: 
       data-testid="working-indicator"
       data-stopping={stopping || undefined}
     >
-      <span className={`cc-thinking-glyph${stopping ? '' : ' is-streaming'}`}>{stopping ? '◼' : '✻'}</span>
+      <span className={`cc-thinking-glyph${stopping ? '' : ' is-streaming'}`} aria-hidden="true">{stopping ? <Icon icon={Square} size="xs" fill="currentColor" /> : '✻'}</span>
       <span className={`cc-thinking-title${stopping ? '' : ' is-streaming'}`}>
         {stopping ? dict.ui.v031.stoppingLabel : dict.thinkingStreamingTitle}
       </span>

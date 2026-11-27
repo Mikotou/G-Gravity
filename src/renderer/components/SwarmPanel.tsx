@@ -390,6 +390,7 @@ function SessionSwarmPanel({
               key={v}
               type="button"
               className={`segmented-btn ${view === v ? 'is-active' : ''}`}
+              aria-pressed={view === v}
               onClick={() => setView(v)}
             >
               {labels[v]}

@@ -68,4 +68,4 @@ body.gv-resizing .sidebar, body.gv-resizing .inspector, body.gv-resizing .worksp
 .thread-item.is-selected{background:color-mix(in srgb, var(--text-primary) 7%, transparent);box-shadow:none}
 [data-polarity='light'] .thread-item.is-selected{background:color-mix(in srgb, var(--text-primary) 6.5%, var(--studio-card));box-shadow:0 0 0 1px var(--hairline)}
 .thread-item.is-selected .thread-title{color:var(--text-primary);font-weight:560}
-.sidebar-alert, .question-error, .message-editor-error{margin:4px 0 0;padding:6px 10px;border-radius:8px;border:1px solid var(--danger-border, color-mix(in srgb, var(--status-danger) 40%, transparent));background:var(--danger-soft);color:var(--danger-text);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+.sidebar-alert, .question-error, .message-editor-error{margin:4px 0 0;padding:6px 10px;border-radius:8px;border:1px solid var(--danger-border);background:var(--danger-soft);color:var(--danger-text);font-size:12px;line-height:1.5;overflow-wrap:anywhere}

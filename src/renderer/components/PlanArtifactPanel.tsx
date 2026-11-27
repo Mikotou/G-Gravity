@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { ChevronDown, ExternalLink, FileText, Link2, RefreshCw } from 'lucide-react';
-import type { PlanArtifactSnapshot } from '@shared';
+import { ChevronLeft, ChevronRight, CircleCheck, Circle, ExternalLink, Info, Link2, RefreshCw, TriangleAlert, Workflow } from 'lucide-react';
+import type { PlanArtifactOwner } from '@shared';
+import { countFenceLines } from '../lib/plan-view';
+import { PlanTimeline } from './PlanTimeline';
 import { useI18n } from '../i18n/I18nContext';
 import { stripIpcErrorPrefix } from '../i18n/locales';
 import { scrollBehavior } from '../lib/motion';
@@ -52,133 +54,57 @@ export function planHeadingSlug(raw: string): string {
 }
 
 /**
- * v0.3.5：Plan 页签下方可折叠的只读 `implementation_plan.md` 预览。
+ * v0.3.6：按需打开的计划原文抽屉（纯展示组件，数据由 `usePlanArtifact` 提供）。
  *
- * - 与结构化待办解耦：待办被清空（`plan.state === 'empty'`）不影响文档预览；
- * - 首次与事件驱动刷新携带 `knownRevision`（主进程可回 `unchanged`），手动刷新按钮不传 `knownRevision` 强制重读；
- * - 订阅 `onPlanArtifactChanged`，仅处理同一 `(profileId, sessionId)` 的事件；迟到的旧会话结果按 owner 丢弃；
- * - 自研极简只读渲染：不渲染原始 HTML、不加载任何图片 / 外部 URL；
- *   仅打开计划文档本体（头部打开按钮或精准指向 `snapshot.filePath` 的链接）时携带 `planArtifactOwner`；
- *   文档内嵌外部链接与其它工作区文件走常规 `openLinkOrFileTarget({ target, action, cwd, sessionId })`，`#anchor` 在面板内平滑滚动。
+ * - 刷新按钮位于抽屉内；外部打开计划文档本体时携带 `planArtifactOwner`；
+ * - 文档内嵌外部链接与其它工作区文件走常规 `openLinkOrFileTarget`，`#anchor` 在抽屉内平滑滚动；
+ * - Mermaid 围栏折叠为「流程图（N 行）」，`> [!IMPORTANT]` 等渲染为提示框；代码块自身横向滚动，抽屉 0 横向溢出。
  */
-export function PlanArtifactPanel({
+export function PlanSourceDrawer({
   profileId,
   sessionId,
+  epoch,
   cwd,
-  onStatusChange,
+  filePath,
+  revision,
+  content,
+  truncated,
+  updatedAt,
+  loading,
+  error,
+  onRefresh,
+  onClose,
 }: {
   profileId: string;
   sessionId: string;
+  epoch?: number;
   cwd?: string;
-  onStatusChange?: (status: PlanArtifactSnapshot['status'] | 'loading') => void;
-}): React.ReactElement | null {
+  filePath?: string;
+  revision?: number;
+  content: string | null;
+  truncated?: boolean;
+  updatedAt?: string;
+  loading: boolean;
+  error?: string;
+  onRefresh: () => void;
+  onClose: () => void;
+}): React.ReactElement {
   const { dict } = useI18n();
   const t = dict.ui.v035;
+  const t6 = dict.ui.v036;
   const uid = useId();
-  const [open, setOpen] = useState(true);
-  const [snapshot, setSnapshot] = useState<PlanArtifactSnapshot | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [linkError, setLinkError] = useState('');
-  const revisionRef = useRef<number | undefined>(undefined);
-  const snapshotRef = useRef<PlanArtifactSnapshot | null>(null);
   const docRef = useRef<HTMLDivElement | null>(null);
-  const ownerRef = useRef(`${profileId}\u0000${sessionId}`);
-  const bridge = getDesktopBridge();
-  const supported = typeof bridge.getSessionPlanArtifact === 'function';
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const [linkError, setLinkError] = useState('');
+  const owner = { profileId, sessionId, ...(epoch !== undefined ? { epoch } : {}), revision, contentRevision: revision };
 
   useEffect(() => {
-    if (!supported) {
-      onStatusChange?.('missing');
-      return;
-    }
-    onStatusChange?.(snapshot?.status ?? 'loading');
-  }, [onStatusChange, snapshot?.status, supported]);
-
-  const load = useCallback(
-    async (useKnownRevision: boolean) => {
-      const fetcher = getDesktopBridge().getSessionPlanArtifact;
-      if (typeof fetcher !== 'function') return;
-      const owner = `${profileId}\u0000${sessionId}`;
-      setLoading(true);
-      setError('');
-      try {
-        let result = await fetcher({
-          profileId,
-          sessionId,
-          ...(useKnownRevision && revisionRef.current !== undefined ? { knownRevision: revisionRef.current } : {}),
-        });
-        // 会话已切换：丢弃迟到结果
-        if (ownerRef.current !== owner) return;
-        if (result.owner && (result.owner.sessionId !== sessionId || (result.owner.profileId && result.owner.profileId !== profileId))) return;
-        if (result.status === 'unchanged') {
-          if (snapshotRef.current !== null) return;
-          // FE-BUG-08：尚未持有快照时收到 unchanged，丢弃 knownRevision 重拉一次；若仍无内容则按空态收口，避免卡在 Loading
-          if (useKnownRevision) {
-            revisionRef.current = undefined;
-            result = await fetcher({ profileId, sessionId });
-            if (ownerRef.current !== owner) return;
-            if (result.owner && (result.owner.sessionId !== sessionId || (result.owner.profileId && result.owner.profileId !== profileId))) return;
-          }
-          if (result.status === 'unchanged') {
-            const settled: PlanArtifactSnapshot = { ...result, status: 'missing' };
-            snapshotRef.current = settled;
-            setSnapshot(settled);
-            return;
-          }
-        }
-        revisionRef.current = result.revision;
-        snapshotRef.current = result;
-        setSnapshot(result);
-      } catch (reason) {
-        if (ownerRef.current === owner) setError(stripIpcErrorPrefix(reason));
-      } finally {
-        if (ownerRef.current === owner) setLoading(false);
-      }
-    },
-    [profileId, sessionId]
-  );
-
-  useEffect(() => {
-    ownerRef.current = `${profileId}\u0000${sessionId}`;
-    revisionRef.current = undefined;
-    snapshotRef.current = null;
-    setSnapshot(null);
-    setError('');
-    setLinkError('');
-    void load(true);
-    const unsubscribe = getDesktopBridge().onPlanArtifactChanged?.((event) => {
-      if (event.sessionId !== sessionId || (event.profileId && event.profileId !== profileId)) return;
-      if (revisionRef.current !== undefined && event.revision === revisionRef.current) return;
-      void load(true);
-    });
-    return () => {
-      ownerRef.current = '';
-      unsubscribe?.();
-    };
-  }, [load, profileId, sessionId]);
-
-  const openPlanFile = useCallback(async () => {
-    const filePath = snapshotRef.current?.filePath;
-    if (!filePath) return;
-    setLinkError('');
-    try {
-      await getDesktopBridge().openLinkOrFileTarget({
-        target: filePath,
-        action: 'default-app',
-        ...(cwd ? { cwd } : {}),
-        sessionId,
-        planArtifactOwner: { profileId, sessionId, revision: revisionRef.current },
-      });
-    } catch (reason) {
-      setLinkError(`${t.planArtifactOpenError}：${stripIpcErrorPrefix(reason)}`);
-    }
-  }, [cwd, profileId, sessionId, t.planArtifactOpenError]);
+    closeRef.current?.focus();
+  }, []);
 
   const openLink = useCallback(
     async (target: string) => {
       setLinkError('');
-      // FE-BUG-08：文档内 #anchor 直接在面板内滚动定位，不走外部打开 IPC
       if (target.startsWith('#')) {
         let raw = target.slice(1);
         try {
@@ -197,100 +123,88 @@ export function PlanArtifactPanel({
         }
         return;
       }
-      // D-01：仅当链接精准指向计划文档本体时携带 planArtifactOwner；外链与工作区其它文件走常规安全打开链路
-      const isSelf = isPlanArtifactSelfTarget(target, snapshotRef.current?.filePath);
+      const isSelf = isPlanArtifactSelfTarget(target, filePath);
       try {
         await getDesktopBridge().openLinkOrFileTarget({
           target,
           action: /^https?:/i.test(target) ? 'browser' : 'default-app',
           ...(cwd ? { cwd } : {}),
           sessionId,
-          ...(isSelf ? { planArtifactOwner: { profileId, sessionId, revision: revisionRef.current } } : {}),
+          ...(isSelf ? { planArtifactOwner: owner } : {}),
         });
       } catch (reason) {
         setLinkError(`${t.planArtifactOpenError}：${stripIpcErrorPrefix(reason)}`);
       }
     },
-    [cwd, profileId, sessionId, t.planArtifactOpenError]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cwd, filePath, profileId, sessionId, epoch, revision, t.planArtifactOpenError]
   );
 
-  if (!supported) return null;
-  const bodyId = `${uid}-body`;
-  const updated =
-    snapshot?.updatedAt && Number.isFinite(Date.parse(snapshot.updatedAt))
-      ? new Date(snapshot.updatedAt).toLocaleString()
-      : '';
-
+  const updated = formatPlanTime(updatedAt);
   return (
-    <section className="plan-artifact" data-testid="plan-artifact-panel" data-status={snapshot?.status ?? 'loading'}>
-      <div className="plan-artifact-head">
-        <button
-          type="button"
-          className="plan-artifact-toggle"
-          aria-expanded={open}
-          aria-controls={bodyId}
-          onClick={() => setOpen((v) => !v)}
-          data-testid="plan-artifact-toggle"
-        >
-          <Icon icon={ChevronDown} size="xs" className={open ? '' : 'is-collapsed'} />
-          <Icon icon={FileText} size="xs" />
-          <span className="mono truncate">{t.planArtifactTitle}</span>
+    <section
+      className="plan-drawer"
+      data-testid="plan-source-drawer"
+      aria-label={t6.planDrawerTitle}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !e.nativeEvent.isComposing) {
+          e.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <div className="plan-drawer-head">
+        <button ref={closeRef} type="button" className="icon-btn" onClick={onClose} aria-label={t6.planDrawerClose} title={t6.planDrawerClose} data-testid="plan-source-close">
+          <Icon icon={ChevronLeft} size="sm" />
         </button>
-        <span className="badge badge-mono plan-artifact-ro">{t.planArtifactReadonly}</span>
-        {snapshot?.status === 'ready' && snapshot.filePath && (
-          <button
-            type="button"
-            className="icon-btn icon-btn-sm"
-            onClick={() => void openPlanFile()}
-            aria-label={t.planArtifactOpenFile}
-            title={t.planArtifactOpenFile}
-            data-testid="plan-artifact-open-file"
-          >
-            <Icon icon={ExternalLink} size="xs" />
+        <span className="plan-drawer-title truncate">{t6.planDrawerTitle}</span>
+        <span className="spacer" />
+        <button type="button" className="icon-btn" onClick={onRefresh} disabled={loading} aria-label={t.planArtifactRefresh} title={t.planArtifactRefresh} data-testid="plan-artifact-refresh">
+          <Icon icon={RefreshCw} size="sm" className={loading ? 'spin' : undefined} />
+        </button>
+        {filePath && (
+          <button type="button" className="icon-btn" onClick={() => void openPlanArtifactExternally({ filePath, cwd, sessionId, owner }).catch((r) => setLinkError(`${t.planArtifactOpenError}：${stripIpcErrorPrefix(r)}`))} aria-label={t.planArtifactOpenFile} title={t.planArtifactOpenFile} data-testid="plan-artifact-open-file">
+            <Icon icon={ExternalLink} size="sm" />
           </button>
         )}
-        <button
-          type="button"
-          className="icon-btn icon-btn-sm"
-          onClick={() => void load(false)}
-          disabled={loading}
-          aria-label={t.planArtifactRefresh}
-          title={t.planArtifactRefresh}
-          data-testid="plan-artifact-refresh"
-        >
-          <Icon icon={RefreshCw} size="xs" className={loading ? 'spin' : ''} />
-        </button>
       </div>
-      <div className="plan-artifact-body" id={bodyId} hidden={!open}>
-        {error ? (
-          <p role="alert" className="plan-artifact-msg is-error">
-            {t.planArtifactUnavailable(error)}
-          </p>
-        ) : !snapshot ? (
-          <p className="plan-artifact-msg">{t.planArtifactLoading}</p>
-        ) : snapshot.status === 'missing' ? (
-          <p className="plan-artifact-msg" data-testid="plan-artifact-missing">
-            {t.planArtifactMissing}
-          </p>
-        ) : snapshot.status === 'unavailable' ? (
-          <p className="plan-artifact-msg is-warn" data-testid="plan-artifact-unavailable">
-            {t.planArtifactUnavailable(snapshot.reason ?? '')}
-          </p>
-        ) : (
-          <>
-            {updated && <p className="plan-artifact-meta">{t.planArtifactUpdated(updated)}</p>}
-            <PlanDocument text={snapshot.content ?? ''} onOpenLink={openLink} idPrefix={uid} docRef={docRef} />
-            {snapshot.truncated && <p className="plan-artifact-msg is-warn">{t.planArtifactTruncated}</p>}
-          </>
-        )}
-        {linkError && (
-          <p role="alert" className="plan-artifact-msg is-error">
-            {linkError}
-          </p>
-        )}
-      </div>
+      {updated && <p className="plan-drawer-meta">{t6.planUpdated(updated)}</p>}
+      {error ? (
+        <p role="alert" className="plan-drawer-msg is-error">{t.planArtifactUnavailable(error)}</p>
+      ) : content === null ? (
+        <p className="plan-drawer-msg">{t6.planLoadingSource}</p>
+      ) : (
+        <PlanDocument text={content} onOpenLink={openLink} idPrefix={uid} docRef={docRef} />
+      )}
+      {truncated && <p className="plan-drawer-msg is-warn">{t.planArtifactTruncated}</p>}
+      {linkError && <p role="alert" className="plan-drawer-msg is-error">{linkError}</p>}
     </section>
   );
+}
+
+export function formatPlanTime(iso?: string): string {
+  return iso && Number.isFinite(Date.parse(iso)) ? new Date(iso).toLocaleString() : '';
+}
+
+/** 外部打开计划文档本体（携带 `planArtifactOwner` 供主进程核验归属）。 */
+export async function openPlanArtifactExternally({
+  filePath,
+  cwd,
+  sessionId,
+  owner,
+}: {
+  filePath: string;
+  cwd?: string;
+  sessionId: string;
+  owner: PlanArtifactOwner;
+}): Promise<void> {
+  await getDesktopBridge().openLinkOrFileTarget({
+    target: filePath,
+    action: 'default-app',
+    ...(cwd ? { cwd } : {}),
+    sessionId,
+    planArtifactOwner: owner,
+  });
 }
 
 /* ---------------------------------------------------------------------------
@@ -346,6 +260,9 @@ export function PlanDocument({
   docRef?: React.Ref<HTMLDivElement>;
 }): React.ReactElement {
   const fallbackId = useId();
+  const { dict } = useI18n();
+  const calloutTitles = dict.ui.v035.calloutTitle;
+  const mermaidLabel = dict.ui.v036.planMermaid;
   const prefix = idPrefix ?? fallbackId;
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   const blocks: React.ReactNode[] = [];
@@ -360,10 +277,25 @@ export function PlanDocument({
       i += 1;
       while (i < lines.length && !lines[i].trim().startsWith(fence[1])) body.push(lines[i++]);
       i += 1;
-      blocks.push(
-        <pre key={k++} className="plan-doc-code" tabIndex={0}>
+      const lang = line.trim().slice(fence[1].length).trim().toLowerCase();
+      const pre = (
+        <pre className="plan-doc-code" tabIndex={0}>
           <code>{body.join('\n')}</code>
         </pre>
+      );
+      blocks.push(
+        lang === 'mermaid' ? (
+          <details key={k++} className="plan-doc-fold" data-testid="plan-doc-mermaid">
+            <summary>
+              <Icon icon={ChevronRight} size="xs" className="plan-doc-fold-chev" />
+              <Icon icon={Workflow} size="xs" />
+              <span>{mermaidLabel(countFenceLines(body))}</span>
+            </summary>
+            {pre}
+          </details>
+        ) : (
+          <React.Fragment key={k++}>{pre}</React.Fragment>
+        )
       );
       continue;
     }
@@ -395,8 +327,9 @@ export function PlanDocument({
             key={i}
             className={task ? `plan-doc-task${task[1] !== ' ' ? ' is-done' : ''}` : undefined}
             data-indent={indent ? Math.min(4, Math.floor(indent / 2)) : undefined}
+            style={indent ? ({ '--indent': Math.min(4, Math.floor(indent / 2)) } as React.CSSProperties) : undefined}
           >
-            {task && <span className="plan-doc-check" aria-hidden="true">{task[1] !== ' ' ? '☑' : '☐'}</span>}
+            {task && <Icon icon={task[1] !== ' ' ? CircleCheck : Circle} size="xs" className="plan-doc-check" />}
             {renderInline(task ? task[2] : raw, onOpenLink, `li${i}`)}
           </li>
         );
@@ -408,6 +341,20 @@ export function PlanDocument({
     if (/^\s*>/.test(line)) {
       const quote: string[] = [];
       while (i < lines.length && /^\s*>/.test(lines[i])) quote.push(lines[i++].replace(/^\s*>\s?/, ''));
+      const callout = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i.exec(quote[0] ?? '');
+      if (callout) {
+        const kind = callout[1].toLowerCase() as "note" | "tip" | "important" | "warning" | "caution";
+        blocks.push(
+          <div key={k++} className={`plan-doc-callout is-${kind}`} role="note" data-testid={`plan-doc-callout-${kind}`}>
+            <span className="plan-doc-callout-title">
+              <Icon icon={kind === 'warning' || kind === 'caution' ? TriangleAlert : Info} size="xs" />
+              {calloutTitles[kind]}
+            </span>
+            <p>{renderInline(quote.slice(1).join(' '), onOpenLink, `c${k}`)}</p>
+          </div>
+        );
+        continue;
+      }
       blocks.push(<blockquote key={k++}>{renderInline(quote.join(' '), onOpenLink, `q${k}`)}</blockquote>);
       continue;
     }
@@ -424,4 +371,17 @@ export function PlanDocument({
       {blocks}
     </div>
   );
+}
+
+/**
+ * @deprecated v0.3.6 兼容导出：旧单体面板已拆分为 `PlanTimeline`（四态 + 摘要）与 `PlanSourceDrawer`（按需原文）。
+ * 仅为旧调用方保留签名；正文只在用户打开「查看原文」抽屉后读取。
+ */
+export function PlanArtifactPanel(props: {
+  profileId: string;
+  sessionId: string;
+  cwd?: string;
+  onStatusChange?: (status: string) => void;
+}): React.ReactElement {
+  return <PlanTimeline profileId={props.profileId} sessionId={props.sessionId} cwd={props.cwd} plan={undefined} todos={[]} />;
 }

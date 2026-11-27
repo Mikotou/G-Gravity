@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, Cpu, FolderGit2, FolderOpen, GitBranch, Info, Network, Plus, RotateCw, X } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, Cpu, FolderOpen, GitBranch, Info, ListTodo, Network, Plus, RotateCw, X } from 'lucide-react';
 import {
   buildDiagnosticBanner,
   computeConversationTreeTotalCost,
@@ -41,7 +41,8 @@ import { buildForkControlMap } from '../lib/fork-controls';
 import { Composer } from './Composer';
 import { GuardianReviewingCard, InlineRequestView } from './InlineRequestView';
 import type { ReviseMessageInput } from '@shared';
-import { useAnnotationDraft, showAnnotationRanges } from '../lib/annotation-drafts';
+import { newAnnotationId, sameAnnotationAnchor, useAnnotationDraft, showAnnotationRanges, type AnnotationDraftItem } from '../lib/annotation-drafts';
+import { anchorFromRange } from '../lib/annotation-text';
 import { isQuestionDismissed, markQuestionDismissed } from '../lib/dismissed-questions';
 import { EditUserMessage } from './EditUserMessage';
 import { ImageSessionContext, ImageWorkspace } from './MessageImage';
@@ -52,8 +53,6 @@ import {
   TargetContextMenu,
   TurnNotationPins,
   type DetectedContextTarget,
-  type TextNotationItem,
-  type TextQuoteItem,
 } from './SelectionAnnotationTools';
 import { writtenQuestion } from '@shared';
 import { getDesktopBridge } from '../services/desktop-bridge';
@@ -64,6 +63,7 @@ import { ThinkingBlock } from './ThinkingBlock';
 import { AccountQuotaFooter } from './AccountQuotaView';
 import { PaneStatusChip, ToolActivityStream, TurnOutcomeBar, TurnSettledStrip } from './TurnActivity';
 import { isTurnUnconfirmed } from '../lib/turn-insights';
+import { currentPlanStep, latestTodoMessageId } from '../lib/plan-view';
 import { WorkingIndicator } from './WorkingIndicator';
 import { TurnDiagnosticCard, type DiagnosticHandlers } from './TurnDiagnosticCard';
 import { Icon } from './ui/Icon';
@@ -121,6 +121,8 @@ export interface SessionPaneProps {
   onOpenSwarmInspector: (sessionId: string) => void;
   onOpenContextInspector: (sessionId: string) => void;
   onInspectDiffFile: (sessionId: string, filePath: string) => void;
+  /** v0.3.6：正文 Plan chip 点击跳转 Plan 页签 */
+  onOpenPlanInspector?: (sessionId: string) => void;
   /** @deprecated v0.3.4：演示审批已移出生产界面 */
   onTriggerDemoApproval?: (sessionId: string) => void;
   /** Stage 2 Guardian 正在复核的请求（全部会话，窗格内按会话过滤） */
@@ -551,8 +553,13 @@ const MessageTurn = React.memo(function MessageTurn({
   sessionStatus,
   dismissedDiagnostics,
   suppressDiagnostic,
+  showPlanChip,
+  onOpenPlan,
 }: {
   message: ChatMessageItem;
+  /** v0.3.6：仅最新一条含待办的助手消息显示单行 Plan chip */
+  showPlanChip?: boolean;
+  onOpenPlan?: () => void;
   defaultThoughtTrack: ThoughtDisplayTrack;
   turnStartedAt?: string;
   latest?: boolean; editRequest?: number;
@@ -582,10 +589,10 @@ const MessageTurn = React.memo(function MessageTurn({
   if (message.role === 'user') {
     const body = (
       <div className="cc-user-prompt" data-testid={`user-msg-${message.id}`} data-message-id={message.id}>
-        <span className="cc-user-chevron">&gt;</span>
+        <span className="cc-user-chevron" data-annotation-skip="" aria-hidden="true">&gt;</span>
         <div className="cc-user-body" data-message-body="true">
           {message.references?.length ? (
-            <div className="cc-user-chips">
+            <div className="cc-user-chips" data-annotation-skip="">
               {message.references?.map((r) => (
                 <span key={`${r.kind}-${r.value}`} className="badge badge-accent badge-mono">
                   @{r.label}
@@ -723,31 +730,12 @@ const MessageTurn = React.memo(function MessageTurn({
           unconfirmed={unconfirmedTurn}
         />
       )}
-      {todos.length > 0 && (
-        <div className="cc-todos" data-testid={`inline-todos-${message.id}`}>
-          <div className="cc-todos-head">
-            <span className="cc-tool-dot status-completed">⏺</span>
-            <span>Update Todos</span>
-            <span className="cc-todos-progress" aria-hidden="true">
-              <span style={{ '--fill': doneTodos / todos.length } as React.CSSProperties} />
-            </span>
-            <span className="muted" style={{ fontWeight: 400 }}>
-              {doneTodos}/{todos.length}
-            </span>
-          </div>
-          {todos.map((td) => (
-            <div key={td.id} className={`cc-todo is-${td.status}`}>
-              <span className="cc-todo-box">
-                {td.status === 'completed' ? '☒' : td.status === 'in_progress' ? '◼' : '☐'}
-              </span>
-              <span>{td.content}</span>
-            </div>
-          ))}
-        </div>
+      {showPlanChip && todos.length > 0 && (
+        <PlanChip todos={todos} done={doneTodos} messageId={message.id} onOpen={onOpenPlan} />
       )}
       {(cleanContent || message.attachments?.length) ? (
         <div className="cc-text" data-message-body="true" data-testid={`assistant-body-${message.id}`}>
-          <span className={`cc-bullet ${message.isStreaming ? 'is-streaming' : ''}`}>⏺</span>
+          <span className={`cc-bullet ${message.isStreaming ? "is-streaming" : ""}`} data-annotation-skip="" aria-hidden="true">⏺</span>
           <Markdown text={cleanContent} attachments={message.attachments} streaming={message.isStreaming} />
         </div>
       ) : null}
@@ -814,19 +802,23 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
   const streamRef = useRef<HTMLDivElement | null>(null);
   const selectionRange = useRef<Range | null>(null);
   const stickToBottomRef = useRef(true);
-  const { quotes: sessionQuotes, notes: sessionNotations, update: updateDraft, takeSubmitted } =
+  const { items: annotationItems, update: updateDraft, takeSubmitted } =
     useAnnotationDraft(session?.profileId || 'default', session?.sessionId || '');
+  const [annotationFocus, setAnnotationFocus] = useState<{ id: string; seq: number; notice?: string } | null>(null);
   const [editRequest, setEditRequest] = useState({ id: '', seq: 0 });
   useLayoutEffect(() => {
-    if (streamRef.current) return showAnnotationRanges(streamRef.current, sessionNotations);
-  }, [messages, sessionNotations]);
+    if (streamRef.current) return showAnnotationRanges(streamRef.current, annotationItems);
+  }, [messages, annotationItems]);
   const [selectionBar, setSelectionBar] = useState<{
     x: number;
     y: number;
+    key: number;
     messageId: string;
     text: string;
     start?: number;
     anchorText?: string;
+    prefix?: string;
+    suffix?: string;
   } | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -880,23 +872,33 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
     setHasUnseen(false);
     setQuestionSendError(undefined);
     setStopping(false);
+    stoppingRef.current = false;
   }, [session?.sessionId]);
 
   // 「正在停止…」只持续到回合真正结束（会话离开生成 / 待审批 / 待回答状态）。
   const sessionStatus = session?.status;
   useEffect(() => {
-    if (sessionStatus !== 'streaming' && sessionStatus !== 'waiting_approval' && sessionStatus !== 'waiting_question') setStopping(false);
+    if (sessionStatus !== 'streaming' && sessionStatus !== 'waiting_approval' && sessionStatus !== 'waiting_question') {
+      setStopping(false);
+      stoppingRef.current = false;
+    }
   }, [sessionStatus]);
 
   const onCancelPromptProp = props.onCancelPrompt;
   /** 统一的停止入口：立即显示「正在停止…」，失败时恢复并把错误交给调用方。 */
+  // 取消请求在途时重复按 Esc / 点击停止不再重复发送（请求返回后仍可再次停止）
+  const stoppingRef = useRef(false);
   const requestStop = useCallback(async (sessionId: string) => {
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
     setStopping(true);
     try {
       await onCancelPromptProp(sessionId);
     } catch (err) {
       setStopping(false);
       throw err;
+    } finally {
+      stoppingRef.current = false;
     }
   }, [onCancelPromptProp]);
 
@@ -991,9 +993,12 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
     if (!isFocused || !followSessionId || !paneTurnActive || session?.readOnly) return;
     function onKey(e: KeyboardEvent): void {
       // macOS 输入法用 Esc 取消候选时同样派发 keydown（isComposing 或 keyCode 229），不能借此中断回合。
-      if (e.key !== 'Escape' || e.defaultPrevented || isImeComposing(e)) return;
+      if (e.key !== 'Escape' || e.repeat || e.defaultPrevented || isImeComposing(e)) return;
       if (document.querySelector('dialog[open], [aria-modal="true"], .popover, [role="menu"], .target-context-menu, .selection-floating-bar')) return;
       const target = e.target instanceof Element ? e.target : null;
+      // U5：仅当焦点位于本窗格内（或无焦点）时才中断；侧栏 / 检视器 / 另一窗格中的 Esc 绝不连带中止本窗格回合。
+      const paneEl = streamRef.current?.closest('.pane');
+      if (target && target !== document.body && paneEl && !paneEl.contains(target)) return;
       // 批注编辑、窗格会话切换下拉、拒绝反馈框等局部控件的 Esc 只取消自身，绝不连带中止运行中的回合。
       if (target?.closest('.composer-input, .question-bar, .message-editor, .turn-notation-edit-row, .pane-switch, .feedback-box')) return;
       // 任何表单控件（窗格内外，Composer 输入框由其自身处理）里的 Esc 都留给该控件。
@@ -1081,8 +1086,7 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
     if (!messageId) return;
 
     selectionRange.current = range?.cloneRange() || null;
-    const prefix = range?.cloneRange();
-    if (prefix && range) { prefix.selectNodeContents(bodyEl); prefix.setEnd(range.startContainer, range.startOffset); }
+    const anchor = range ? anchorFromRange(bodyEl, range) : null;
     let x = 'clientX' in e ? e.clientX : 120;
     let y = Math.max(16, ('clientY' in e ? e.clientY : 120) - 44);
     try {
@@ -1098,7 +1102,14 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
     }
 
     setContextMenu(null);
-    setSelectionBar({ x, y, messageId, text: selectedText, start: prefix?.toString().length, anchorText: range?.toString() });
+    setSelectionBar((prev) => ({
+      key: (prev?.key ?? 0) + 1,
+      x,
+      y,
+      messageId,
+      text: selectedText,
+      ...(anchor ? { start: anchor.start, anchorText: anchor.anchorText, prefix: anchor.prefix, suffix: anchor.suffix } : {}),
+    }));
   }
 
   function handleStreamContextMenu(e: React.MouseEvent<HTMLDivElement>): void {
@@ -1113,34 +1124,37 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
     });
   }
 
-  /** 引用按会话存放，并保留来源消息的 ID。加入引用后将焦点交给输入框，便于继续填写问题。 */
-  function addQuoteFromSelection(): void {
+  /**
+   * v0.3.6：引用与批注同一有序条目。主操作创建条目并聚焦该条自己的批注框；「仅引用」焦点回主输入框。
+   * 同锚点重复引用只聚焦已有条目并提示「已引用为 #n」。
+   */
+  function addAnnotationFromSelection(focusComment: boolean): void {
     if (!selectionBar || !session) return;
-    const item: TextQuoteItem = {
-      id: `qt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      messageId: selectionBar.messageId,
-      text: selectionBar.text,
-    };
-    updateDraft(d => ({ ...d, quotes: [...d.quotes, item] }));
+    const candidate = { messageId: selectionBar.messageId, excerpt: selectionBar.text, start: selectionBar.start };
+    const existingIndex = annotationItems.findIndex((item) => sameAnnotationAnchor(item, candidate));
     window.getSelection()?.removeAllRanges();
     setSelectionBar(null);
-    setComposerFocusSeq((n) => n + 1);
-  }
-
-  function addNotationFromSelection(comment: string): void {
-    if (!selectionBar || !session) return;
-    const item: TextNotationItem = {
-      id: `nt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    if (existingIndex >= 0) {
+      const existing = annotationItems[existingIndex];
+      setAnnotationFocus((prev) => ({ id: existing.id, seq: (prev?.seq ?? 0) + 1, notice: dict.ui.v036.annAlreadyQuoted(existingIndex + 1) }));
+      return;
+    }
+    const item: AnnotationDraftItem = {
+      id: newAnnotationId(),
       messageId: selectionBar.messageId,
-      selectedText: selectionBar.text,
+      excerpt: selectionBar.text,
+      comment: '',
       messageNumber: (props.messagePosition?.earlierVisibleCount || 0) + messages.filter(m => m.content && (m.role === 'user' || m.role === 'assistant')).findIndex(m => m.id === selectionBar.messageId) + 1,
-      start: selectionBar.start, anchorText: selectionBar.anchorText,
-      comment,
+      ...(selectionBar.start !== undefined ? { start: selectionBar.start } : {}),
+      ...(selectionBar.anchorText ? { anchorText: selectionBar.anchorText } : {}),
+      ...(selectionBar.prefix !== undefined ? { prefix: selectionBar.prefix } : {}),
+      ...(selectionBar.suffix !== undefined ? { suffix: selectionBar.suffix } : {}),
       createdAt: new Date().toISOString(),
     };
-    updateDraft(d => ({ ...d, notes: [...d.notes, item] }));
-    window.getSelection()?.removeAllRanges();
-    setSelectionBar(null);
+    if (!item.messageNumber || item.messageNumber < 1) delete item.messageNumber;
+    updateDraft(d => [...d, item]);
+    if (focusComment) setAnnotationFocus((prev) => ({ id: item.id, seq: (prev?.seq ?? 0) + 1 }));
+    else setComposerFocusSeq((n) => n + 1);
   }
 
   // 生成状态可能先于助手的首个分片抵达。只有末条消息还未显示流式回复时才额外展示等待状态。
@@ -1162,6 +1176,7 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
   const showWorking =
     session.status === 'streaming' && !(last && last.role === 'assistant' && last.isStreaming);
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
+  const latestTodoMessage = useMemo(() => latestTodoMessageId(messages), [messages]);
   const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user' && !m.sendFailed);
   const paneBusy = session.status === 'streaming' || session.status === 'waiting_approval' || stopping;
   const continueText = dict.ui.v031.continuePrompt;
@@ -1261,14 +1276,9 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
     >
       <span className="pane-activity-rail" aria-hidden="true"><span /></span>
       <header className="pane-header">
-        {/* T2：单栏时顶部标签已显示同一状态点，窗格头不再重复 */}
-        {layoutMode !== 'single' && <span className={`status-dot is-${sessionApprovals.length ? 'waiting_approval' : session.status}`} />}
-        <span className="pane-title truncate" title={session.title}>
+        {/* v0.3.6：窗格头只保留标题 + 1 个状态 chip（状态点与工作目录不再重复，目录见标题悬停提示） */}
+        <span className="pane-title truncate" title={session.cwd ? `${session.title}\n${session.cwd}` : session.title}>
           {session.title}
-        </span>
-        <span className="pane-sub truncate" title={session.cwd}>
-          <Icon icon={FolderGit2} size="xs" />
-          <span className="truncate">{folderName(session.cwd)}</span>
         </span>
         <span className="spacer" />
         <PaneStatusChip
@@ -1404,7 +1414,7 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
                 ? sessionApprovals.find((a) => a.requestId === msg.pendingApprovalId)
                 : undefined;
               if (linked) renderedApprovalIds.add(linked.requestId);
-              const turnNotations = sessionNotations.filter((n) => n.messageId === msg.id);
+              const turnNotations = annotationItems.filter((n) => n.messageId === msg.id);
               const forkControl = msg.role === 'user' ? forkControls.get(msg.id) ?? null : null;
               const turn = (
                 <ImageSessionContext.Provider value={session.sessionId}><ImageWorkspace.Provider value={session.cwd}><MessageTurn
@@ -1430,6 +1440,8 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
                   defaultThoughtTrack={defaultThoughtTrack}
                   turnStartedAt={turnStartById.get(msg.id)}
                   onInspectDiff={(fp) => onInspectDiffFile(session.sessionId, fp)}
+                  showPlanChip={msg.id === latestTodoMessage}
+                  onOpenPlan={props.onOpenPlanInspector ? () => props.onOpenPlanInspector?.(session.sessionId) : undefined}
                 /></ImageWorkspace.Provider></ImageSessionContext.Provider>
               );
               return (
@@ -1438,10 +1450,10 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
                   {turnNotations.length > 0 && (
                     <TurnNotationPins
                       items={turnNotations}
-                      allNotations={sessionNotations}
+                      allItems={annotationItems}
                       locale={locale}
-                      onUpdate={(id, comment) => updateDraft(d => ({ ...d, notes: d.notes.map(n => n.id === id ? { ...n, comment } : n) }))}
-                      onRemove={id => updateDraft(d => ({ ...d, notes: d.notes.filter(n => n.id !== id) }))}
+                      onUpdate={(id, comment) => updateDraft(d => d.map(n => n.id === id ? { ...n, comment } : n))}
+                      onRemove={id => updateDraft(d => d.filter(n => n.id !== id))}
                     />
                   )}
                   {linked && (
@@ -1502,12 +1514,13 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
 
       {selectionBar && (
         <SelectionFloatingBar
+          key={selectionBar.key}
           x={selectionBar.x}
           y={selectionBar.y}
           selectedText={selectionBar.text}
           locale={locale}
-          onQuote={addQuoteFromSelection}
-          onAddNotation={addNotationFromSelection}
+          onQuote={() => addAnnotationFromSelection(true)}
+          onQuoteOnly={() => addAnnotationFromSelection(false)}
           onDismiss={() => setSelectionBar(null)}
         />
       )}
@@ -1579,12 +1592,13 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
         treeCost={computeConversationTreeTotalCost(session.sessionId, conversationTree, telemetryDashboard)}
         externalReviewerTelemetry={telemetryDashboard.externalReviewer}
         autoFocus={isFocused && sessionApprovals.length === 0}
-        quotes={sessionQuotes}
-        notations={sessionNotations}
+        paneFocused={isFocused}
+        annotations={annotationItems}
+        annotationFocus={annotationFocus}
         focusTrigger={composerFocusSeq}
         onEditLast={lastUserId && props.onReviseMessage ? () => setEditRequest(e => ({ id: lastUserId!, seq: e.seq + 1 })) : undefined}
-        onRemoveQuote={id => updateDraft(d => ({ ...d, quotes: d.quotes.filter(q => q.id !== id) }))}
-        onRemoveNotation={id => updateDraft(d => ({ ...d, notes: d.notes.filter(n => n.id !== id) }))}
+        onUpdateAnnotation={(id, comment) => updateDraft(d => d.map(n => n.id === id ? { ...n, comment } : n))}
+        onRemoveAnnotation={id => updateDraft(d => d.filter(n => n.id !== id))}
         onSubmitAnnotations={takeSubmitted}
         onSendPrompt={async (input) => {
           await props.onSendPrompt(input);
@@ -1624,3 +1638,40 @@ function areSessionPanePropsEqual(prev: SessionPaneProps, next: SessionPaneProps
 
 /** F-08：浅比较 props，其它会话流式更新时本窗格跳过提交（父级已稳定回调与派生数组）。 */
 export const SessionPane = React.memo(SessionPaneImpl, areSessionPanePropsEqual);
+
+/** v0.3.6：正文单行 Plan chip（`Plan 3/7 · 正在：xxx →`），点击跳转 Plan 页签。 */
+function PlanChip({
+  todos,
+  done,
+  messageId,
+  onOpen,
+}: {
+  todos: NonNullable<ChatMessageItem['todos']>;
+  done: number;
+  messageId: string;
+  onOpen?: () => void;
+}): React.ReactElement {
+  const { dict } = useI18n();
+  const t6 = dict.ui.v036;
+  const current = currentPlanStep(todos)?.content;
+  const content = (
+    <>
+      <Icon icon={ListTodo} size="xs" />
+      <span className="plan-chip-count">{t6.planChip(done, todos.length)}</span>
+      <span className="plan-chip-bar" aria-hidden="true">
+        <span style={{ '--fill': todos.length ? done / todos.length : 0 } as React.CSSProperties} />
+      </span>
+      {current && <span className="plan-chip-now truncate">{t6.planChipNow(current)}</span>}
+      {onOpen && <Icon icon={ArrowRight} size="xs" />}
+    </>
+  );
+  return onOpen ? (
+    <button type="button" className="plan-chip" onClick={onOpen} title={t6.planChipOpen} aria-label={`${t6.planChip(done, todos.length)}${current ? ` · ${t6.planChipNow(current)}` : ''} · ${t6.planChipOpen}`} data-testid={`plan-chip-${messageId}`}>
+      {content}
+    </button>
+  ) : (
+    <div className="plan-chip" data-testid={`plan-chip-${messageId}`}>
+      {content}
+    </div>
+  );
+}

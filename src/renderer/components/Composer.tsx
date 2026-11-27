@@ -43,20 +43,20 @@ import { formatActionError } from '../i18n/locales';
 import { getDesktopBridge, isUsingNativeDesktopBridge } from '../services/desktop-bridge';
 import { useWorkspaceWriters, type WorkspaceWriters } from '../lib/workspace-writers';
 import { MessageImage } from './MessageImage';
-import { ContextStatusBar, formatTokenShort, formatUsd } from './ContextStatusBar';
+import { ContextStatusBar } from './ContextStatusBar';
 import { AccountQuotaFooter } from './AccountQuotaView';
 import { ResizeHandle } from './ResizeHandle';
-import {
-  type TextNotationItem,
-  type TextQuoteItem,
-} from './SelectionAnnotationTools';
+import { setActiveAnnotation, toWireAnnotations, type AnnotationDraftItem } from '../lib/annotation-drafts';
 
 import { useComposerDraft, type DraftAttachment } from '../lib/composer-draft';
 import { isImeComposing } from '../lib/platform-keys';
 import { Icon } from './ui/Icon';
+import { VoiceControls } from './VoiceControls';
+import { useVoiceCapture } from '../hooks/useVoiceCapture';
 import { EXECUTION_MODE_ICONS } from './ui/mode-icons';
 
 type Reference = { kind: 'file' | 'session'; label: string; value: string };
+const EMPTY_ANNOTATIONS: AnnotationDraftItem[] = [];
 
 /**
  * 已在本次运行中确认过 Turbo 风险提示的会话。仅保存在内存中：重启应用后首次切换会再次提示，
@@ -82,12 +82,16 @@ export interface ComposerProps {
   /** @deprecated v0.3.4：演示审批已移出生产界面（仅测试夹具可直接调用 fallback bridge），保留可选签名兼容调用方 */
   canTriggerDemoApproval?: boolean;
   autoFocus?: boolean;
-  quotes?: TextQuoteItem[];
-  notations?: TextNotationItem[];
+  /** v0.3.6：所在窗格是否为焦点窗格（F5 听写快捷键只作用于焦点窗格） */
+  paneFocused?: boolean;
+  /** v0.3.6：单一有序引用/批注条目 */
+  annotations?: AnnotationDraftItem[];
+  /** 聚焦某条目的批注框（引用后或重复引用时） */
+  annotationFocus?: { id: string; seq: number; notice?: string } | null;
   focusTrigger?: number;
-  onRemoveQuote?: (id: string) => void;
-  onRemoveNotation?: (id: string) => void;
-  onSubmitAnnotations?: (quotes: TextQuoteItem[], notations: TextNotationItem[]) => () => void;
+  onUpdateAnnotation?: (id: string, comment: string) => void;
+  onRemoveAnnotation?: (id: string) => void;
+  onSubmitAnnotations?: (items: AnnotationDraftItem[]) => () => void;
   onEditLast?: () => void;
   onSendPrompt: (input: SendPromptInput) => Promise<void>;
   onCancelPrompt: (sessionId: string) => Promise<void>;
@@ -248,11 +252,12 @@ export function Composer({
   treeCost,
   externalReviewerTelemetry,
   autoFocus,
-  quotes = [],
-  notations = [],
+  paneFocused,
+  annotations: annotationItems = EMPTY_ANNOTATIONS,
+  annotationFocus,
   focusTrigger = 0,
-  onRemoveQuote,
-  onRemoveNotation,
+  onUpdateAnnotation,
+  onRemoveAnnotation,
   onSubmitAnnotations,
   onEditLast,
   onSendPrompt,
@@ -284,8 +289,6 @@ export function Composer({
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [turboConfirmOpen, setTurboConfirmOpen] = useState(false);
   const reviewerConnected = isExternalReviewerConnected(approvalConfig.externalReviewer);
-  const extCum = externalReviewerTelemetry?.cumulativeAllTime;
-  const extSess = externalReviewerTelemetry?.bySession?.[session.sessionId];
   const [inputMinHeight, setInputMinHeight] = useState(readComposerMinHeight);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const anyFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -293,6 +296,7 @@ export function Composer({
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const modeMenuRef = useRef<HTMLDivElement | null>(null);
   const ui = dict.ui;
+  const t6 = ui.v036;
 
   const isStreaming = session.status === 'streaming';
   const turnActive = isStreaming || session.status === 'waiting_approval';
@@ -330,6 +334,36 @@ export function Composer({
       textareaRef.current?.focus();
     }
   }, [focusTrigger]);
+
+  // v0.3.6：合规语音听写（F5 / /voice / /record / 麦克风按钮）；停录只保留文本，绝不自动发送
+  const voice = useVoiceCapture({ profileId: session.profileId || 'default', sessionId: session.sessionId, textareaRef });
+  const voiceToggleRef = useRef(voice.toggle);
+  voiceToggleRef.current = voice.toggle;
+  useEffect(() => {
+    if (!paneFocused) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'F5' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat || isImeComposing(e)) return;
+      if (document.querySelector('dialog[open], [aria-modal="true"]')) return;
+      e.preventDefault();
+      voiceToggleRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [paneFocused]);
+
+  // v0.3.6：引用后聚焦该条自己的批注框；重复引用时提示「已引用为 #n」
+  const annotationInputs = useRef(new Map<string, HTMLTextAreaElement>());
+  const [annotationNotice, setAnnotationNotice] = useState('');
+  useEffect(() => {
+    if (!annotationFocus) return;
+    const el = annotationInputs.current.get(annotationFocus.id);
+    el?.focus();
+    el?.scrollIntoView?.({ block: 'nearest' });
+    setAnnotationNotice(annotationFocus.notice ?? '');
+    if (!annotationFocus.notice) return;
+    const timer = window.setTimeout(() => setAnnotationNotice(''), 2400);
+    return () => window.clearTimeout(timer);
+  }, [annotationFocus]);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -559,14 +593,15 @@ export function Composer({
     void addFiles(Array.from(e.dataTransfer.files));
   }
 
-  const hasQuotesOrNotations = quotes.length > 0 || notations.length > 0;
+  const hasQuotesOrNotations = annotationItems.length > 0;
   const [runningEnterNotice, setRunningEnterNotice] = useState(false);
 
   useEffect(() => {
     if (!turnActive) setRunningEnterNotice(false);
   }, [turnActive]);
 
-  const sendLabel = notations.length ? ui.v035.composerSendAnnotations(notations.length) : dict.sendMessageBtn;
+  const compactingRef = useRef(false);
+  const sendLabel = annotationItems.length ? ui.v035.composerSendAnnotations(annotationItems.length) : dict.sendMessageBtn;
   async function submit(): Promise<void> {
     const text = draft.trim();
     if ((!text && attachments.length === 0 && !hasQuotesOrNotations) || isSending() || turnActive) return;
@@ -574,12 +609,25 @@ export function Composer({
 
     // 独立输入的 /compact 和 /plan 走各自的操作入口。带有引用摘录或批注时，草稿会与它们一起构造成消息。
     if (text === '/compact' && !hasQuotesOrNotations) {
+      // B12：压缩进行中重复回车 / 双击发送只触发一次；失败时恢复原指令
+      if (compactingRef.current) return;
+      compactingRef.current = true;
       setDraft('');
+      setSending(true);
       try {
         await onCompactContext(session.sessionId);
       } catch (err) {
+        setDraft((current) => current || text);
         reportError(err);
+      } finally {
+        compactingRef.current = false;
+        setSending(false);
       }
+      return;
+    }
+    if ((text === '/voice' || text === '/record') && !hasQuotesOrNotations) {
+      setDraft('');
+      voice.toggle();
       return;
     }
     if (text === '/plan' && !hasQuotesOrNotations) {
@@ -591,13 +639,9 @@ export function Composer({
     const prevDraft = draft;
     const prevRefs = [...references];
     const prevAtts = [...attachments];
-    const prevQuotes = [...quotes];
-    const prevNotations = [...notations];
+    const prevAnnotations = [...annotationItems];
     const hasImage = prevAtts.some((a) => Boolean(a.previewUrl));
-    const annotations = [
-      ...prevQuotes.map(q => ({ messageId: q.messageId, excerpt: q.text })),
-      ...prevNotations.map(n => ({ messageId: n.messageId, messageNumber: n.messageNumber, excerpt: n.selectedText, comment: n.comment })),
-    ];
+    const annotations = toWireAnnotations(prevAnnotations);
     const visibleText = text || (annotations.length ? '' : `[${hasImage ? dict.pastedImageBadge : dict.attachedFileBadge}]`);
 
     // 先清空当前输入以反馈发送状态。如果发送失败，下方 catch 用快照还原正文、文件或会话引用以及附件。
@@ -605,7 +649,7 @@ export function Composer({
     setReferences([]);
     setAttachments([]);
     setSending(true);
-    const restoreAnnotations = onSubmitAnnotations?.(prevQuotes, prevNotations);
+    const restoreAnnotations = onSubmitAnnotations?.(prevAnnotations);
     try {
       await onSendPrompt({
         sessionId: session.sessionId,
@@ -658,6 +702,20 @@ export function Composer({
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
     if (isImeComposing(e)) return;
+    if (voice.phase !== 'idle') {
+      // 听写中：Esc 仅回滚本次未编辑的听写（不中断 AI 生成）；Enter 停录保留文本，绝不发送
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        voice.abort();
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        voice.stop();
+        return;
+      }
+    }
     if (e.key === 'ArrowUp' && onEditLast && !draft && !menuItems.length && !references.length && !attachments.length &&
         !hasQuotesOrNotations && !sending && !turnActive &&
         !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
@@ -823,56 +881,78 @@ export function Composer({
             onCommit={(v) => { setInputMinHeight(v); saveComposerMinHeight(v, workspaceWriters); }}
           />
           {hasQuotesOrNotations && (
-            <div className="composer-annotations-tray" data-testid={`composer-annotations-${session.sessionId}`}>
-              {quotes.map((q) => (
-                <div key={q.id} className="composer-quote-pill" data-testid={`composer-quote-${q.id}`}>
-                  <Icon icon={Quote} size="xs" className="composer-quote-icon" />
-                  <span className="truncate" title={q.text}>
-                    {q.text.replace(/\s+/g, ' ')}
-                  </span>
-                  {onRemoveQuote && (
-                    <button
-                      type="button"
-                      className="icon-btn icon-btn-sm"
-                      aria-label={dict.ui.copy.removeQuote}
-                      onClick={() => onRemoveQuote(q.id)}
-                    >
-                      <Icon icon={X} size="xs" />
-                    </button>
-                  )}
-                </div>
+            <ol className="composer-annotations-tray" aria-label={t6.annTrayLabel(annotationItems.length)} data-testid={`composer-annotations-${session.sessionId}`}>
+              {annotationItems.map((item, idx) => (
+                <li
+                  key={item.id}
+                  className="composer-annotation"
+                  data-testid={`composer-annotation-${item.id}`}
+                  onMouseEnter={() => setActiveAnnotation(item.id)}
+                  onMouseLeave={() => setActiveAnnotation(null)}
+                >
+                  <div className="composer-annotation-head">
+                    <span className="composer-notation-idx">#{idx + 1}</span>
+                    <span className="composer-notation-snippet truncate" title={item.excerpt}>
+                      {item.excerpt.replace(/\s+/g, ' ')}
+                    </span>
+                    {onRemoveAnnotation && (
+                      <button
+                        type="button"
+                        className="icon-btn icon-btn-sm"
+                        aria-label={t6.annRemove(idx + 1)}
+                        title={t6.annRemove(idx + 1)}
+                        onClick={() => {
+                          onRemoveAnnotation(item.id);
+                          setActiveAnnotation(null);
+                          textareaRef.current?.focus();
+                        }}
+                        data-testid={`composer-annotation-remove-${item.id}`}
+                      >
+                        <Icon icon={X} size="xs" />
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    ref={(el) => {
+                      if (el) annotationInputs.current.set(item.id, el);
+                      else annotationInputs.current.delete(item.id);
+                    }}
+                    className="composer-annotation-input"
+                    rows={1}
+                    value={item.comment}
+                    placeholder={t6.annCommentPlaceholder}
+                    aria-label={t6.annCommentLabel(idx + 1)}
+                    onChange={(e) => onUpdateAnnotation?.(item.id, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (isImeComposing(e)) return;
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        textareaRef.current?.focus();
+                      } else if (e.key === 'Escape') {
+                        // 仅回主输入框：阻止冒泡，绝不中断正在生成的回合
+                        e.preventDefault();
+                        e.stopPropagation();
+                        textareaRef.current?.focus();
+                      }
+                    }}
+                    data-testid={`composer-annotation-comment-${item.id}`}
+                  />
+                </li>
               ))}
-              {notations.map((nt, idx) => (
-                <div key={nt.id} className="composer-notation-pill" data-testid={`composer-notation-${nt.id}`}>
-                  <span className="composer-notation-idx">#{idx + 1}</span>
-                  <Icon icon={MessageSquarePlus} size="xs" className="composer-quote-icon" />
-                  <span className="composer-notation-snippet truncate" title={nt.selectedText}>
-                    「{nt.selectedText.replace(/\s+/g, ' ')}」
-                  </span>
-                  <span className="muted">→</span>
-                  <span className="composer-notation-comment truncate" title={nt.comment}>
-                    {nt.comment}
-                  </span>
-                  {onRemoveNotation && (
-                    <button
-                      type="button"
-                      className="icon-btn icon-btn-sm"
-                      aria-label={dict.ui.copy.removeNotation}
-                      onClick={() => onRemoveNotation(nt.id)}
-                    >
-                      <Icon icon={X} size="xs" />
-                    </button>
-                  )}
-                </div>
-              ))}
+            </ol>
+          )}
+          {annotationNotice && (
+            <div className="composer-annotation-notice" role="status" data-testid="composer-annotation-notice">
+              {annotationNotice}
             </div>
           )}
+          {hasQuotesOrNotations && <div className="composer-annotation-divider" aria-hidden="true"><span>{t6.annSupplement}</span></div>}
 
           {attachments.some(a => a.previewUrl) && <div className="composer-image-tray" data-testid="composer-image-tray">
             {attachments.filter(a => a.previewUrl).map(att => <figure key={att.id}>
               <MessageImage source={att.previewUrl!} alt={att.name} />
               <button type="button" className="icon-btn composer-image-remove" aria-label={dict.removeAttachmentLabel + ' ' + att.name}
-                onClick={() => setAttachments(items => items.filter(item => item.id !== att.id))}><Icon icon={X} size="sm" /></button>
+                onClick={() => setAttachments(items => items.filter(item => item.id !== att.id))}><Icon icon={X} size="xs" /></button>
               <figcaption title={att.name}>{att.name}</figcaption>
             </figure>)}
           </div>}
@@ -913,7 +993,7 @@ export function Composer({
             ref={textareaRef}
             className="composer-input"
             rows={1}
-            placeholder={stopping ? ui.v031.stoppingLabel : turnActive ? `${dict.composerPlaceholderBusy}  ·  ${ui.interruptHint}` : dict.composerPlaceholder}
+            placeholder={stopping ? ui.v031.stoppingLabel : turnActive ? `${dict.composerPlaceholderBusy}  ·  ${ui.interruptHint}` : hasQuotesOrNotations ? t6.annSupplementPlaceholder : dict.composerPlaceholder}
             value={draft}
             onChange={(e) => {
               setDraft(e.target.value);
@@ -1207,23 +1287,6 @@ export function Composer({
                         {reviewerConnected ? ui.reviewerUsageLive : ui.reviewerUsageOff}
                       </span>
                     </div>
-                    <div className="approval-usage-row">
-                      <span className="muted">{ui.reviewerUsageSession}</span>
-                      <span className="mono">
-                        {extSess ? `${extSess.callCount}× · ${formatTokenShort(extSess.totalTokens)} · ${formatUsd(extSess.totalCostUsd)}` : '0× · $0.00'}
-                      </span>
-                    </div>
-                    <div
-                      className="approval-usage-row"
-                      title={extCum && extCum.providerCount > 1 ? ui.reviewerUsageCombinedTitle(extCum.providerCount) : undefined}
-                    >
-                      <span className="muted">{ui.reviewerUsageAllTime(extCum?.providerCount ?? 0)}</span>
-                      <span className="mono approval-usage-total">
-                        {extCum && extCum.callCount > 0
-                          ? `${extCum.callCount}× · ${formatTokenShort(extCum.totalTokens)} · ${formatUsd(extCum.totalCostUsd)}`
-                          : '0× · $0.00'}
-                      </span>
-                    </div>
                     {onOpenReviewerStats && (
                       <button
                         type="button"
@@ -1280,16 +1343,13 @@ export function Composer({
                 if (files.length) void addFiles(files);
               }}
             />
-            <button
-              type="button"
-              className="icon-btn attach-btn"
-              title={`${dict.attachFileLabel} / ${dict.attachImageLabel}`}
-              aria-label={dict.attachFileLabel}
-              onClick={() => anyFileInputRef.current?.click()}
-              data-testid={`attach-file-btn-${session.sessionId}`}
-            >
-              <Icon icon={Paperclip} size="md" />
-            </button>
+            <VoiceControls
+              sessionId={session.sessionId}
+              voice={voice}
+              onAttach={() => anyFileInputRef.current?.click()}
+              attachLabel={dict.attachFileLabel}
+              attachTitle={`${dict.attachFileLabel} / ${dict.attachImageLabel}`}
+            />
 
             <div className="menu-anchor" ref={modelMenuRef}>
               <button
@@ -1383,7 +1443,7 @@ export function Composer({
                 onClick={() => void submit()}
                 data-testid={`send-prompt-btn-${session.sessionId}`}
               >
-                <Icon icon={ArrowUp} size="md" />{notations.length > 0 && <span>{notations.length}</span>}
+                <Icon icon={ArrowUp} size="md" />{annotationItems.length > 0 && <span>{annotationItems.length}</span>}
               </button>
             )}
           </div>
