@@ -14,18 +14,19 @@ if [ "$1" = "--inside-pty" ]; then
     while kill -0 "$GRAVITY_QUOTA_SUPERVISOR" 2>/dev/null; do /bin/sleep 0.2; done
     trap '' TERM
     # SIGKILL bypasses the supervisor's EXIT trap, even during the start handshake.
-    # Remove only the named artifacts of this particular mktemp control directory.
+    # Terminate the PTY process group before cleaning this mktemp control directory.
+    kill -s TERM -- "-$group" 2>/dev/null || :
+    /bin/sleep 0.5
+    kill -s KILL -- "-$group" 2>/dev/null || :
     case "$GRAVITY_QUOTA_CONTROL" in
       "$GRAVITY_QUOTA_CWD"/pty.????????)
         for name in feed recorder leader start finished reading.json; do
           /bin/rm -f "$GRAVITY_QUOTA_CONTROL/$name"
         done
+        /bin/rm -f "$GRAVITY_QUOTA_CONTROL"/reading.json.*.tmp 2>/dev/null || :
         /bin/rmdir "$GRAVITY_QUOTA_CONTROL" 2>/dev/null || :
         ;;
     esac
-    kill -s TERM -- "-$group" 2>/dev/null || :
-    /bin/sleep 0.5
-    kill -s KILL -- "-$group" 2>/dev/null || :
   ) </dev/null >/dev/null 2>&1 &
   while [ ! -f "$GRAVITY_QUOTA_CONTROL/start" ]; do
     kill -0 "$GRAVITY_QUOTA_SUPERVISOR" 2>/dev/null || exit 1

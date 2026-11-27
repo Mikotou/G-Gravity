@@ -164,7 +164,18 @@ function ConfirmDeleteButton({
     if (!asking) return;
     confirmRef.current?.focus();
     const timer = window.setTimeout(() => setAsking(false), 5000);
-    return () => window.clearTimeout(timer);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isImeComposing(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setAsking(false);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('keydown', onKey, true);
+    };
   }, [asking]);
   if (!asking) {
     return (
@@ -177,7 +188,7 @@ function ConfirmDeleteButton({
   return (
     <span className="inline-confirm" role="group" aria-label={t6.confirmDeleteAsk(name)}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') {
+        if (e.key === 'Escape' && !isImeComposing(e)) {
           e.preventDefault();
           e.stopPropagation();
           setAsking(false);

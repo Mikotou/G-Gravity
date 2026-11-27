@@ -1833,7 +1833,7 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
       if (isImeComposing(e)) return;
       if (e.key === 'Escape') {
         // QA1-FE-14 (B3)：行内二次确认打开时将 Esc 留给 ConfirmDeleteButton 收回，不关闭整个设置弹窗
-        if (document.activeElement?.closest('.inline-confirm')) return;
+        if (document.querySelector('.inline-confirm')) return;
         e.preventDefault();
         // 确认条打开时再次 Esc 表示「继续编辑」。
         if (pendingRef.current) setPendingSection(null);

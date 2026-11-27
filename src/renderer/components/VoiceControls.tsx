@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, Mic, MicOff, Paperclip, Plus } from 'lucide-react';
 import { useI18n } from '../i18n/I18nContext';
 import { formatVoiceElapsed, type UseVoiceCaptureResult } from '../hooks/useVoiceCapture';
+import { isImeComposing } from '../lib/platform-keys';
 import { Icon } from './ui/Icon';
 
 /**
@@ -34,8 +35,19 @@ export function VoiceControls({
     const close = (e: PointerEvent) => {
       if (!moreRef.current?.contains(e.target as Node)) setMoreOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isImeComposing(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setMoreOpen(false);
+      }
+    };
     document.addEventListener('pointerdown', close);
-    return () => document.removeEventListener('pointerdown', close);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      window.removeEventListener('keydown', onKey, true);
+    };
   }, [moreOpen]);
 
   const status =

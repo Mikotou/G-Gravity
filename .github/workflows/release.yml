@@ -138,6 +138,8 @@ jobs:
           > - **Windows**：若 SmartScreen 弹窗拦截，点击「更多信息」→「仍要运行」。
           > - **macOS**：首次打开若提示“已损坏”或“无法验证开发者”，拖入「应用程序」后在终端执行一次：\`xattr -cr /Applications/Gravity.app\` 即可正常打开。
           > - **前置条件**：请先在本机安装并登录官方原版 \`agy\` CLI（终端运行 \`agy --version\` 正常可用）。
+          EOF
+          cat <<'EOF' >> release-notes.md
 
           ### 本版亮点（v0.3.6）
           - **100% 合规语音听写（本地离线 Whisper WASM + 可选外部 API）**：支持 `F5`（macOS `fn F5`）、`/voice`、`/record` 与底栏麦克风按钮启动，随包内嵌经 SHA-256 强校验的离线多语模型 `ggml-base-q5_1.bin` 与主进程 `worker_threads` 纯 WASM 引擎（下载即断网可用，渲染层保持 `script-src 'self'` 零放宽）；支持 OpenAI 兼容与 Gemini Developer API 外部转写（独立 `SecretVault` 加密、独立 429/403 熔断与独立时长账本）；双权限 Handler 静息恒拒绝、仅有效短时音频租约放行纯音频；`Enter`/`F5`/3:30 停录保留绝不自动发送，`Esc` 精确回滚未编辑听写区间。

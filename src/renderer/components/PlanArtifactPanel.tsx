@@ -6,6 +6,7 @@ import { PlanTimeline } from './PlanTimeline';
 import { useI18n } from '../i18n/I18nContext';
 import { stripIpcErrorPrefix } from '../i18n/locales';
 import { scrollBehavior } from '../lib/motion';
+import { isImeComposing } from '../lib/platform-keys';
 import { getDesktopBridge } from '../services/desktop-bridge';
 import { Icon } from './ui/Icon';
 
@@ -102,6 +103,18 @@ export function PlanSourceDrawer({
     closeRef.current?.focus();
   }, []);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || isImeComposing(e)) return;
+      if (document.querySelector('dialog[open], [aria-modal="true"], .target-context-menu, .selection-floating-bar')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+
   const openLink = useCallback(
     async (target: string) => {
       setLinkError('');
@@ -146,12 +159,6 @@ export function PlanSourceDrawer({
       className="plan-drawer"
       data-testid="plan-source-drawer"
       aria-label={t6.planDrawerTitle}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape' && !e.nativeEvent.isComposing) {
-          e.stopPropagation();
-          onClose();
-        }
-      }}
     >
       <div className="plan-drawer-head">
         <button ref={closeRef} type="button" className="icon-btn" onClick={onClose} aria-label={t6.planDrawerClose} title={t6.planDrawerClose} data-testid="plan-source-close">

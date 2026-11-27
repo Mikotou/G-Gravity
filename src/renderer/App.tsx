@@ -96,10 +96,11 @@ const SPLIT_CYCLE: readonly WorkspaceSplitMode[] = ['single', 'split-2'];
 /** 窄窗双栏保护阈值：视口宽度不超过该值（如 960×640 最小窗口）且处于 split-2 时自动收起停靠检视器（FE-4）。 */
 const NARROW_SPLIT_MAX_VIEWPORT = 1000;
 /**
- * macOS hiddenInset 交通灯（trafficLightPosition x:14）在屏幕像素中占据约 14–66px，不随页面 zoomFactor 缩放。
- * 与 --win-controls-w 一致，按缩放倍率换算成 CSS 像素，保证 80%–160% 缩放下抽屉标题与顶栏首个控件都在交通灯右侧。
+ * macOS hiddenInset 交通灯起点随缩放定位在 x = 14 * scale pt（即恒定 14 CSS px），
+ * 三枚原生按钮自身占 ~54pt 固定物理宽度（合 54 / scale CSS px），加 10pt 净空得 14 + 64 / scale CSS px。
+ * 100% 为 78px、80% 为 94px、160% 为 54px（86.4pt，相对 ~76pt 绿灯右缘留出 >10pt 安全净空）。
  */
-const MAC_TRAFFIC_LIGHT_SAFE_W = 78;
+const macTrafficSafeWidth = (scale: number): number => Math.round(14 + 64 / scale);
 
 type ToastTone = 'info' | 'success' | 'error';
 
@@ -335,7 +336,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile, getPro
   useEffect(() => {
     const scale = clampUiScale(preferences.uiScale);
     document.documentElement.style.setProperty('--win-controls-w', `${Math.round(138 / scale)}px`);
-    document.documentElement.style.setProperty('--mac-traffic-w', `${Math.round(MAC_TRAFFIC_LIGHT_SAFE_W / scale)}px`);
+    document.documentElement.style.setProperty('--mac-traffic-w', `${macTrafficSafeWidth(scale)}px`);
   }, [preferences.uiScale]);
 
   const scrollMemoryRef = useRef<Record<string, number>>({});
@@ -439,7 +440,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile, getPro
           boot.windowChrome === 'mac-inset' || /Macintosh|Mac OS X/i.test(navigator.userAgent) ? 'darwin' : 'other';
         const initScale = clampUiScale(boot.preferences.uiScale);
         document.documentElement.style.setProperty('--win-controls-w', `${Math.round(138 / initScale)}px`);
-        document.documentElement.style.setProperty('--mac-traffic-w', `${Math.round(MAC_TRAFFIC_LIGHT_SAFE_W / initScale)}px`);
+        document.documentElement.style.setProperty('--mac-traffic-w', `${macTrafficSafeWidth(initScale)}px`);
         // 将主进程持久化偏好镜像回 localStorage，避免便携版每次更新解包到新临时路径时丢失界面习惯。
         try {
           if (boot.preferences.thoughtExpandedByDefault !== undefined) {

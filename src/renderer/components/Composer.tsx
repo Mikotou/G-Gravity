@@ -767,7 +767,7 @@ export function Composer({
       }
     }
     // 中文输入法正在组词时由输入法接管回车。普通回车先确认候选，候选已是完整命令时才直接提交。
-    if (e.key === 'Escape' && turnActive && !approvalMenuOpen && !modelMenuOpen && !modeMenuOpen) {
+    if (e.key === 'Escape' && !isImeComposing(e) && turnActive && !approvalMenuOpen && !modelMenuOpen && !modeMenuOpen) {
       // Claude Code 式中断：生成中按 Esc 停止当前回合，草稿保持不变。
       e.preventDefault();
       setRunningEnterNotice(false);

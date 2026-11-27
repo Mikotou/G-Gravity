@@ -78,7 +78,13 @@ export function syncWindowChrome(prefs: ClientPreferences): void {
   const target = getLiveWindow();
   if (!target) return;
   const appearance = resolveWindowAppearance(prefs);
-  if (process.platform === 'darwin') target.setWindowButtonPosition(macButtonPosition(prefs.uiScale));
+  if (process.platform === 'darwin') {
+    try {
+      target.setWindowButtonPosition(macButtonPosition(prefs.uiScale));
+    } catch {
+      /* 全屏或窗口状态不支持动态调整交通灯位置时忽略 */
+    }
+  }
   target.setBackgroundColor(appearance.backgroundColor);
   if (process.platform === 'win32') {
     try {

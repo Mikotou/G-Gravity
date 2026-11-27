@@ -76,6 +76,17 @@ export function VoiceSettingsCard({
   const [busy, setBusy] = useState(false);
   const cardRef = useRef<HTMLElement | null>(null);
   const inflight = useRef(false);
+  const micTestCtrlRef = useRef<VoiceCaptureController | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      micTestCtrlRef.current?.dispose();
+      micTestCtrlRef.current = null;
+    };
+  }, []);
 
   const dirty =
     savedExtRef.current !== null &&
@@ -157,6 +168,14 @@ export function VoiceSettingsCard({
       // QA1-FE-10：3 秒试录仅做本机采音验证（0 外联 / 0 voiceFinish），按实际采集时长与峰值给出真实反馈
       const outcome = await new Promise<{ text: string; durationMs: number; peak: number }>((resolve, reject) => {
         let out = '';
+        let settled = false;
+        const finish = (controller: VoiceCaptureController, fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          if (micTestCtrlRef.current === controller) micTestCtrlRef.current = null;
+          controller.dispose();
+          fn();
+        };
         const controller = new VoiceCaptureController(
           bridge,
           {
@@ -165,23 +184,21 @@ export function VoiceSettingsCard({
             },
             onSettled: (_id, event) => {
               const peak = controller.peakAmplitude;
-              controller.dispose();
-              resolve({ text: (event.text || out).trim(), durationMs: event.durationMs, peak });
+              finish(controller, () => resolve({ text: (event.text || out).trim(), durationMs: event.durationMs, peak }));
             },
             onAborted: () => {
               const peak = controller.peakAmplitude;
-              controller.dispose();
-              resolve({ text: out.trim(), durationMs: 0, peak });
+              finish(controller, () => resolve({ text: out.trim(), durationMs: 0, peak }));
             },
             onNotice: (kind, message) => {
               if (kind === 'error') {
-                controller.dispose();
-                reject(new Error(message || 'error'));
+                finish(controller, () => reject(new Error(message || 'error')));
               }
             },
           },
           { workletUrl }
         );
+        micTestCtrlRef.current = controller;
         void controller
           .start({
             owner: { profileId },
@@ -191,9 +208,14 @@ export function VoiceSettingsCard({
             ...(state?.config.locale ? { locale: state.config.locale } : {}),
           })
           .then((ok) => {
-            if (!ok && controller.phase === 'idle') resolve({ text: out.trim(), durationMs: 0, peak: 0 });
+            if (!ok && controller.phase === 'idle') {
+              finish(controller, () => resolve({ text: out.trim(), durationMs: 0, peak: 0 }));
+            }
           });
-      }).finally(() => setTesting(false));
+      }).finally(() => {
+        if (mountedRef.current) setTesting(false);
+      });
+      if (!mountedRef.current) return;
       if (outcome.text) {
         setTestResult(t.voiceMicTestDone(outcome.text));
       } else if (outcome.durationMs > 0 || outcome.peak > 0) {
@@ -261,7 +283,7 @@ export function VoiceSettingsCard({
             <span className="setting-label">{t.voiceDevice}</span>
             <span className="setting-desc">{cfg?.preferredDeviceLabel || t.voiceDeviceDefault}</span>
           </span>
-          {devices ? (
+          {devices && devices.length > 0 ? (
             <select className="input w-260" value={cfg?.preferredDeviceId ?? ''} disabled={busy} data-testid="voice-device-select"
               onChange={(e) => {
                 const d = devices.find((x) => x.deviceId === e.target.value);

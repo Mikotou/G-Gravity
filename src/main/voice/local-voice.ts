@@ -86,8 +86,9 @@ export class LocalVoice {
     const done = modelIO.install(this.modelDir, controller.signal, bytes => {
       this.model = { ...this.model, downloadedBytes: bytes, progressPercent: Math.floor(bytes * 100 / spec.sizeBytes),
         status: bytes === spec.sizeBytes ? 'verifying' : 'downloading' };
-    }, this.fetcher).then(() => {
-      this.model = { ...this.model, status: 'ready', sha256Verified: true, source: 'user-data' };
+    }, this.fetcher).then(async () => {
+      this.stamp = (await this.inspectFiles()).join('|');
+      this.model = { ...this.model, status: 'ready', sha256Verified: true, source: 'user-data', progressPercent: 100 };
     }).catch(() => {
       if (controller.signal.aborted) this.stamp = undefined;
       this.model = { ...this.model, status: controller.signal.aborted ? 'missing' : 'error', downloadedBytes: 0, progressPercent: 0,

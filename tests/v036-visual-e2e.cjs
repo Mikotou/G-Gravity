@@ -690,7 +690,7 @@ function injectOfflineV036Bridge() {
     testVoiceConnection: async () => ({ ok: true, latencyMs: 42 }),
     installVoiceModel: async () => ({ started: false, state: voiceStateSnapshot().model, message: 'bundled' }),
     voiceArmCapture: async (input) => {
-      if (input && typeof input === 'object' && 'op' in input) {
+      if (input && typeof input === 'object' && (input.op === 'media-ready' || input.op === 'release-media')) {
         const cap = activeCaptures.get(input.captureId);
         return {
           captureId: input.captureId,

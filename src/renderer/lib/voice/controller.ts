@@ -164,15 +164,19 @@ export class VoiceCaptureController {
     this.setPhase('probing');
     try {
       const gum = this.deps.getUserMedia ?? ((c) => navigator.mediaDevices.getUserMedia(c));
-      const stream = await gum({
-        audio: {
-          ...(input.deviceId ? { deviceId: { exact: input.deviceId } } : {}),
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-        video: false,
-      });
+      const baseAudio = { channelCount: 1, echoCancellation: true, noiseSuppression: true };
+      let stream: MediaStream;
+      try {
+        stream = await gum({
+          audio: input.deviceId ? { deviceId: { exact: input.deviceId }, ...baseAudio } : baseAudio,
+          video: false,
+        });
+      } catch (err) {
+        if (token !== this.token) return false;
+        const name = err instanceof Error ? err.name : typeof err === 'object' && err && 'name' in err ? String((err as { name: unknown }).name) : '';
+        if (!input.deviceId || (name !== 'OverconstrainedError' && name !== 'NotFoundError')) throw err;
+        stream = await gum({ audio: baseAudio, video: false });
+      }
       if (token !== this.token) {
         stream.getTracks().forEach((t) => t.stop());
         return false;
@@ -486,9 +490,10 @@ export async function listInputDevicesWithLease(
   try {
     const gum = deps.getUserMedia ?? ((c) => navigator.mediaDevices.getUserMedia(c));
     stream = await gum({ audio: true, video: false });
-    await bridge.voiceArmCapture({ op: 'media-ready', captureId: armed.captureId });
+    // MAC-BE-02：在 media-ready 关闭 hasLease 窗口前枚举设备，确保 Electron file:// 下 setPermissionCheckHandler 放行并拿到非空 deviceId 与标签
     const enumerate = deps.enumerateDevices ?? (() => navigator.mediaDevices.enumerateDevices());
     const devices = await enumerate();
+    await bridge.voiceArmCapture({ op: 'media-ready', captureId: armed.captureId });
     return devices
       .filter((d) => d.kind === 'audioinput' && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
       .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${i + 1}` }));

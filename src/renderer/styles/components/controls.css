@@ -87,7 +87,7 @@ select.input{padding-right:26px;appearance:none;background-image:linear-gradient
 .disclaimer{display:inline-flex;align-items:center;gap:5px;align-self:flex-start;color:var(--muted-text);font-size:11px}
 .sub-head{display:flex;align-items:center;gap:6px;color:var(--muted-text);font-size:11px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase}
 .overlay{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--scrim);animation:gv-rise var(--dur-1) ease-out;backdrop-filter:blur(8px) saturate(1.15)}
-.modal{display:flex;flex-direction:column;width:min(520px, 100%);max-height:calc(100vh - 48px);border:1px solid var(--border-strong);background:var(--bg-elevated);overflow:hidden;animation:gv-pop var(--dur-2) var(--ease-out)}
+.modal{display:flex;flex-direction:column;width:min(520px, 100%);max-height:100%;border:1px solid var(--border-strong);background:var(--bg-elevated);overflow:hidden;animation:gv-pop var(--dur-2) var(--ease-out)}
 .modal-wide{width:min(660px, 100%)}
 .modal-head{display:flex;align-items:center;gap:10px;padding:16px 18px 6px}
 .modal-head h2{margin:0;font-size:15px;font-weight:650}
