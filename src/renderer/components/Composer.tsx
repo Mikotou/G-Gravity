@@ -952,7 +952,7 @@ export function Composer({
             {attachments.filter(a => a.previewUrl).map(att => <figure key={att.id}>
               <MessageImage source={att.previewUrl!} alt={att.name} />
               <button type="button" className="icon-btn composer-image-remove" aria-label={dict.removeAttachmentLabel + ' ' + att.name}
-                onClick={() => setAttachments(items => items.filter(item => item.id !== att.id))}><Icon icon={X} size="sm" /></button>
+                onClick={() => setAttachments(items => items.filter(item => item.id !== att.id))}><Icon icon={X} size="xs" /></button>
               <figcaption title={att.name}>{att.name}</figcaption>
             </figure>)}
           </div>}

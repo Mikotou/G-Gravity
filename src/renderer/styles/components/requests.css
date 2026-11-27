@@ -100,13 +100,12 @@
 .request-intent-pill.is-aligned{color:var(--success-text)}
 .request-intent-pill.is-uncertain{color:var(--text-secondary)}
 .request-intent-pill.is-misaligned{color:var(--danger-text);border-color:var(--danger-border)}
-.request-cmd{position:relative}
 .request-cmd.is-clamped code{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .request-cmd-toggle{display:block;margin-top:6px;color:var(--accent-text);font-family:var(--font-sans);font-size:11px;font-weight:550}
 .request-cmd-toggle:hover{text-decoration:underline}
 .option-btn.is-active{border-color:var(--danger-border);background:color-mix(in srgb, var(--status-danger) 8%, var(--studio-card))}
 .feedback-hint{color:var(--muted-text);font-size:11.5px}
-.approval-pill{position:relative}
+.request-cmd, .approval-pill{position:relative}
 .approval-usage-title{font-weight:600}
 .approval-usage-link{justify-content:flex-start;margin-top:2px;padding:2px 4px;font-size:11px}
 .request-view{--request-accent:var(--status-warning);position:relative;border:1px solid color-mix(in srgb, var(--request-accent) 30%, var(--hairline-strong))}
@@ -137,7 +136,7 @@
 .qb-pill{position:relative;display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:22px;padding:0 7px;border-radius:99px;border:1px solid var(--hairline-strong);color:var(--muted-text);font-size:11px;font-variant-numeric:tabular-nums}
 .qb-pill.is-answered, .qb-pill.is-edited{border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent-text)}
 .qb-pill.is-current{border-color:var(--accent-primary);color:var(--text-primary);font-weight:650;box-shadow:inset 0 0 0 1px var(--accent-primary)}
-.qb-pill-badge{position:absolute;top:-5px;right:-5px;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--accent-solid, var(--accent-primary));color:var(--on-accent)}
+.qb-pill-badge{position:absolute;top:-5px;right:-5px;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:var(--accent-solid);color:var(--on-accent)}
 .qb-pill-badge svg{width:9px;height:9px}
 .qb-field{display:grid;gap:6px}
 .qb-options{display:flex;flex-direction:column;gap:5px}
@@ -172,7 +171,6 @@
 .question-followup.is-unknown{color:var(--warning-text)}
 .question-followup-error{color:var(--danger-text)}
 @container qb (max-width: 419.98px) {
-  .qb-pills { display: none; }
   .qb-stepper { justify-content: center; }
-  .qb-hint { display: none; }
+  .qb-pills, .qb-hint { display: none; }
 }

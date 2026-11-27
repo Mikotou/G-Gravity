@@ -1864,7 +1864,7 @@ export function PluginsPanel({
           onClick={() => setRefreshAttempt((n) => n + 1)}
           data-testid="plugins-refresh-btn"
         >
-          <Icon icon={RefreshCw} size="xs" className={refreshing ? 'spin' : undefined} />
+          <Icon icon={RefreshCw} size="sm" className={refreshing ? 'spin' : undefined} />
           <span>{dict.ui.v035.pluginsManualRefresh}</span>
         </button>
       </div>
@@ -2149,14 +2149,19 @@ export function RatesPanel({
 }): React.ReactElement {
   const { locale, dict } = useI18n();
   const { busy, error, run } = useAction();
-  // 编辑单价使用逐行复制的草稿，保存后再接收新的价卡快照，输入过程不会直接修改看板使用的单价。
+  // 编辑单价使用逐行复制的草稿，保存后再接收新的价卡快照；B2：注册 dirty 且编辑期间不被遥测推送覆盖。
   const [draft, setDraft] = useState<ModelRateCard[]>(rateCards.map((r) => ({ ...r })));
   const [saved, setSaved] = useState(false);
 
   const appliedRates = useRef(JSON.stringify(rateCards));
+  const dirty = useMemo(() => JSON.stringify(draft) !== appliedRates.current, [draft]);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useSettingsDirty('rates', dirty);
+
   useEffect(() => {
     const latest = JSON.stringify(rateCards);
-    if (appliedRates.current !== latest) {
+    if (!dirtyRef.current && appliedRates.current !== latest) {
       appliedRates.current = latest;
       setDraft(rateCards.map(card => ({ ...card })));
     }
@@ -2225,6 +2230,7 @@ export function RatesPanel({
           onClick={() =>
             void run(async () => {
               await onUpdateRateCards(draft);
+              appliedRates.current = JSON.stringify(draft);
               setSaved(true);
             })
           }

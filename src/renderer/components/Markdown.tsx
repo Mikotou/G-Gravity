@@ -911,6 +911,8 @@ interface MarkdownContext {
   figureKeys: Set<string>;
   figureSources: string[];
   attachmentsByKey: Map<string, MessageAttachmentPreview>;
+  taskDoneLabel: string;
+  taskTodoLabel: string;
 }
 
 function inlineText(nodes: React.ReactNode): string {
@@ -1523,7 +1525,6 @@ function CodeBlock({ lang, text }: { lang: string; text: string }): React.ReactE
       </div>
       <pre
         tabIndex={0}
-        role="region"
         aria-label={dict.ui.v035.codeScrollRegion(lang)}
       >
         <code>{visibleText.length > 24000 ? visibleText : highlight(visibleText, lang)}</code>
@@ -1571,7 +1572,7 @@ function MarkdownTableRegion({
 }): React.ReactElement {
   const { dict } = useI18n();
   return (
-    <div className={className} tabIndex={0} role="region" aria-label={dict.ui.v035.tableScrollRegion}>
+    <div className={className} tabIndex={0} aria-label={dict.ui.v035.tableScrollRegion}>
       {children}
     </div>
   );
@@ -1661,7 +1662,7 @@ function renderBlockList(
                   checked={item.checked}
                   readOnly
                   tabIndex={-1}
-                  aria-label={item.checked ? 'completed' : 'todo'}
+                  aria-label={item.checked ? refs.taskDoneLabel : refs.taskTodoLabel}
                 />
               )}
               <div className="md-li-body">
@@ -1845,6 +1846,7 @@ function buildMarkdownSegment(
   headingPrefix: string,
   attachmentsByKey: Map<string, MessageAttachmentPreview>,
   streaming: boolean,
+  taskLabels: { done: string; todo: string },
   inheritedLinks?: Map<string, LinkDef>,
   inheritedHeadingSlugs?: Set<string>
 ): RenderedMarkdownSegment {
@@ -1869,6 +1871,8 @@ function buildMarkdownSegment(
     figureKeys: new Set(),
     figureSources: [],
     attachmentsByKey,
+    taskDoneLabel: taskLabels.done,
+    taskTodoLabel: taskLabels.todo,
   };
   const body = renderBlockList(blocks, keyPrefix, ctx, streaming);
   return {
@@ -1904,6 +1908,11 @@ export function Markdown({
 }): React.ReactElement {
   // 动效 3：正文输出连续滑入动画（区别于思考流雾化与译文跨语种覆盖）
   const streamState = useFluidStreamText(text, Boolean(streaming), 'assistant', Boolean(forceAnimation));
+  const { dict } = useI18n();
+  const taskLabels = useMemo(
+    () => ({ done: dict.ui.v036.taskDoneLabel, todo: dict.ui.v036.taskTodoLabel }),
+    [dict.ui.v036.taskDoneLabel, dict.ui.v036.taskTodoLabel]
+  );
   const workspace = useContext(ImageWorkspace);
   const sessionId = useContext(ImageSessionContext);
   const headingPrefix = 'md-' + React.useId() + '-';
@@ -1924,8 +1933,8 @@ export function Markdown({
   );
 
   const stableSegment = useMemo(
-    () => buildMarkdownSegment(stablePrefix, 'root-stable', workspace, headingPrefix, attachmentsByKey, false),
-    [stablePrefix, workspace, headingPrefix, attachmentsByKey]
+    () => buildMarkdownSegment(stablePrefix, 'root-stable', workspace, headingPrefix, attachmentsByKey, false, taskLabels),
+    [stablePrefix, workspace, headingPrefix, attachmentsByKey, taskLabels]
   );
 
   const tailSegment = useMemo(
@@ -1937,10 +1946,11 @@ export function Markdown({
         headingPrefix,
         attachmentsByKey,
         Boolean(streaming),
+        taskLabels,
         stableSegment.links,
         stableSegment.headingSlugs
       ),
-    [liveTail, stablePrefix, workspace, headingPrefix, attachmentsByKey, streaming, stableSegment]
+    [liveTail, stablePrefix, workspace, headingPrefix, attachmentsByKey, streaming, taskLabels, stableSegment]
   );
 
   // 正文提及在前、剩余附件在后；附件与提及指向同一文件时合并，独立成段的图片已在原位展示。

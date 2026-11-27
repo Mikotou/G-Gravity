@@ -105,6 +105,12 @@ export interface V036Strings {
   treeCurrent: string;
   swarmFilter: string;
   dropBusy: string;
+  needsApproval: (count: number) => string;
+  rejectedByUserFallback: string;
+  quotaUnavailable: Record<'platform' | 'profile' | 'helper' | 'preview', string>;
+  taskDoneLabel: string;
+  taskTodoLabel: string;
+  costScopes: Record<'session' | 'today' | '7d' | '30d' | 'all', string>;
 }
 
 export const V036_ZH: V036Strings = {
@@ -212,6 +218,17 @@ export const V036_ZH: V036Strings = {
   treeCurrent: '当前分支',
   swarmFilter: '按成员筛选',
   dropBusy: '正在处理上一次拖放',
+  needsApproval: (count) => `待审批${count > 1 ? ` ×${count}` : ''}`,
+  rejectedByUserFallback: '用户拒绝执行',
+  quotaUnavailable: {
+    platform: '此平台暂不支持自动读取额度。在终端运行 agy，然后输入 /usage 查看。',
+    profile: '当前官方 CLI 只提供默认登录资料的额度。终端里的 agy → /usage 显示默认资料的额度。',
+    helper: '此安装缺少 macOS 额度读取组件。在终端运行 agy，然后输入 /usage 查看。',
+    preview: '请在 G-Gravity 桌面端查看额度，或在终端运行 agy 后输入 /usage。',
+  },
+  taskDoneLabel: '已完成',
+  taskTodoLabel: '待完成',
+  costScopes: { session: '本会话', today: '今日', '7d': '7d', '30d': '30d', all: '全部' },
 };
 
 export const V036_EN: V036Strings = {
@@ -319,4 +336,15 @@ export const V036_EN: V036Strings = {
   treeCurrent: 'Current branch',
   swarmFilter: 'Filter by member',
   dropBusy: 'Still handling the previous drop',
+  needsApproval: (count) => `Needs approval${count > 1 ? ` ×${count}` : ''}`,
+  rejectedByUserFallback: 'Rejected by user',
+  quotaUnavailable: {
+    platform: 'Automatic quota readings are unavailable on this platform. Run agy in a terminal and enter /usage.',
+    profile: 'The official CLI reports quota for its default sign-in only. Running agy and entering /usage in a terminal shows that default account.',
+    helper: 'The macOS quota reader is unavailable in this installation. Run agy in a terminal and enter /usage.',
+    preview: 'Open G-Gravity on the desktop to view quota, or run agy in a terminal and enter /usage.',
+  },
+  taskDoneLabel: 'completed',
+  taskTodoLabel: 'todo',
+  costScopes: { session: 'Session', today: 'Today', '7d': '7d', '30d': '30d', all: 'All' },
 };

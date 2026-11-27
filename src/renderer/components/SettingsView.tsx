@@ -12,13 +12,14 @@ import {
   FolderOpen,
   Info,
   Languages,
+  Loader2,
   Paintbrush,
   Palette,
   Pencil,
   Pin,
+  PlugZap,
   Plus,
   RefreshCw,
-  RotateCw,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -1075,7 +1076,7 @@ function GeneralPanel({
                 onClick={() => void handleTestConnection()}
                 data-testid="test-translator-connection-btn"
               >
-                <UiIcon icon={RefreshCw} size="xs" className={testing ? 'spin' : ''} />
+                <UiIcon icon={testing ? Loader2 : PlugZap} size="xs" className={testing ? 'spin' : ''} />
                 <span>{testing ? dict.translationExternalTesting : dict.translationExternalTestBtn}</span>
               </button>
               <button
@@ -1651,7 +1652,7 @@ function AboutPanel({
             )}
             {updateState.status === 'installing' && (
               <span className="update-status-line muted">
-                <UiIcon icon={RotateCw} size="sm" className="spin" />
+                <UiIcon icon={Loader2} size="sm" className="spin" />
                 <span>{dict.updatesInstalling}</span>
               </span>
             )}
@@ -1684,7 +1685,7 @@ function AboutPanel({
                 onClick={() => void onInstallUpdate()}
                 data-testid="install-update-btn"
               >
-                <UiIcon icon={RotateCw} size="sm" />
+                <UiIcon icon={Download} size="sm" />
                 <span>
                   {updateState.canInstallDirectly
                     ? dict.updatesInstallRestartBtn

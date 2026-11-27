@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, ChevronDown, Info, Languages, Minimize2, Paperclip, Settings2, ShieldCheck } from 'lucide-react';
 import {
   COST_DISCLAIMER,
@@ -399,9 +399,10 @@ function ExternalServiceStatsSection({
   );
 
   const outcomeTotal = Math.max(1, cum.callCount);
-  const scopeLabels: Record<ExternalReviewerCostScope, string> = isZh
-    ? { session: '本会话', today: '今日', '7d': '7d', '30d': '30d', all: labels.scopeAll }
-    : { session: 'Session', today: 'Today', '7d': '7d', '30d': '30d', all: 'All' };
+  const scopeLabels: Record<ExternalReviewerCostScope, string> = {
+    ...dict.ui.v036.costScopes,
+    all: isZh ? labels.scopeAll : dict.ui.v036.costScopes.all,
+  };
   const callsUnit = dict.ui.copy.calls;
   const usageLine = (s: { totalTokens: number; callCount: number; avgLatencyMs?: number }) =>
     `${formatTokenShort(s.totalTokens)} tok · ${s.callCount}${callsUnit}${s.avgLatencyMs ? ` · ${s.avgLatencyMs}ms` : ''}`;
@@ -814,12 +815,16 @@ export function ContextCostInspectorView({
   const extSnap = dashboard.externalReviewer ?? EMPTY_EXT_REVIEWER;
   const transSnap = dashboard.externalTranslator ?? EMPTY_EXT_TRANSLATOR;
 
+  const prevSessionIdRef = useRef<string | null>(sessionId);
   useEffect(() => {
-    if (sessionId) {
-      setScope('session');
-    } else {
+    const prev = prevSessionIdRef.current;
+    prevSessionIdRef.current = sessionId;
+    if (!sessionId) {
       // 关闭最后一个会话后回落到「今日」，不再卡在空的会话视图。
-      setScope((prev) => (prev === 'session' ? 'today' : prev));
+      setScope((cur) => (cur === 'session' ? 'today' : cur));
+    } else if (!prev) {
+      // 仅在从无会话首次进入会话时切到「本会话」；B6：Split-2 下在两个会话间切焦点保留用户自选时间范围。
+      setScope('session');
     }
   }, [sessionId]);
 

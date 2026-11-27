@@ -28,6 +28,6 @@
 .option-btn:hover:not(:disabled) .option-num{border-color:transparent}
 .rail-update-dot{position:absolute;top:7px;right:7px;width:7px;height:7px;border-radius:50%;background:var(--accent-primary);box-shadow:0 0 0 2px var(--bg-sidebar)}
 .rail-btn.is-active{background:color-mix(in srgb, var(--accent-primary) 12%, transparent)}
-.rail-new-btn:hover, .option-btn:hover:not(:disabled) .option-num{background:var(--accent-solid, var(--accent-primary));color:var(--on-accent, var(--ink-white))}
+.rail-new-btn:hover, .option-btn:hover:not(:disabled) .option-num{background:var(--accent-solid);color:var(--on-accent)}
 [data-polarity='dark'] .rail-brand-btn{background:radial-gradient(circle at 50% 46%, color-mix(in srgb, var(--text-primary) 7%, transparent) 0%, transparent 68%)}
 [data-polarity='dark'] .rail-brand-btn:hover{background:radial-gradient(circle at 50% 46%, color-mix(in srgb, var(--text-primary) 9%, transparent) 0%, transparent 70%), var(--hover)}

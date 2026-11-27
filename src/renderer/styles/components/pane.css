@@ -46,7 +46,7 @@
 .working-meta{display:inline-flex;align-items:center;gap:8px;margin-left:4px;color:var(--muted-text);font-family:var(--font-mono);font-size:var(--fs-2xs);font-style:normal}
 .working-hint{padding:0 6px;height:17px;line-height:15px;border-radius:4px;border:1px solid var(--hairline-strong)}
 .jump-latest{backdrop-filter:blur(6px);background:color-mix(in srgb, var(--surface-3) 88%, transparent)}
-.welcome-logo{animation:gv-pop var(--dur-4) var(--ease-spring) both;position:relative;width:56px;height:56px;border-radius:0;box-shadow:none;filter:var(--icon-shadow-lg, drop-shadow(0 8px 16px color-mix(in srgb, var(--ink-black) 36%, transparent)))}
+.welcome-logo{animation:gv-pop var(--dur-4) var(--ease-spring) both;position:relative;width:56px;height:56px;border-radius:0;box-shadow:none;filter:var(--icon-shadow-lg)}
 .welcome{gap:24px;padding:40px 28px}
 .welcome-hero{display:flex;flex-direction:column;align-items:center;gap:14px}
 .welcome-logo-wrap{position:relative;display:inline-flex;align-items:center;justify-content:center}
@@ -107,10 +107,10 @@
 .welcome-compact .welcome-quick{width:min(520px, 100%);padding:9px 9px 6px 11px;border-radius:14px}
 .welcome-compact .welcome-quick-hint{display:none}
 [data-polarity='light'] .welcome-logo-wrap::before{background:radial-gradient(circle, color-mix(in srgb, var(--accent-primary) 14%, transparent) 0%, transparent 70%)}
-[data-polarity='light'] .welcome-logo{box-shadow:none;filter:var(--icon-shadow-lg, drop-shadow(0 6px 12px color-mix(in srgb, var(--ink-black) 20%, transparent)))}
-.welcome-cta-kbd{margin-left:4px;background:color-mix(in srgb, var(--on-accent, var(--ink-white)) 18%, transparent);border-color:color-mix(in srgb, var(--on-accent, var(--ink-white)) 28%, transparent);color:var(--on-accent, var(--ink-white))}
+[data-polarity='light'] .welcome-logo{box-shadow:none;filter:var(--icon-shadow-lg)}
+.welcome-cta-kbd{margin-left:4px;background:color-mix(in srgb, var(--on-accent) 18%, transparent);border-color:color-mix(in srgb, var(--on-accent) 28%, transparent);color:var(--on-accent)}
 .pane-status-chip.is-error{--chip:var(--danger-text)}
-.pane-status-chip.is-waiting_question{--chip:var(--info, var(--accent-primary))}
+.pane-status-chip.is-waiting_question{--chip:var(--info)}
 .pane-status-chip.is-stopping{--chip:var(--secondary-text)}
 .diag-actions .btn{height:26px;gap:5px;border-radius:8px;font-size:12px}
 .pane-error-text{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;overflow-wrap:anywhere}

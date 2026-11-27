@@ -8,6 +8,7 @@ import {
   Folder,
   FolderKanban,
   GitBranch,
+  Loader2,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -372,7 +373,7 @@ function ProjectSidebarImpl({
             aria-label={dict.organizeTitlesBtn}
             data-testid="btn-organize-titles"
           >
-            <Icon icon={Sparkles} size="sm" className={organizingTarget === 'all' ? 'spin' : undefined} />
+            <Icon icon={organizingTarget === 'all' ? Loader2 : Sparkles} size="sm" className={organizingTarget === 'all' ? 'spin' : undefined} />
           </button>
           {hasPollutionSessions && <button
             type="button"
@@ -413,7 +414,7 @@ function ProjectSidebarImpl({
               role="status"
               data-testid="organize-model-status"
             >
-              <Icon icon={Sparkles} size="xs" className={organizingTitles ? 'spin' : undefined} />
+              <Icon icon={organizingTitles ? Loader2 : Sparkles} size="xs" className={organizingTitles ? 'spin' : undefined} />
               <span className="truncate">
                 {organizingTitles
                   ? dict.ui.organizingWithModel(TITLE_ORGANIZE_MODEL_LABEL)
@@ -474,7 +475,7 @@ function ProjectSidebarImpl({
                       }
                       data-testid={`organize-project-${key}`}
                     >
-                      <Icon icon={Sparkles} size="xs" className={organizingTarget === `project:${key}` ? 'spin' : undefined} />
+                      <Icon icon={organizingTarget === `project:${key}` ? Loader2 : Sparkles} size="xs" className={organizingTarget === `project:${key}` ? 'spin' : undefined} />
                     </button>
                   )}
                   {onCreateSessionInProject && (
@@ -603,7 +604,7 @@ function ProjectSidebarImpl({
                               }
                               data-testid={`organize-session-${s.sessionId}`}
                             >
-                              <Icon icon={Sparkles} size="xs" className={organizingTarget === `session:${s.sessionId}` ? 'spin' : undefined} />
+                              <Icon icon={organizingTarget === `session:${s.sessionId}` ? Loader2 : Sparkles} size="xs" className={organizingTarget === `session:${s.sessionId}` ? 'spin' : undefined} />
                             </button>
                             <button
                               type="button"

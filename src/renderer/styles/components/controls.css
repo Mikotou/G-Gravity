@@ -91,7 +91,6 @@ select.input{padding-right:26px;appearance:none;background-image:linear-gradient
 .modal-wide{width:min(660px, 100%)}
 .modal-head{display:flex;align-items:center;gap:10px;padding:16px 18px 6px}
 .modal-head h2{margin:0;font-size:15px;font-weight:650}
-.modal-head .icon-btn{margin-left:auto}
 .modal-body{display:flex;flex-direction:column;gap:14px;padding:10px 18px 18px;overflow-y:auto}
 .modal-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid var(--border-subtle)}
 .field{display:flex;flex-direction:column;gap:6px}
@@ -100,7 +99,7 @@ select.input{padding-right:26px;appearance:none;background-image:linear-gradient
 .chip-row{display:flex;flex-wrap:wrap;gap:5px}
 .chip-btn{display:inline-flex;align-items:center;gap:5px;height:24px;max-width:100%;padding:0 9px;border-radius:99px;border:1px solid var(--border-subtle);color:var(--text-secondary);font-family:var(--font-mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip-btn:hover{border-color:var(--accent-border);color:var(--text-primary)}
-.settings-head .icon-btn{margin-left:auto}
+.modal-head .icon-btn, .settings-head .icon-btn{margin-left:auto}
 .theme-preview{display:grid;grid-template-columns:30% 1fr;height:74px;border-radius:7px;overflow:hidden}
 .theme-preview-side{display:flex;flex-direction:column;gap:4px;padding:8px 6px}
 .theme-preview-side i{display:block;height:4px;border-radius:99px;opacity:0.6}
@@ -138,9 +137,8 @@ select.input{padding-right:26px;appearance:none;background-image:linear-gradient
 .menu-item:hover, .menu-item.is-active{background:var(--hover)}
 .menu-item.is-checked{color:var(--text-primary);font-weight:560}
 .menu-item-hint{margin-left:auto;color:var(--muted-text);font-family:var(--font-mono);font-size:var(--fs-2xs)}
-.menu-item .kbd{margin-left:auto}
 .menu-row{display:flex;align-items:center;gap:10px;min-height:32px;padding:2px 8px;font-size:12.5px}
-.menu-row .segmented{margin-left:auto}
+.menu-item .kbd, .menu-row .segmented{margin-left:auto}
 .tab .icon-btn{transition:opacity var(--dur-1), background var(--dur-1)}
 .segmented{background:color-mix(in srgb, var(--text-primary) 5%, transparent)}
 .segmented-btn.is-active{background:var(--bg-elevated)}
@@ -195,7 +193,7 @@ select.input{padding-right:26px;appearance:none;background-image:linear-gradient
 .command-output-disclosure[open] .command-output-chevron{transform:rotate(90deg)}
 .command-output-kind{font-size:10px}
 .command-output-prompt{color:var(--muted-text);user-select:none}
-.btn-primary:hover:not(:disabled){background:color-mix(in srgb, var(--accent-solid, var(--accent-primary)) 88%, var(--on-accent, var(--ink-white)));color:var(--on-accent, var(--ink-white))}
+.btn-primary:hover:not(:disabled){background:color-mix(in srgb, var(--accent-solid) 88%, var(--on-accent));color:var(--on-accent)}
 .md code.inline{padding:0.08em 0.38em;border-color:var(--hairline);background:color-mix(in srgb, var(--bg-code) 82%, transparent);font-size:0.875em;overflow-wrap:anywhere}
 .md a.md-link-file .md-link-label code.inline{padding:0;border:0;background:none;color:inherit;font-size:inherit}
 .image-lightbox-bar .icon-btn:hover, .image-lightbox-bar .btn:hover{border-color:var(--accent-border)}
@@ -213,7 +211,7 @@ select.input{padding-right:26px;appearance:none;background-image:linear-gradient
 .text-success{color:var(--success-text)}
 .alert{color:var(--danger-text)}
 .status-line.has-error{flex-wrap:wrap;row-gap:4px;overflow:visible}
-.status-error-row{display:flex;align-items:flex-start;gap:6px;flex-basis:100%;min-width:0;padding:4px 4px 4px 8px;border-radius:7px;background:var(--danger-soft);color:var(--danger-text);font-family:var(--font-sans, inherit);font-size:11.5px;line-height:1.45;white-space:normal}
+.status-error-row{display:flex;align-items:flex-start;gap:6px;flex-basis:100%;min-width:0;padding:4px 4px 4px 8px;border-radius:7px;background:var(--danger-soft);color:var(--danger-text);font-family:var(--font-sans);font-size:11.5px;line-height:1.45;white-space:normal}
 .status-error-row strong{flex-shrink:0;font-weight:620}
 .status-error-text{flex:1;min-width:0;overflow-wrap:anywhere}
 .mode-menu .menu-item.mode-menu-item{align-items:flex-start;gap:8px;padding:6px 8px;color:var(--text-primary)}

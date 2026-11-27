@@ -27,7 +27,6 @@
 .cc-tool-stat{display:inline-flex;gap:5px;flex-shrink:0;font-size:11.5px}
 .cc-tool-status{margin-left:auto;flex-shrink:0;color:var(--muted-text);font-family:var(--font-sans);padding:1px 7px;border-radius:99px;font-size:var(--fs-2xs);font-weight:600}
 .cc-tool-chev{flex-shrink:0;color:var(--muted-text);transition:transform var(--dur-1)}
-.cc-tool.is-expanded .cc-tool-chev{transform:rotate(90deg)}
 .cc-tool-result{display:flex;gap:6px;color:var(--muted-text);font-size:12px;line-height:1.55;padding-left:31px}
 .cc-tool-result-glyph{flex-shrink:0;user-select:none}
 .cc-tool-detail{display:flex;flex-direction:column;gap:8px;margin:4px 0 4px 22px;min-width:0;margin-left:31px;animation:gv-rise var(--dur-2) var(--ease-out) both}
@@ -37,7 +36,6 @@
 .cc-body-stream-active .cc-stream-glide-block{animation:body-editorial-glide var(--dur-3) var(--ease-out) both}
 .activity-group > summary{list-style:none;cursor:pointer}
 .activity-group > summary::-webkit-details-marker{display:none}
-.activity-group[open] > summary .cc-tool-chev{transform:rotate(90deg)}
 .message-editor{display:grid;gap:8px;padding:10px;border:1px solid var(--border-strong);border-radius:var(--radius-md)}
 .message-editor textarea{resize:vertical;min-height:64px;width:100%;font:inherit;color:inherit;background:transparent;border:0}
 .message-editor-actions{display:flex;justify-content:flex-end;gap:6px}
@@ -66,9 +64,8 @@
 .cc-tool-arg{color:var(--text-secondary);min-width:0}
 .cc-tool.tool-cat-explore .cc-tool-name{color:var(--text-secondary);font-weight:550}
 .cc-tool.tool-cat-explore .cc-tool-arg{color:var(--muted-text)}
-.cc-tool.tool-cat-edit .cc-tool-arg{color:var(--text-primary)}
 .cc-tool.is-failed{--tool-color:var(--status-danger);background:var(--danger-soft);box-shadow:inset 2px 0 0 var(--status-danger)}
-.cc-tool.is-failed .cc-tool-name, .cc-tool.is-failed .cc-tool-arg{color:var(--text-primary)}
+.cc-tool.tool-cat-edit .cc-tool-arg, .cc-tool.is-failed .cc-tool-name, .cc-tool.is-failed .cc-tool-arg{color:var(--text-primary)}
 .cc-tool.is-active{overflow:hidden}
 .cc-tool.is-active::after{content:'';position:absolute;inset:0 auto 0 0;width:38%;pointer-events:none;background:linear-gradient(90deg, transparent, color-mix(in srgb, var(--tool-color) 10%, transparent), transparent);animation:gv-guardian-sweep var(--dur-loop) var(--ease-in-out) infinite}
 .cc-tool-status.is-failed{background:color-mix(in srgb, var(--status-danger) 20%, transparent);color:var(--danger-text)}
@@ -86,7 +83,6 @@
 .tool-group-head:hover{background:var(--hover)}
 .tool-group-head .cc-tool-name{color:var(--text-secondary);font-weight:550}
 .tool-cat-explore-icon{--tool-color:var(--tool-explore)}
-.tool-group.is-open .cc-tool-chev, .tool-group-head[aria-expanded='true'] .cc-tool-chev{transform:rotate(90deg)}
 .tool-group-body{display:flex;flex-direction:column;gap:1px;animation:gv-rise var(--dur-2) var(--ease-out) both}
 .turn-outcome{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin:2px 0 0 24px;padding-top:7px;border-top:1px dashed color-mix(in srgb, var(--border-subtle) 85%, transparent);animation:gv-rise var(--dur-3) var(--ease-out) var(--dur-1) both}
 .outcome-chip{--chip:var(--text-muted);display:inline-flex;align-items:center;gap:5px;height:21px;padding:0 8px;border-radius:99px;background:color-mix(in srgb, var(--chip) 11%, transparent);color:var(--chip);font-size:var(--fs-2xs);font-weight:560;white-space:nowrap}
@@ -152,7 +148,7 @@
 .outcome-chip.tone-danger{--chip:var(--danger-text)}
 .outcome-chip.tone-warning{--chip:var(--warning-text)}
 .outcome-chip.tone-paused{--chip:var(--accent-text)}
-.status-dot.is-waiting_question{background:var(--info, var(--accent-primary));animation:pulse var(--dur-loop) ease-in-out infinite}
+.status-dot.is-waiting_question{background:var(--info);animation:pulse var(--dur-loop) ease-in-out infinite}
 .working-indicator.is-stopping .cc-thinking-title{color:var(--secondary-text)}
 .working-indicator.is-stopping .cc-thinking-glyph{color:var(--muted-text);font-size:10px}
 .turn-diagnostic-card{--diag:var(--warning-text);--diag-base:var(--status-warning);display:flex;flex-direction:column;gap:8px;max-width:min(100%, 760px);padding:11px 13px 12px;border-radius:12px;border:1px solid color-mix(in srgb, var(--diag-base) 34%, var(--hairline));border-left:3px solid var(--diag-base);background:color-mix(in srgb, var(--diag-base) 8%, var(--bg-surface));color:var(--text-primary);font-size:12.5px;line-height:1.55;animation:gv-rise var(--dur-2) var(--ease-out) both}
@@ -181,7 +177,7 @@
 .diag-detail > summary{display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:var(--muted-text);font-size:11.5px;list-style:none;user-select:none}
 .diag-detail > summary::-webkit-details-marker{display:none}
 .diag-detail-chev{transition:transform var(--dur-1) ease}
-.diag-detail[open] .diag-detail-chev{transform:rotate(90deg)}
+.cc-tool.is-expanded .cc-tool-chev, .activity-group[open] > summary .cc-tool-chev, .tool-group.is-open .cc-tool-chev, .tool-group-head[aria-expanded='true'] .cc-tool-chev, .diag-detail[open] .diag-detail-chev{transform:rotate(90deg)}
 .diag-detail pre{margin:6px 0 0;padding:7px 9px;max-height:140px;overflow:auto;border-radius:7px;background:var(--bg-code);color:var(--secondary-text);font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}
 .stream-interrupted-banner.is-card{display:block;padding:0;border:0;background:transparent}
 .stream-interrupted-banner.is-waiting .stream-interrupted-icon{color:var(--warning-text)}
