@@ -145,6 +145,9 @@ export class PlanArtifactReader {
     while (entry.reading) await entry.reading;
     const current = () => this.entries.get(owner.sessionId) === entry && this.context(owner)?.epoch === context.epoch;
     if (!current()) return denied();
+    // An explicit read supersedes any queued observe/debounce timer armed before this read began.
+    clearTimeout(entry.timer);
+    entry.timer = undefined;
     const reading = this.read(entry, context, view, current, input.knownRevision);
     entry.reading = reading;
     try {
