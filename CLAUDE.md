@@ -58,34 +58,40 @@
     - 应用图标必须使用仓库原创的 6 套 **Gravity** 几何引力终端图标（`assets/icons/` 与 `public/icons/`），严禁使用或改色 Anthropic / Claude 官方星芒 Logo 或其他受保护商标图形。
     - Cost 面板必须保留免责声明：「参考 API 价格估算，非实际账单 / Estimated at reference API rates, not an actual bill」（常量见 `src/shared/telemetry-contract.ts:COST_DISCLAIMER`）。
 
+11. **语音听写本地优先、严格零 Web Speech 与按需租约麦克风合规（`v0.3.6`）**
+    - 严禁在 `src/` 中引用 Chromium `SpeechRecognition` / `webkitSpeechRecognition`（`tests/security-baseline.test.ts` AST 强守卫）；严禁放宽渲染层严格 CSP（保持 `script-src 'self'`，禁止 `'wasm-unsafe-eval'` / `blob:` / `'unsafe-eval'`）。
+    - 本地离线转写默认使用运行于主进程独立 `worker_threads` 的 MIT 许可 `whisper.cpp` Emscripten WASM + OpenCC 繁转简；模型 `ggml-base-q5_1.bin`（`59,707,625 B`，SHA-256 固化于 `assets/local-voice/sources.json`）不入 Git 索引，由发版 CI 通过 `npm run voice:model:fetch` 校验并随包内置，或由用户在设置页显式确认后下载至 `<userData>/voice-models/`（`model.cjs` 严校 `lstat`/`realpath`/防软硬链/防 TOCTOU）。
+    - **静息态 0 麦克风权限调用**：冷启动、打开设置页或未触发录音时禁止调用 `getUserMedia` / `enumerateDevices` / `permissions.query` / `askForMediaAccess`；仅在用户主动听写、3 秒试录或点击「选择输入设备」取得显式主进程租约（`voiceArmCapture`）后放行，用毕或失焦/切号/卸载立即 `release-media` 与释放音频轨。
+    - **外部语音转写严格 fail-closed & 冷启免唤醒 Keychain**：仅在通过真实短语音转写验证后才可启用 `external-api`，密钥经操作系统安全加密存储且永不向渲染层回传明文、不可加密时硬拒绝且 0 明文落盘；macOS 冷启与未启用外部语音的被动状态快照不得触发 `safeStorage.isEncryptionAvailable()`（防止 `SecKeychainAddGenericPassword` 阻塞主线程或弹出钥匙串授权窗）。
+
 ---
 
 ## 三、前后端架构速查
 
 ### 1. 三层职责边界
-- **`src/shared/`**：纯 TypeScript 类型契约与无副作用校验纯函数（供 `tsconfig.main.json` 与 `tsconfig.renderer.json` 共同编译）。
-- **`src/main/`**：Electron 主进程（5 层零环 DAG，`v0.3.5` 共 106 个文件、296 条内部静态边、0 循环依赖、0 `acp/ → services/` 反向依赖）。薄外观入口为 `CoreService`（`src/main/core-service.ts`，≤ 420 行），单文件硬上限 ≤ 650 行，协调 `AcpClient`、`SessionMultiplexer`、`SessionLifecycleService`、`TurnOrchestrator`、`AccountManager`、`PluginsManager`、`ApprovalEngine`、`TelemetryStore`、`InspectorStore`、`SwarmTracker` 等模块，并通过 `ipc-router.ts` 暴露给渲染层；共享基础设施收敛于 `security/redaction.ts`、`llm/external-llm-transport.ts`、`storage/readonly-sqlite-snapshot.ts` 与 `telemetry/external-service-ledger.ts`。
-- **`src/renderer/`**：React 19 单页工作台，所有跨进程调用统一收敛在 `src/renderer/services/desktop-bridge.ts`。
+- **`src/shared/`**：23 个纯 TypeScript 契约与无副作用校验模块（0 循环依赖，供 `tsconfig.main.json` 与 `tsconfig.renderer.json` 共同编译），定义 **93 条唯一 IPC 通道**（73 `invoke` + 20 `event`，与 `preload.ts` / `ipc-router.ts` / `macos-menu.ts` 93/93 1:1 对齐）。
+- **`src/main/`**：Electron 主进程（5 层零环 DAG，`v0.3.6` 共 **118 个 TS 文件、323 条内部静态边、0 循环依赖、0 `acp/ → services/` 反向依赖**）。薄外观入口为 `CoreService`（`src/main/core-service.ts`，420 行 ≤ 420），入口 `src/main/index.ts`（143 行），全仓主进程单文件硬上限 ≤ 650 行（当前最长 633 行）；新增 `src/main/voice/` 子系统（`voice-service` / `voice-settings` / `voice-capture` / `local-voice` / `external-voice` / `voice-ledger`）与 `assets/local-voice/`（`whisper.cjs`/`whisper.wasm`/`worker.cjs`/`model.cjs`/OpenCC 词表/7 份许可），并保留 `security/redaction.ts`、`llm/external-llm-transport.ts`、`storage/readonly-sqlite-snapshot.ts` 与 `telemetry/external-service-ledger.ts` 共享基础设施。
+- **`src/renderer/`**：React 19 单页工作台，所有跨进程调用统一收敛在 `src/renderer/services/desktop-bridge.ts`（生产包 0 演示 Mock）。
 
-### 2. 前端关键组件地图（`v0.3.5` 当前结构）
+### 2. 前端关键组件地图（`v0.3.6` 当前结构）
 - **布局骨架**：`App.tsx` → `TopBar.tsx` + `ActivityRail.tsx` + `ProjectSidebar.tsx` + `SessionWorkspaceGrid.tsx` + `RightInspector.tsx`
 - **会话与输入**：
-  - `SessionPane.tsx`：单个会话窗格（空状态引导、消息时间线、工具卡片流、内联审批聚焦管理、Plan 多题提问卡 `QuestionBar`、底部 Composer 挂载）。
-  - `Composer.tsx`：多行自适应输入框、`/` Slash 菜单、`@` 文件/会话补全、剪贴板贴图、顶部 `ContextStatusBar`、左下 Mode & 审批档位切换、右下 Model & Effort 选择。
+  - `SessionPane.tsx`：单个会话窗格（空状态引导、消息时间线、工具卡片流、内联审批聚焦管理、Plan 多题提问卡 `QuestionBar`、划词批注/引用、底部 Composer 挂载）。
+  - `Composer.tsx` + `VoiceControls.tsx`：多行自适应输入框、`/` Slash 菜单（含 `/voice`、`/record`）、`@` 文件/会话补全、剪贴板贴图、语音听写按钮与状态条（窗格 `≤ 460px` 自动收进 `+` 溢出菜单）、顶部 `ContextStatusBar`、左下 Mode & 审批档位切换、右下 Model & Effort 选择（语音快捷键 Windows `Ctrl+Shift+M` / macOS `⌘⇧M`，`Esc` 捕获阶段优先中止录音不穿透中断 AI）。
   - `Markdown.tsx`：安全自研 GFM Markdown 渲染器（不启用原始 HTML 注入，代码块带语言栏、超 40 行折叠与复制按钮，表格与代码块支持键盘横向滚动）。
   - `InlineRequestView.tsx`：Claude Code 风格 `1–4` 快捷键内联审批卡片（`SessionPane` 保证同一时刻仅首张待审卡片响应数字快捷键）。
   - `ToolCallCard.tsx` / `UnifiedDiffBlock.tsx` / `ThinkingBlock.tsx`：工具调用折叠行、红绿行级 Diff、双轨思考折叠块。
 - **右侧检视器**：
-  - `RightInspector.tsx`：`Changes`（二级切换 `Diff` / `Files`）、`Plan`（6 态权威待办 + 可折叠只读 `PlanArtifactPanel`）、`Terminal`、`Context`（含二级分支树 `Tree`）、`Swarm` 五个一级 Tab 切换、键盘方向键漫游与拖拽调宽。
+  - `RightInspector.tsx`：`Changes`（二级切换 `Diff` / `Files`）、`Plan`（统一 4 态视图：`empty / unavailable / outline / execution` + 底部常驻摘要条 + 按需展开只读 `PlanSourceDrawer` 原文抽屉）、`Terminal`、`Context`（含二级分支树 `Tree`）、`Swarm` 五个一级 Tab 切换、键盘方向键漫游与拖拽调宽。
   - `ContextCostInspectorView.tsx` & `context/TokenHeatmapView.tsx`：上下文构成条、统一双轴公式 `computeHeatLevel` 驱动的 `24h` 柱图 / `7d` 按日卡片 / `30d` Codex 周行 7 格方格热力图（OKLCH 5 阶色阶 + WCAG AA 对比度）、分模型四维费用构成（堆叠条 + SVG 环形图）。
   - `SwarmPanel.tsx`：多智能体拓扑与消息流面板。
-- **统一全屏设置中心（`Ctrl+,` / `Escape` 关闭）**：
+- **统一全屏设置中心（`Ctrl+,` / `⌘,` 打开，`Escape` 关闭）**：
   - `SettingsView.tsx`：左侧 8 项分组导航（通用、外观［内含主题/自定义配色/应用图标二级页签］、账号、Approve for me、Plugins、Cost 单价、更新、关于；不暴露超规的 Orchestrator 自定义项）。
-  - `settings/AppearancePanels.tsx`：语言/思考轨/进程隔离开关、6 套预设主题卡片、23 色 Token 自定义取色与 JSON 导入导出、6 套原创图标切换。
-  - `settings/WorkspacePanels.tsx`：ACP 连接状态与官方登录 + 多 Profile 手动隔离管理、`Approve for me` 规则与审计日志、`Plugins / MCP / Skills` 面板、模型单价表编辑。
+  - `settings/AppearancePanels.tsx` & `settings/VoiceSettingsCard.tsx`：语言/思考轨/进程隔离开关、语音听写卡片（本地模型状态与确认安装、按需设备枚举与 3 秒本机试录、独立外部 STT 配置与费用汇总）、6 套预设主题卡片、23 色 Token 自定义取色与 JSON 导入导出、顶部独立自动切换行 + 下方 3×2 原创图标网格。
+  - `settings/WorkspacePanels.tsx`：ACP 连接状态与官方登录 + 多 Profile 手动隔离管理、`Approve for me` 规则与审计日志（行内二次确认削除）、`Plugins / MCP / Skills` 面板、模型单价表编辑。
 - **设计系统与响应式分屏**：
   - `styles/theme.ts` 将当前主题的 23 个基础颜色、WCAG AA 派生色与 OKLCH 热力图 5 阶色阶（`deriveHeatmapRamp`）写入 `:root` CSS 变量；
-  - 渲染层设计系统（`styles/index.css` → `tokens.css` → `base.css` → `components/*.css` → `platform/{win,mac}.css`，源码 ≤ 230 KiB、0 死类、0 跨文件重复选择器、0 非合成动画）基于主题变量与 `color-mix(in srgb, ...)` 派生视觉层级，并通过容器查询（`@container pane` / `@container insp` / `@container hm`）适配窄窗格与窄检视器布局。
+  - 渲染层单入口模块化样式系统（`styles/index.css` → `tokens.css` → `base.css` → `components/*.css` → `platform/{win,mac}.css`，生产构建 **`214,294 B <= 215,040 B`**、0 死类、0 跨文件重复选择器、0 非合成动画；注：早年 `global.css` / `design-system.css` / `claude-studio.css` 已于 `v0.3.4` 合并收敛至该模块化目录）基于主题变量与 `color-mix(in srgb, ...)` 派生视觉层级，并通过容器查询（`@container pane` / `@container insp` / `@container hm`）适配窄窗格与窄检视器布局。
 
 ---
 
@@ -167,3 +173,21 @@ npm run build
 - **WCAG 2.1 AA 主题与 macOS 原生适配**：
   - 6 套预设主题与 `deriveAccessibleTokens()` 全部校准至 WCAG 2.1 AA（≥ 4.5:1）；`src/renderer/lib/platform-keys.ts` 与 `I18nContext` 统一管理 macOS 严格 `⌘` 快捷键、IME 组合态保护、POSIX 绝对路径/`~/` 解码、全链路「在访达中显示 / Show in Finder」与交通灯安全区 Lightbox。
 - **自动化守卫**：`tests/v031-media-inspector.test.ts`、`tests/v031-pause-error-lifecycle.test.ts`、`tests/v031-backend-plugin-bugs.test.ts`、`tests/v031-markdown-mixed-media.test.tsx`、`tests/v031-pause-error-ux.test.tsx`、`tests/v031-frontend-plugin-bugs.test.tsx`、`tests/v031-macos-compat.test.ts`、`tests/v031-visual-e2e-and-screenshots.cjs`。
+
+---
+
+## 十、v0.3.6 本地优先离线语音、Plan 四态检视器、统一批注协议与跨端精修约定
+
+- **本地优先离线语音听写**：
+  - 共享契约 `src/shared/voice-contract.ts` 与主进程 `src/main/voice/` 实现租约制单槽独占采音（`VOICE_ARM_CAPTURE` / `VOICE_APPEND_PCM` / `VOICE_FINISH_CAPTURE` / `VOICE_ABORT_CAPTURE` / `VOICE_TEST_CONNECTION` 等共 12 条新语音 IPC），单次上限 210s / 6.72 MB（16 kHz 单声道 PCM16）与 `3s` 本机采音试录（`mic-test` 0 外联 / 0 `voiceFinish`）；
+  - 渲染层 `src/renderer/lib/voice/pcm-worklet.ts` + `controller.ts` + `hooks/useVoiceCapture.ts` 经独立构建的 `AudioWorklet` 模块（`pcm-worklet-*.js`）在 `file://` + 严格 `script-src 'self'` CSP 下采集 PCM16 并仅在 `voiceAppend` 白名单通道校验传输；支持断连麦克风 `OverconstrainedError` / `NotFoundError` 自动回退默认设备、组件卸载立即释放音频轨与 `AudioContext`；
+  - 外部转写（OpenAI 兼容 / Gemini Developer API）强制实测短语音转写通过后方可启用，支持清空单价（`null` / `undefined` / 空串持久化恢复为未设置，保留 `0` 为有效单价）、独立费用账本与 401 失验 / 403 / 429 双序熔断。
+- **Plan 检视器统一 4 态与按需原文抽屉**：
+  - `src/main/session/plan-outline.ts` 与 `plan-artifact-reader.ts` 拆出独立 `summaryRevision` / `contentRevision` 轻量摘要与完整正文双视图，避免轮询正文开销；
+  - `RightInspector.tsx` + `PlanTimeline.tsx` + `PlanArtifactPanel.tsx` 统一为 `empty / unavailable / outline / execution` 四态，仅在点击底部摘要条时展开只读 `PlanSourceDrawer`（Mermaid 围栏折叠、GFM 提示框、窗口捕获阶段 `Esc` + IME 防护、0 `<img>`）。
+- **批注与引用统一展示顺序（`src/shared/message-annotation.ts`）**：
+  - 新发送消息将用户自由正文置于顶部、附带划词批注卡紧随其后展示，并由共享元数据与解析器统一同步至历史消息展示与 `EditUserMessage` 原地编辑回显，零重复拼接。
+- **macOS 原生细节与发版链路加固**：
+  - `App.tsx` 交通灯安全区按 `14 + 64 / scale` 对齐主进程 `macButtonPosition(scale)`，`mac.css` 全覆盖 `.popover`/`.settings`/`.modal`/`.quota-view` `no-drag` 与 `.composer-more-menu` 玻璃态一致，`.settings`/`.modal` 高度严格约束于 `.overlay` 内不侵入顶栏拖拽条；
+  - `assets/quota/read-quota-macos.sh` 看门狗改由独立 `/bin/sh -c` 启动以避免 SIGKILL 自杀，彻底清理 PTY 进程组与 `.tmp`；`.github/workflows/release.yml` 使用单引号 `cat <<'EOF'` 防反引号命令替换。
+- **自动化守卫**：`tests/v036-backend-voice-and-security.test.ts`、`tests/v036-backend-plan-annotation-and-fixes.test.ts`、`tests/v036-frontend-voice-and-ui.test.tsx`、`tests/v036-frontend-plan-and-annotations.test.tsx`、`tests/v036-visual-e2e.cjs`、`tests/windows-package-smoke.cjs`（`PKG-V1..V4`）。

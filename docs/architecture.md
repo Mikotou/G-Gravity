@@ -73,6 +73,21 @@
 
 ---
 
+## 七、`v0.3.6` 本地离线语音听写、Plan 四态与按需抽屉、统一批注协议及双端实机闭环（2026-11-28）
+
+- **架构规模与零环守卫（`src/shared/` 23 文件、`src/main/` 118 文件、323 条内部静态边、0 循环依赖、0 `acp/ → services/` 反向依赖）**：
+  - `core-service.ts` 420 LOC（`<= 420`）、`index.ts` 143 LOC，全仓主进程单文件最长 633 LOC（`<= 650`）；**93/93 唯一 IPC 通道**（73 `invoke` + 20 `event`）在共享契约、`preload.ts`、`ipc-router.ts` 与 `macos-menu.ts` 间 1:1 对齐；
+  - 渲染层生产 CSS 收敛至 **`214,294 B <= 215,040 B`**（gzip `38.22 kB`），0 死类、0 跨文件重复选择器、0 非合成动画、`pcm-worklet-*.js` 独立打包 `1,230 B`。
+- **本地优先离线语音子系统（`src/main/voice/` + `assets/local-voice/` + `src/renderer/lib/voice/`）**：
+  - 严禁 Chromium Web Speech API（0 处 AST 引用），严格维持 `script-src 'self'` CSP；默认采用主进程独立 `worker_threads` 运行的 MIT 许可 `whisper.cpp` Emscripten WASM + OpenCC 繁转简（模型 `ggml-base-q5_1.bin` `59,707,625 B` 不入 Git 索引，由 CI `npm run voice:model:fetch` 随包内置，本地缺失可经用户确认下载至 `<userData>/voice-models/`，`model.cjs` 严防软硬链/TOCTOU/大小写及 NFD-NFC 路径漂移）；
+  - 静息态 0 次麦克风权限探测，仅经主进程租约（`dictation` / `mic-test` / `device-list`）放行采音，用毕/切号/失焦/组件卸载即刻释放；支持 OpenAI 兼容与 Gemini Developer API 外部转写（必须实测短语音转写通过才可启用，OS 加密 fail-closed，macOS 冷启被动状态快照零 Keychain 唤醒防死锁，独立费用账本与 401/403/429 熔断）。
+- **Plan 检视器统一 4 态、统一批注协议与跨端精修**：
+  - `PlanArtifactReader` 拆分 `summaryRevision` / `contentRevision` 双视图与防抖竞态清理；前端统一为 `empty / unavailable / outline / execution` 四态与按需展开只读 `PlanSourceDrawer`（Mermaid 折叠、GFM Callout、窗口捕获 `Esc` + IME 防护）；
+  - `src/shared/message-annotation.ts` 统一划词批注展示顺序（用户正文置顶、批注卡紧随其后），同步作用于发送后消息与 `EditUserMessage` 原地编辑；
+  - 补齐 `VoiceControls` 窄窗 `+` 溢出菜单、行内二次确认削除（`ConfirmDeleteButton`）、顶部自动图标开关 + 3×2 原创图标网格、macOS B11 交通灯安全区 `14 + 64 / scale`、`.settings`/`.modal` 100% 高度不侵入顶栏、`mac.css` 全覆盖 `no-drag`、以及 `read-quota-macos.sh` 看门狗独立进程组清理与 `release.yml` 单引号 heredoc 修复。
+
+---
+
 ## 二、物理目录所有权与双门禁流程
 
 - `@lead`：独占根配置、`assets/icons/`、`public/icons/`、`docs/architecture.md` 及 `src/shared/`；
@@ -89,4 +104,4 @@
 
 - **移除零散弹窗，合并为全屏侧栏式设置中心**：原 `AccountsModal.tsx`、`PluginsModal.tsx`、`ThemeSettingsModal.tsx`、`ApprovalDrawer.tsx`、`AboutModal.tsx`、`TelemetryPopover.tsx` 统一收敛至 `SettingsView.tsx`、`settings/AppearancePanels.tsx` 与 `settings/WorkspacePanels.tsx`（快捷键 `Ctrl+,` 打开，`Escape` 关闭）。
 - **独立 `Composer.tsx` 与安全 `Markdown.tsx`**：抽离底部多模态输入框（Slash / `@` 补全、贴图、Mode/Model/Effort 栏）与无原始 HTML 注入的 GFM Markdown 渲染组件。
-- **纯 CSS 变量派生与容器查询**：`styles/global.css` 基于 23 个主题色 Token 通过 `color-mix(in srgb, ...)` 统一派生视觉层级，并使用 `@container pane` 适配双分屏与 2×2 四宫格窄窗格布局。
+- **纯 CSS 变量派生与容器查询**：`styles/index.css`（收敛自旧 `global.css` / `design-system.css` / `claude-studio.css`）基于 23 个主题色 Token 通过 `color-mix(in srgb, ...)` 统一派生视觉层级，并使用 `@container pane` / `@container insp` / `@container hm` 适配窄窗格与窄检视器布局。

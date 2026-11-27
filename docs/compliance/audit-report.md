@@ -239,3 +239,49 @@
 - macOS Apple Silicon (`arm64`, APFS, Electron 35.7.5) 真机双 Neon QA 与 `npm run dist:mac`：**PASS**
   - **后端 + 全部 Darwin/POSIX 专项**：10 套件 **145/145 PASS（0 failed / 0 skipped）**，Windows 端跳过的 8 项 Darwin/POSIX 真机测试（`/usr/bin/script` PTY 额度、POSIX 进程组清理、APFS 符号链接拦截）与新增 APFS `/tmp` 别名/大小写内联图片预览/NFC-NFD/Updater macOS 回归全部实机激活通过；`Gravity-0.3.5-mac-arm64.dmg`（`hdiutil verify VALID`）与 `.zip`（`unzip -tq` 0 错）资产分离洁净（`.ico`/`.ps1`/`.map`/`.d.ts` 均为 0），打包版 Electron 35.7.5 内嵌 Node 22.16.0 实机跑通 `node:sqlite` 写锁恢复、APFS 大小写图片预览与断网 Bergamot WASM 翻译；`~/.gemini` 严格 0 字节写入；
   - **前端 + 2x Retina 视觉 + 原生 `mac-inset` 冒烟**：9 套件 **108/108 PASS**，`desktop-layout-smoke` 与 6 主题 `v035-visual-e2e` 全绿，2x Retina 实机验证 6 主题命中原生 `SF Pro Text` / `SF Mono`、280px 窄检视器 7d 读数与 5 按钮费用卡零裁切、`Ctrl+,` vs `⌘,` 隔离与 14 张 2x 截图目视通过，打包版 `Gravity.app` 验证交通灯安全区（82px ≥ 78px）、80%/100%/150% 缩放持久化、悬浮检视器与 Dock 常驻恢复全部通过。
+
+---
+
+## 八、`v0.3.6` 离线语音合规、零 Web Speech 守卫与 Windows + macOS 双端全量终审（2026-11-28）
+
+- **终审结论**：**`COMPLIANCE_PASS`（Windows + macOS Apple Silicon `arm64` 双端 0 P0 / 0 P1 通过，双端完成 Stage QA-1 只读盲审 → 修复 → Stage QA-2 全量单测、6 主题视觉 E2E 及原版打包 `.exe`/`.app`/`.dmg`/`.zip` 实机离线冒烟全绿）**
+- **变更范围**：共享契约层 `src/shared/`（23 个 TS 文件、0 循环依赖）、主进程 `src/main/`（118 个 TS 文件、323 条内部静态边、0 循环依赖、0 `acp/ → services/` 反向边、最大单文件 `swarm-tracker.ts` / `approval-engine.ts` 633 LOC ≤ 650、`core-service.ts` 420 LOC ≤ 420、`index.ts` 143 LOC、93/93 唯一 IPC 通道 1:1 对齐）、离线语音资产 `assets/local-voice/`（`whisper.cjs`/`whisper.wasm`/`worker.cjs`/`model.cjs`/OpenCC 词表/7 份完整许可，`ggml-base-q5_1.bin` 未入 Git 索引）、渲染层 `src/renderer/`（生产 CSS **`214,294 B <= 215,040 B`**、gzip `38.22 kB`、`pcm-worklet-D2Vo8uE3.js` `1,230 B`、0 死类、0 跨文件重复选择器、0 非合成动画）及全量自动化与视觉 E2E 套件（**0 改动任何官方 Antigravity 内置插件、0 触碰真实 `~/.gemini`**）。
+
+### 8.1 `v0.3.6` 新增合规防护项与关键实机修复闭环
+
+1. **严格零 Web Speech API 与零放宽 CSP 守卫 — PASS**
+   - `tests/security-baseline.test.ts` 全量 AST 守卫确认 `src/` 中 **0 处** `SpeechRecognition` / `webkitSpeechRecognition` 引用；
+   - 渲染层严格维持 `script-src 'self'`（Windows 便携包与 macOS `Gravity.app` `file://` 实机验证 0 `'wasm-unsafe-eval'` / `blob:` / `'unsafe-eval'`）；`AudioWorklet` 模块独立打包为 `dist/renderer/assets/pcm-worklet-*.js` 在严格 CSP 下成功采集非零 16 kHz PCM16；
+   - `preload.ts` / `ipc-router.ts` 严格限制二进制 PCM16 载荷仅允许通过 `VOICE_APPEND_PCM` 白名单通道，其余 72 条 invoke 通道（含 8 类代表通道实机攻防）100% 拒绝二进制注入。
+2. **离线 Whisper 模型供应链完整性与路径安全（`model.cjs`）— PASS**
+   - `ggml-base-q5_1.bin`（MIT 许可，精确 `59,707,625 B`，SHA-256 `422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898`）通过 `.gitignore` 保持 Git 仓库轻量（`git ls-files assets/local-voice/ggml-base-q5_1.bin` 为空），CI 发版前经 `npm run voice:model:fetch` 校验并随包打入 `Gravity.exe` / `Gravity.app`；
+   - 双端实机核验：Windows 8.3 短路径、大小写变体及 Electron 35 `lstatSync.dev=0n` 身份比对通过；macOS `/tmp` → `/private/tmp` 别名、APFS 大小写 + NFC/NFD 规范化通过且严格保留 `darwin` `dev` 一致性校验；双端均 100% 拒绝父目录软链、文件软链、硬链（`nlink > 1`）与文件篡改；断网环境下 `globalThis.fetch` 拦截 **0 次外联**完成离线转写。
+3. **静息 0 权限调用、租约制采音与 macOS 冷启零 Keychain 阻塞 — PASS**
+   - 双端原版打包实机验证：冷启动与打开设置通用页 `VoiceSettingsCard` 静息态 `{ getUserMedia: 0, enumerateDevices: 0, permissions.query: 0 }`；静息裸调 `getUserMedia` 被主进程双权限处理器拒绝；仅显式点击录音 / 3 秒试录 / 选择输入设备取得主进程租约后放行，切号/失焦/卸载立即 `dispose()` 释放音频轨与 `AudioContext`；
+   - **macOS 实机 P0 闭环**：修复 `VoiceService.state()` 在冷启动 `getBootstrap()` 中无条件调用 `safeStorage.isEncryptionAvailable()` 引发 `SecKeychainAddGenericPassword` 同步锁死主线程的缺陷（`SecretVault` / `VoiceService` / `index.ts` 对未配置外部密钥的被动状态快照免唤醒 Keychain，且先校验磁盘密文文件存在性；实际保存/启用外部语音密钥时仍执行严格 fail-closed 探测，不可加密时硬拒绝且 0 明文落盘）。
+4. **macOS 辅助脚本、发版工作流与十一大红线终审 — PASS**
+   - 修复 `.github/workflows/release.yml` 未加引号 heredoc 中反引号触发 bash 命令替换的 P0 隐患（改用单引号 `cat <<'EOF'`，经 macOS `bash -euo pipefail` 干跑验证通过）；
+   - 修复 `assets/quota/read-quota-macos.sh`（纯 LF）SIGKILL 看门狗与父 shell 同进程组导致自杀残留的 P1 缺陷，改由独立 `/bin/sh -c` 启动并先 `TERM` 再经 `ps + awk` 逐一 `SIGKILL` 除 `$$` 外全部组员后清理 `reading.json.*.tmp` 与 `pty.????????`；
+   - **十一大合规红线（原十大红线 + #11 语音本地优先合规）全部 PASS**：双端隔离实机冒烟均对合成 `$HOME/.gemini`（含 `oauth_creds.json`、`state.pb`、`brain/.../implementation_plan.md`）做前后递归 SHA-256 校验，证实 **0 字节写入、0 文件增删改**，且全程零触碰用户真实 `~/.gemini`。
+
+### 8.2 `v0.3.6` 双端自动化、视觉与真机打包实测证据（终审基线 `v0.3.6-dev` @ `e9ee595`）
+
+- **Windows（NTFS 工作树 + Electron 35.7.5 + 真实 `Gravity.exe`）**：
+  - `npm run typecheck`（4 份 tsconfig）：**0 错误**；`npm run build`：`1.77s`，生产 CSS **`214,294 B <= 215,040 B`**（余量 `746 B`），`pcm-worklet-D2Vo8uE3.js` `1,230 B`。
+  - 全量单测 `GRAVITY_REQUIRE_DIST=1 npm test`：**94 passed | 0 failed | 1 skipped（`official-acp-smoke`）**（**1,286 passed | 0 failed | 11 skipped**，`23.49s`；其中 34 份前端 `.test.tsx` **383/383 PASS**，60 份活跃后端 `.test.ts` **904/904 PASS**）。
+  - 布局与视觉 E2E：`npm run test:layout` 全绿；`node tests/v036-visual-e2e.cjs`（V1–V4：6 预设主题全景、4 档宽含 340px 录音与 280px 抽屉、Plan 4 态与编辑批注卡、`prefers-reduced-motion` 0 无限动画）**100% PASS**（`externalRequests: 0`, `pageErrors: 0`, `consoleErrors: 0`，关键截图逐张人工读图通过）。
+  - Windows 便携包实机冒烟 `npm run dist:exe` & `npm run test:desktop`（`PKG-V1..V4`）：**100% PASS**（`release/Gravity.exe` `177,140,671 B`，随包 `ggml-base-q5_1.bin` `59,707,625 B` + SHA-256 精确匹配，覆盖全空 `userData` 便携版 + `win-unpacked` + 预置便携版，3 轮 100% 离线 Whisper 精准转写 `"The library opens at 9 in the morning."` 耗时 `2.18–2.34s`，4 步退出返回码 `0`，合成 `~/.gemini` 0 字节写入）。
+- **macOS Apple Silicon（`arm64`, macOS `27.2.1`, APFS, Node `v22.14.0`, 真实 `Gravity.app` / `.dmg` / `.zip`）**：
+  - **后端 + 实机打包冒烟（阶段 QA-2A，`MAC-QA-01 ~ 07` — 100% PASS）**：
+    - 4 项 `typecheck` 0 错、`build` `798ms`、CSS `214,294 B`、全量 Vitest（`GRAVITY_REQUIRE_DIST=1`）**94 passed | 0 failed | 1 skipped**（**1,284 passed | 0 failed | 13 skipped**，`15.62s`；全部 9 项 Darwin 专属测试与真模型离线转写全过）；
+    - `read-quota-macos.sh` 4 场景（`last-100ms` / `finished-race` / `timeout` / `sigkill-orphan`）100% PASS，0 孤儿进程、0 残留目录；`model.cjs` APFS `/tmp`、NFC/NFD、软硬链与 `darwin` 严格 `dev` 100% PASS；
+    - Apple Silicon 离线 Whisper WASM：英文 `1,084–1,112ms`（`RTF=0.370–0.380`）、中文 `Tingting` `2,188ms`（`RTF=0.414`，OpenCC 纯简体），`globalThis.fetch` 拦截 `0` 调用，`LocalVoice` `stamp` 缓存命中（`2 → 2`）；
+    - `npm run dist:mac` 产出 `Gravity-0.3.6-mac-arm64.dmg`（`209,109,542 B`，`hdiutil` 挂载验证通过）与 `.zip`（`203,086,075 B`，`ditto` 解包验证通过），`Info.plist` 含 `CFBundleShortVersionString = "0.3.6"` 与 `NSMicrophoneUsageDescription`，内置模型 `59,707,625 B` SHA-256 精确一致，0 泄漏文件；
+    - 原版 `Gravity.app` + 空格/中文/NFD 路径副本实机冒烟：首屏秒开 0 Keychain 阻塞、`file://` 严格 CSP、`bundled` `ready`、静息 0 权限调用、合成 Web Audio 驱动真实 `AudioWorkletNode('gravity-pcm16')` 非零 PCM16（`16000 B`, `maxAbs: 8191`）、非语音 IPC 二进制载荷拒绝、打包态离线 Whisper 转写 `ok: true`（`1,513ms` / `1,571ms`）、Dock 0 窗口常驻重开 + 4 步退出返回码 `0`、合成 `$HOME/.gemini` 7 项哨兵递归 SHA-256 **100% 逐字节一致（0 字节写入）**。
+  - **前端 + 2x Retina 视觉 + 原版 `Gravity.app` UI 冒烟（阶段 QA-2B，`MAC-FE-01 ~ 04` / `MAC-VIS-01 ~ 06` / `MAC-APP-01 ~ 08` — 100% PASS，0 P0 / 0 P1）**：
+    - 34/34 前端 `.test.tsx`（**383/383 PASS**）、`npm run test:layout` 0 回归、`v036-visual-e2e.cjs` V1–V4 100% PASS；
+    - 2x Retina 专项验证命中 `SF Pro Text` / `SF Pro Display` / `PingFang SC` / `SF Mono`、`2dppx` 浅色正文加深、`macos-light`/`macos-dark` 玻璃态与 `.composer-more-menu` 统一、0 无限降动效动画，11 张 2x Retina 及实机截图经人工读图确认无截断/重叠/溢出；
+    - 原版 `Gravity.app` 实机验证 B11 交通灯安全净空（`80%` `+13.4pt`、`100%` `+14.0pt`、`140%` `+40.8pt`、`160%` `+55.2pt`）、`960×640pt @ 160%` 设置中心 `top=44px, height=332px` 0 侵入顶栏且 `no-drag` 可点击、全部 `.popover`/`.settings`/`.modal`/`.quota-view` 为 `no-drag`、浮层检视器 `top=54px`、双语 View 菜单 + 单步缩放 + Dock 恢复 + 退出码 `0`。
+- **非阻塞 P2 后续打磨备忘（不阻塞 `v0.3.6` 发版）**：
+  1. `mac.css` 可于后续版本补充 `.inspector.is-floating, .inspector.is-floating .inspector-bar { -webkit-app-region: no-drag }` 以覆盖浮层检视器标题栏 4–7px 边距空隙；
+  2. `tests/app-native-core.test.tsx:40` 同步断言 `swarm-active-pill-` 在 34 文件满载高并发下偶发 1 次竞态（单跑 3/3 及全量重跑 34/34 均全绿），后续可改为 `waitFor`。
