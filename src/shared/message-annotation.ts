@@ -172,12 +172,13 @@ export function ensureAnnotationIds(annotations?: readonly MessageAnnotation[]):
   let changed = false;
   const seen = new Set<string>();
   const result = annotations.map((item, idx) => {
-    let id = isValidAnnotationId(item.id)
+    const baseId = isValidAnnotationId(item.id)
       ? item.id.trim()
       : createDeterministicLegacyAnnotationId(item, idx);
+    let id = baseId;
     let suffix = 2;
     while (seen.has(id)) {
-      id = `${id}-${suffix++}`;
+      id = `${baseId}-${suffix++}`;
     }
     seen.add(id);
     if (item.id === id) return item;

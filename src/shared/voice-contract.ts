@@ -359,24 +359,26 @@ export interface VoiceExternalTelemetrySnapshot {
 export function hasExternalVoiceSettings(cfg?: Partial<ExternalVoiceProviderConfig> | null): boolean {
   if (!cfg) return false;
   const model = typeof cfg.model === 'string' ? cfg.model.trim() : '';
-  if (!model || !/^[a-zA-Z0-9._:/-]{1,120}$/.test(model)) return false;
+  if (!model) return false;
   const rawEndpoint = typeof cfg.endpoint === 'string' ? cfg.endpoint.trim() : '';
   if (!rawEndpoint) return false;
   try {
     const url = new URL(rawEndpoint);
     if (url.username || url.password || url.search || url.hash) return false;
-    const isLoopbackHttp = url.protocol === 'http:' && url.hostname === '127.0.0.1';
     const key = typeof cfg.apiKey === 'string' ? cfg.apiKey.trim() : '';
-    if (!isLoopbackHttp && !key && !cfg.hasApiKey) return false;
     if (cfg.provider === 'gemini-api-key') {
-      if (isLoopbackHttp) return true;
+      if (!/^[\w.-]{1,120}$/.test(model)) return false;
+      if (!key && !cfg.hasApiKey) return false;
       return (
-        url.hostname === 'generativelanguage.googleapis.com' &&
-        url.protocol === 'https:' &&
+        url.origin === 'https://generativelanguage.googleapis.com' &&
+        (url.pathname === '' || url.pathname === '/') &&
         (!url.port || url.port === '443')
       );
     }
     if (cfg.provider === 'openai-compatible') {
+      if (!/^[a-zA-Z0-9._:/-]{1,120}$/.test(model)) return false;
+      const isLoopbackHttp = url.protocol === 'http:' && url.hostname === '127.0.0.1';
+      if (!isLoopbackHttp && !key && !cfg.hasApiKey) return false;
       return isAllowedOpenAiCompatibleEndpoint(url);
     }
     return false;
