@@ -44,16 +44,28 @@ function wrap(ui: React.ReactElement, locale: ClientLocale = 'zh-CN') {
 }
 
 function makeTelemetry(): TelemetryDashboardSnapshot {
+  const zero = {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    thinkingTokens: 0,
+    totalTokens: 0,
+    inputCostUsd: 0,
+    cachedInputCostUsd: 0,
+    outputCostUsd: 0,
+    thinkingCostUsd: 0,
+    totalCostUsd: 0,
+  };
   return {
     generatedAt: '2026-11-28T00:00:00.000Z',
     pricingSource: 'reference-api-estimate',
     activeSessions: {},
-    today: { totalInputTokens: 0, totalOutputTokens: 0, totalCachedTokens: 0, totalTokens: 0, totalCostUsd: 0, byModel: [] },
-    last7Days: { totalInputTokens: 0, totalOutputTokens: 0, totalCachedTokens: 0, totalTokens: 0, totalCostUsd: 0, byModel: [] },
-    last30Days: { totalInputTokens: 0, totalOutputTokens: 0, totalCachedTokens: 0, totalTokens: 0, totalCostUsd: 0, byModel: [] },
-    heatmap24h: [],
-    heatmap7d: [],
-    heatmap30d: [],
+    hourly24h: [],
+    matrix7d: [],
+    calendar30d: [],
+    costByRange: { today: zero, '7d': zero, '30d': zero },
+    modelBreakdownByRange: { today: [], '7d': [], '30d': [] },
+    sessionModelBreakdowns: {},
     rateCards: [],
   };
 }
@@ -146,7 +158,7 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
         summaryRevision: 5,
         contentRevision: 5,
         filePath: 'C:\\brain\\implementation_plan.md',
-        outline: { title: '旧计划', sections: [{ id: 'sec-1', heading: '不应在清空态露文件栏' }], sectionCount: 1 },
+        outline: { title: '旧计划', sections: [{ id: 'sec-1', level: 2, heading: '不应在清空态露文件栏', summary: '' }], sectionCount: 1 },
       }),
     };
     const oldMsg: ChatMessageItem = {
@@ -160,7 +172,8 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
     render(
       wrap(
         <RightInspector
-          open
+          collapsed={false}
+          focusedDiffFile={null}
           width={400}
           activeTab="plan"
           profileId="p1"
@@ -389,7 +402,7 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
             summaryRevision: 4,
             contentRevision: 4,
             filePath,
-            outline: { title: '实施总览', sections: [{ id: 'v', heading: '验证章节' }], sectionCount: 1 },
+            outline: { title: '实施总览', sections: [{ id: 'v', level: 2, heading: '验证章节', summary: '' }], sectionCount: 1 },
             updatedAt: '2026-11-28T00:00:00.000Z',
           }
     );
@@ -466,7 +479,7 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
             summaryRevision: 100,
             contentRevision: contentRev,
             filePath: 'C:\\brain\\implementation_plan.md',
-            outline: { title: '大纲不变', sections: [{ id: 's1', heading: '第一节' }], sectionCount: 1 },
+            outline: { title: '大纲不变', sections: [{ id: 's1', level: 2, heading: '第一节', summary: '' }], sectionCount: 1 },
           };
         }
         return {
@@ -521,7 +534,7 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
       filePath: `C:\\brain\\${input.sessionId}\\implementation_plan.md`,
       ...(input.view === 'content'
         ? { content: `# ${input.sessionId} 全文` }
-        : { outline: { title: `概要 ${input.sessionId}`, sections: [{ id: 'x', heading: '章节' }], sectionCount: 1 } }),
+        : { outline: { title: `概要 ${input.sessionId}`, sections: [{ id: 'x', level: 2, heading: '章节', summary: '' }], sectionCount: 1 } }),
     }));
     window.gravityDesktop = {
       ...getFallbackDesktopBridge(),

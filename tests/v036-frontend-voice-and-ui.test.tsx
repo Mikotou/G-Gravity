@@ -23,7 +23,7 @@ import {
   holdActiveVoiceCaptures,
   listInputDevicesWithLease,
 } from '../src/renderer/lib/voice/controller';
-import { getFallbackDesktopBridge, resetFallbackDesktopBridge } from '../src/renderer/services/desktop-bridge';
+import { getFallbackDesktopBridge, resetFallbackDesktopBridge, type VoiceBridge } from '../src/renderer/services/desktop-bridge';
 import {
   DEFAULT_APPROVAL_CONFIG,
   DEFAULT_TRANSLATION_CONFIG,
@@ -38,7 +38,7 @@ import {
   type ClientPreferences,
   type GravityDesktopBridge,
   type ManagedSessionSummary,
-  type PluginsSnapshot,
+  type PluginsManagerSnapshot,
   type TelemetryDashboardSnapshot,
   type VoiceAppendResult,
   type VoiceCaptureRevokedEvent,
@@ -223,22 +223,22 @@ function makeVoiceBridgeMock(overrides: Partial<GravityDesktopBridge> = {}) {
   const settledListeners = new Set<(e: VoiceSettledEvent) => void>();
   const revokedListeners = new Set<(e: VoiceCaptureRevokedEvent) => void>();
   const base = getFallbackDesktopBridge();
-  const bridge: GravityDesktopBridge = {
+  const bridge = {
     ...base,
-    onVoiceSegment: (fn) => {
+    onVoiceSegment: (fn: (e: VoiceSegmentEvent) => void) => {
       segListeners.add(fn);
       return () => segListeners.delete(fn);
     },
-    onVoiceSettled: (fn) => {
+    onVoiceSettled: (fn: (e: VoiceSettledEvent) => void) => {
       settledListeners.add(fn);
       return () => settledListeners.delete(fn);
     },
-    onVoiceCaptureRevoked: (fn) => {
+    onVoiceCaptureRevoked: (fn: (e: VoiceCaptureRevokedEvent) => void) => {
       revokedListeners.add(fn);
       return () => revokedListeners.delete(fn);
     },
     ...overrides,
-  };
+  } as GravityDesktopBridge & VoiceBridge;
   return {
     bridge,
     emitSegment: (e: VoiceSegmentEvent) => segListeners.forEach((fn) => fn(e)),
@@ -333,12 +333,12 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
               captureId: input.captureId,
               owner: { profileId: 'p1', sessionId: 's1' },
               epoch: 0,
-              purpose: 'dictation',
-              engine: 'external-api',
+              purpose: 'dictation' as const,
+              engine: 'external-api' as const,
               sampleRate: VOICE_SAMPLE_RATE,
               maxDurationMs: VOICE_MAX_DURATION_MS,
               maxPcmBytes: VOICE_MAX_PCM_BYTES,
-              state: input.op === 'media-ready' ? 'capturing' : 'released',
+              state: (input.op === 'media-ready' ? 'capturing' : 'released') as 'capturing' | 'released',
             };
           }
           order.push('arm:start');
@@ -346,12 +346,12 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
             captureId: 'cap-order',
             owner: input.owner,
             epoch: 0,
-            purpose: 'dictation',
-            engine: 'external-api',
+            purpose: 'dictation' as const,
+            engine: 'external-api' as const,
             sampleRate: VOICE_SAMPLE_RATE,
             maxDurationMs: VOICE_MAX_DURATION_MS,
             maxPcmBytes: VOICE_MAX_PCM_BYTES,
-            state: 'armed',
+            state: 'armed' as const,
           };
         }),
         voiceAppend: vi.fn(async (input): Promise<VoiceAppendResult> => {
@@ -368,7 +368,7 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
         }),
         voiceFinish: vi.fn(async (input) => {
           order.push(`finish:${input.finalChunkSeq}`);
-          return { captureId: input.captureId, status: 'finishing', acceptedSeq: input.finalChunkSeq, acceptedBytes: 100 };
+          return { captureId: input.captureId, status: 'finishing' as const, acceptedSeq: input.finalChunkSeq ?? 0, acceptedBytes: 100 };
         }),
       });
 
@@ -448,12 +448,12 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
           captureId: isVoiceCaptureControlRequest(input) ? input.captureId : `cap-${sequence}`,
           owner: { profileId: 'p1', sessionId: 's1' },
           epoch: 0,
-          purpose: 'dictation',
-          engine: 'local',
+          purpose: 'dictation' as const,
+          engine: 'local' as const,
           sampleRate: VOICE_SAMPLE_RATE,
           maxDurationMs: VOICE_MAX_DURATION_MS,
           maxPcmBytes: VOICE_MAX_PCM_BYTES,
-          state: isVoiceCaptureControlRequest(input) ? 'capturing' : 'armed',
+          state: (isVoiceCaptureControlRequest(input) ? 'capturing' : 'armed') as 'capturing' | 'armed',
         })),
       });
       const ctrl = new VoiceCaptureController(
@@ -483,7 +483,7 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
         owner: { profileId: 'p1', sessionId: 's1' },
         epoch: 0,
         captureId: `cap-${sequence}`,
-        reason: 'focus-lost',
+        reason: 'permission-revoked',
         message: '采音权限已收回',
       };
       if (sequence === 'settled-first') {
@@ -550,12 +550,12 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
               captureId: input.captureId,
               owner: { profileId: 'p-default', sessionId: 'sess-voice-1' },
               epoch: 0,
-              purpose: 'dictation',
-              engine: 'local',
+              purpose: 'dictation' as const,
+              engine: 'local' as const,
               sampleRate: VOICE_SAMPLE_RATE,
               maxDurationMs: VOICE_MAX_DURATION_MS,
               maxPcmBytes: VOICE_MAX_PCM_BYTES,
-              state: input.op === 'media-ready' ? 'capturing' : 'released',
+              state: (input.op === 'media-ready' ? 'capturing' : 'released') as 'capturing' | 'released',
             };
           }
           const cid = `cap-ui-${++capSeq}`;
@@ -563,15 +563,15 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
             captureId: cid,
             owner: input.owner,
             epoch: 0,
-            purpose: 'dictation',
-            engine: 'local',
+            purpose: 'dictation' as const,
+            engine: 'local' as const,
             sampleRate: VOICE_SAMPLE_RATE,
             maxDurationMs: VOICE_MAX_DURATION_MS,
             maxPcmBytes: VOICE_MAX_PCM_BYTES,
-            state: 'armed',
+            state: 'armed' as const,
           };
         }),
-        voiceFinish: vi.fn(async (input) => ({ captureId: input.captureId, status: 'finishing', acceptedSeq: input.finalChunkSeq, acceptedBytes: 0 })),
+        voiceFinish: vi.fn(async (input) => ({ captureId: input.captureId, status: 'finishing' as const, acceptedSeq: input.finalChunkSeq ?? 0, acceptedBytes: 0 })),
         voiceAbort: vi.fn(async (input) => ({ captureId: input.captureId, aborted: true })),
       });
       window.gravityDesktop = bridge;
@@ -711,6 +711,8 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
         config: {
           ...structuredClone(DEFAULT_VOICE_CONFIG),
           externalProvider: {
+            enabled: false,
+            timeoutMs: 25_000,
             provider: 'openai-compatible',
             endpoint: 'https://api.openai.com/v1',
             model: 'gpt-4o-mini-transcribe',
@@ -724,6 +726,7 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
           fileName: VOICE_LOCAL_MODEL_SPEC.fileName,
           expectedBytes: VOICE_LOCAL_MODEL_SPEC.sizeBytes,
           progressPercent: 40,
+          sha256Verified: false,
         },
         external: {
           ready: false,
@@ -770,12 +773,12 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
           captureId: isVoiceCaptureControlRequest(input) ? input.captureId : 'cap-mictest',
           owner: { profileId: 'p1' },
           epoch: 0,
-          purpose: 'mic-test',
-          engine: 'local',
+          purpose: 'mic-test' as const,
+          engine: 'local' as const,
           sampleRate: VOICE_SAMPLE_RATE,
           maxDurationMs: 3000,
           maxPcmBytes: 96_000,
-          state: isVoiceCaptureControlRequest(input) ? (input.op === 'media-ready' ? 'capturing' : 'released') : 'armed',
+          state: (isVoiceCaptureControlRequest(input) ? (input.op === 'media-ready' ? 'capturing' : 'released') : 'armed') as 'capturing' | 'released' | 'armed',
         })),
         voiceAppend: vi.fn(async (input) => ({
           captureId: input.captureId,
@@ -787,11 +790,22 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
       });
       window.gravityDesktop = bridge;
 
+      const zeroRange = { callCount: 0, totalDurationMs: 0, knownCostUsd: 0, hasUnknownCost: false };
       render(
         wrap(
           <VoiceSettingsCard
             profileId="p1"
-            telemetry={{ cumulativeCalls: 2, totalDurationMs: 90_000, knownCostUsd: 0.009, hasUnknownCost: true, byProvider: {} }}
+            telemetry={{
+              cumulativeCalls: 2,
+              completedCalls: 2,
+              errorCalls: 0,
+              totalDurationMs: 90_000,
+              knownCostUsd: 0.009,
+              hasUnknownCost: true,
+              byRange: { today: zeroRange, '7d': zeroRange, '30d': zeroRange },
+              providers: [],
+              updatedAt: '2026-11-28T00:00:00Z',
+            }}
           />
         )
       );
@@ -893,8 +907,8 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
     const bootBase = await base.getBootstrap();
     let activeProfile = 'default';
     const profiles = [
-      { profileId: 'default', name: 'Profile A', isDefault: true, isolatedAppDataDir: 'C:\\qa\\a', createdAt: '2026-11-28T00:00:00Z' },
-      { profileId: 'profile-b', name: 'Profile B', isDefault: false, isolatedAppDataDir: 'C:\\qa\\b', createdAt: '2026-11-28T00:00:00Z' },
+      { profileId: 'default', name: 'Profile A', isDefault: true, isolatedAppDataDir: 'C:\\qa\\a', createdAt: '2026-11-28T00:00:00Z', lastActivatedAt: '2026-11-28T00:00:00Z' },
+      { profileId: 'profile-b', name: 'Profile B', isDefault: false, isolatedAppDataDir: 'C:\\qa\\b', createdAt: '2026-11-28T00:00:00Z', lastActivatedAt: '2026-11-28T00:00:00Z' },
     ];
     const sessA = { ...bootBase.sessions[0], sessionId: 'sess-prof-a', profileId: 'default', title: 'Session A', status: 'idle' as const };
     const sessB = { ...bootBase.sessions[0], sessionId: 'sess-prof-b', profileId: 'profile-b', title: 'Session B', status: 'idle' as const };
@@ -911,13 +925,14 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
         accounts: accountsSnapshot(activeProfile),
         sessions: activeProfile === 'default' ? [sessA] : [sessB],
         layout: {
-          mode: 'single',
-          focusedSlot: 0,
-          slots: [activeProfile === 'default' ? 'sess-prof-a' : 'sess-prof-b', null],
+          ...bootBase.layout,
+          layoutMode: 'single' as const,
+          activePrimarySessionId: activeProfile === 'default' ? 'sess-prof-a' : 'sess-prof-b',
+          splitSecondarySessionId: null,
           openTabSessionIds: [activeProfile === 'default' ? 'sess-prof-a' : 'sess-prof-b'],
-          inspectorOpen: false,
-          inspectorTab: 'plan',
-          sidebarCollapsed: false,
+          rightInspectorCollapsed: true,
+          activeInspectorTab: 'plan' as const,
+          leftSidebarCollapsed: false,
         },
         pendingApprovals: [],
       })),
@@ -936,12 +951,12 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
         captureId: isVoiceCaptureControlRequest(input) ? input.captureId : 'cap-prof-a',
         owner: { profileId: 'default', sessionId: 'sess-prof-a' },
         epoch: 0,
-        purpose: 'dictation',
-        engine: 'local',
+        purpose: 'dictation' as const,
+        engine: 'local' as const,
         sampleRate: VOICE_SAMPLE_RATE,
         maxDurationMs: VOICE_MAX_DURATION_MS,
         maxPcmBytes: VOICE_MAX_PCM_BYTES,
-        state: isVoiceCaptureControlRequest(input) ? 'capturing' : 'armed',
+        state: (isVoiceCaptureControlRequest(input) ? 'capturing' : 'armed') as 'capturing' | 'armed',
       })),
     });
 
@@ -1129,14 +1144,12 @@ describe('Gravity v0.3.6 UI 缺陷清零与交互细节 (TC-UI-01..17)', () => {
       processPerSession: false,
       activeProfileId: 'default',
     };
-    const pluginsSnap: PluginsSnapshot = {
-      profileId: 'default',
-      isIsolatedProfile: false,
+    const pluginsSnap: PluginsManagerSnapshot = {
       builtins: [],
-      plugins: [{ name: 'demo-plugin', enabled: true, source: 'local' }],
-      mcpServers: [{ name: 'demo-mcp', type: 'stdio', command: 'node', enabled: true }],
+      plugins: [{ name: 'demo-plugin', enabled: true }],
+      mcpServers: [{ name: 'demo-mcp', type: 'stdio', commandOrUrl: 'node', args: [], enabled: true }],
       skills: [],
-      updatedAt: '2026-11-28T00:00:00Z',
+      refreshedAt: '2026-11-28T00:00:00Z',
     };
 
     function SettingsHost({ initialLocale }: { initialLocale: ClientLocale }) {
@@ -1148,13 +1161,21 @@ describe('Gravity v0.3.6 UI 缺陷清零与交互细节 (TC-UI-01..17)', () => {
             onSectionChange={setSection}
             onClose={onClose}
             preferences={{ ...basePrefs, locale: initialLocale }}
-            connection={{ state: 'connected', agyVersion: '0.3.6' }}
+            connection={{
+              connected: true,
+              agyBinaryPath: 'agy',
+              agyVersion: '0.3.6',
+              activeSessionCount: 0,
+              maxParallelSessions: 4,
+              activeProfileId: 'default',
+              availableModels: [],
+            }}
             accounts={{
               activeProfileId: 'default',
-              acpIdentity: { connected: true, agentName: 'agy acp', agentVersion: '0.3.6', supportsLogout: false },
+              acpIdentity: { connected: true, agentName: 'agy acp', agentVersion: '0.3.6', authMethods: [], supportsLogout: false },
               profiles: [
-                { profileId: 'default', name: 'Default', isDefault: true, isolatedAppDataDir: 'C:\\qa\\def', createdAt: '' },
-                { profileId: 'p2', name: 'Work', isDefault: false, isolatedAppDataDir: 'C:\\qa\\p2', createdAt: '' },
+                { profileId: 'default', name: 'Default', isDefault: true, isolatedAppDataDir: 'C:\\qa\\def', createdAt: '', lastActivatedAt: '' },
+                { profileId: 'p2', name: 'Work', isDefault: false, isolatedAppDataDir: 'C:\\qa\\p2', createdAt: '', lastActivatedAt: '' },
               ],
             }}
             approvalConfig={DEFAULT_APPROVAL_CONFIG}
@@ -1188,10 +1209,10 @@ describe('Gravity v0.3.6 UI 缺陷清零与交互细节 (TC-UI-01..17)', () => {
             onRunPluginAction={async () => {}}
             onRunMcpAction={async () => {}}
             onToggleSkill={async () => {}}
-            onCheckForUpdates={async () => {}}
+            onCheckUpdates={async () => {}}
             onDownloadUpdate={async () => {}}
             onInstallUpdate={async () => {}}
-            onQuickCreateInProject={() => {}}
+            onQuickCreateInProject={async () => {}}
           />
         </I18nProvider>
       );

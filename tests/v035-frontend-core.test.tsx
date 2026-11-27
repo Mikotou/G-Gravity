@@ -706,7 +706,7 @@ describe('v0.3.5 Plan 检视器', () => {
             : {
                 outline: {
                   title: 'Plan',
-                  sections: [{ id: 's1', heading: '实施步骤', summary: revision > 1 ? '含新增步骤' : '第一步与第二步' }],
+                  sections: [{ id: 's1', level: 2, heading: '实施步骤', summary: revision > 1 ? '含新增步骤' : '第一步与第二步' }],
                   sectionCount: 1,
                 },
               }),
@@ -729,7 +729,8 @@ describe('v0.3.5 Plan 检视器', () => {
     render(
       wrap(
         <RightInspector
-          open
+          collapsed={false}
+          focusedDiffFile={null}
           width={420}
           activeTab="plan"
           profileId="p1"
@@ -839,7 +840,8 @@ describe('v0.3.5 Plan 检视器', () => {
     const { unmount } = render(
       wrap(
         <RightInspector
-          open
+          collapsed={false}
+          focusedDiffFile={null}
           width={420}
           activeTab="plan"
           profileId="p1"
@@ -865,7 +867,8 @@ describe('v0.3.5 Plan 检视器', () => {
     render(
       wrap(
         <RightInspector
-          open
+          collapsed={false}
+          focusedDiffFile={null}
           width={420}
           activeTab="plan"
           profileId="p1"
@@ -892,7 +895,8 @@ describe('v0.3.5 Plan 检视器', () => {
     const { unmount } = render(
       wrap(
         <RightInspector
-          open
+          collapsed={false}
+          focusedDiffFile={null}
           width={420}
           activeTab="plan"
           profileId="p1"
@@ -918,7 +922,8 @@ describe('v0.3.5 Plan 检视器', () => {
     render(
       wrap(
         <RightInspector
-          open
+          collapsed={false}
+          focusedDiffFile={null}
           width={420}
           activeTab="plan"
           profileId="p1"
@@ -948,7 +953,7 @@ describe('v0.3.5 Plan 检视器', () => {
         summaryRevision: 1,
         contentRevision: 1,
         filePath: '/repo/implementation_plan.md',
-        outline: { title: '实施计划', sections: [{ id: 'sec-1', heading: '第一步' }], sectionCount: 1 },
+        outline: { title: '实施计划', sections: [{ id: 'sec-1', level: 2, heading: '第一步', summary: '' }], sectionCount: 1 },
       }),
     };
     const unreceivedInspector = {
@@ -961,7 +966,8 @@ describe('v0.3.5 Plan 检视器', () => {
     const { unmount } = render(
       wrap(
         <RightInspector
-          open
+          collapsed={false}
+          focusedDiffFile={null}
           width={420}
           activeTab="plan"
           profileId="p1"
@@ -984,7 +990,8 @@ describe('v0.3.5 Plan 检视器', () => {
     const clearedView = render(
       wrap(
         <RightInspector
-          open
+          collapsed={false}
+          focusedDiffFile={null}
           width={420}
           activeTab="plan"
           profileId="p1"
@@ -1018,7 +1025,8 @@ describe('v0.3.5 Plan 检视器', () => {
     render(
       wrap(
         <RightInspector
-          open
+          collapsed={false}
+          focusedDiffFile={null}
           width={420}
           activeTab="plan"
           profileId="p1"

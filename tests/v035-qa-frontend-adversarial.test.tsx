@@ -880,7 +880,7 @@ describe('P-T2b & D-01：PlanArtifactPanel 增量读取、异常收口、切换�
               updatedAt: '2026-11-27T01:00:00Z',
               outline: {
                 title: '计划总览',
-                sections: [{ id: 'sec-1', heading: '目标清单', summary: '链接与锚点清单' }],
+                sections: [{ id: 'sec-1', level: 2, heading: '目标清单', summary: '链接与锚点清单' }],
                 sectionCount: 1,
               },
             };
