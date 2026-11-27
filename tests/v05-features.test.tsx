@@ -250,7 +250,7 @@ describe('v0.5 六项核心增强验收测试', () => {
 
     const bodyEl = screen.getByTestId('assistant-body-msg-1');
 
-    // 模拟第 1 次划词：点击 Quote 引用
+    // 模拟第 1 次划词：点击「仅引用」
     vi.spyOn(window, 'getSelection').mockReturnValue({
       toString: () => '第一处关键逻辑负责权限快筛',
       anchorNode: bodyEl,
@@ -259,9 +259,9 @@ describe('v0.5 六项核心增强验收测试', () => {
     } as unknown as Selection);
 
     fireEvent.mouseUp(bodyEl, { button: 0, clientX: 200, clientY: 200 });
-    fireEvent.click(screen.getByTestId('selection-quote-btn'));
+    fireEvent.click(screen.getByTestId('selection-quote-only-btn'));
 
-    // 模拟第 2 次划词：添加第 1 条 Codex 标记批注
+    // 模拟第 2 次划词：点击「引用」并在本条内联批注框写批注
     vi.spyOn(window, 'getSelection').mockReturnValue({
       toString: () => '检查本地文件 src/main/core-service.ts',
       anchorNode: bodyEl,
@@ -270,13 +270,13 @@ describe('v0.5 六项核心增强验收测试', () => {
     } as unknown as Selection);
 
     fireEvent.mouseUp(bodyEl, { button: 0, clientX: 220, clientY: 220 });
-    fireEvent.click(screen.getByTestId('selection-annotate-btn'));
-    fireEvent.change(screen.getByTestId('selection-notation-input'), {
+    fireEvent.click(screen.getByTestId('selection-quote-btn'));
+    const commentInputsAfter2 = screen.getAllByTestId(/^composer-annotation-comment-/);
+    fireEvent.change(commentInputsAfter2[commentInputsAfter2.length - 1], {
       target: { value: '请补充空路径异常校验' },
     });
-    fireEvent.click(screen.getByTestId('selection-notation-save-btn'));
 
-    // 模拟第 3 次划词：添加第 2 条 Codex 标记批注（验证多处标记能力）
+    // 模拟第 3 次划词：添加第 2 条带批注引用（验证多处标记与统一顺序编号）
     vi.spyOn(window, 'getSelection').mockReturnValue({
       toString: () => '第二处关键逻辑负责压缩窗口读取',
       anchorNode: bodyEl,
@@ -285,16 +285,17 @@ describe('v0.5 六项核心增强验收测试', () => {
     } as unknown as Selection);
 
     fireEvent.mouseUp(bodyEl, { button: 0, clientX: 240, clientY: 260 });
-    fireEvent.click(screen.getByTestId('selection-annotate-btn'));
-    fireEvent.change(screen.getByTestId('selection-notation-input'), {
+    fireEvent.click(screen.getByTestId('selection-quote-btn'));
+    const commentInputsAfter3 = screen.getAllByTestId(/^composer-annotation-comment-/);
+    fireEvent.change(commentInputsAfter3[commentInputsAfter3.length - 1], {
       target: { value: '缓存命中后避免重复读取 SQLite' },
     });
-    fireEvent.click(screen.getByTestId('selection-notation-save-btn'));
 
-    // 消息下方应同时显示 #1 和 #2 两处批注钉
+    // 消息下方应按全会话顺序显示 #1、#2、#3 三处编号钉
     const pins = screen.getByTestId('turn-notation-pins');
     expect(pins.textContent).toContain('#1');
     expect(pins.textContent).toContain('#2');
+    expect(pins.textContent).toContain('#3');
     expect(pins.textContent).toContain('请补充空路径异常校验');
     expect(pins.textContent).toContain('缓存命中后避免重复读取 SQLite');
 
@@ -339,18 +340,18 @@ describe('v0.5 六项核心增强验收测试', () => {
     expect(screen.queryByTestId('turn-notation-pins')).toBeNull();
     expect(screen.queryByTestId('composer-annotations-sess-annot')).toBeNull();
     fireEvent.mouseUp(bodyEl, { button: 0, clientX: 240, clientY: 260 });
-    fireEvent.click(screen.getByTestId('selection-annotate-btn'));
-    fireEvent.change(screen.getByTestId('selection-notation-input'), { target: { value: '发送途中新增的批注' } });
-    fireEvent.click(screen.getByTestId('selection-notation-save-btn'));
-    expect(screen.getAllByTestId(/^composer-notation-/)).toHaveLength(1);
+    fireEvent.click(screen.getByTestId('selection-quote-btn'));
+    const inflightInputs = screen.getAllByTestId(/^composer-annotation-comment-/);
+    fireEvent.change(inflightInputs[inflightInputs.length - 1], { target: { value: '发送途中新增的批注' } });
+    expect(screen.getAllByTestId(/^composer-annotation-ann-/)).toHaveLength(1);
     await act(async () => { failSend(new Error('测试断线')); });
     await screen.findByText(/测试断线/);
-    expect(screen.getAllByTestId(/^composer-notation-/)).toHaveLength(3);
-    // 重试时完整发送同一组引用和批注。
+    expect(screen.getAllByTestId(/^composer-annotation-ann-/)).toHaveLength(4);
+    // 重试时按原序完整发送同一组引用和批注。
     fireEvent.click(screen.getByTestId('send-prompt-btn-sess-annot'));
     await waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(2));
     const sent = sendPromptMock.mock.calls[1][0];
-    await waitFor(() => expect(screen.queryAllByTestId(/^composer-notation-/)).toHaveLength(0));
+    await waitFor(() => expect(screen.queryAllByTestId(/^composer-annotation-ann-/)).toHaveLength(0));
     expect(sent.text).toBe('');
     expect(sent.annotations).toEqual([
       expect.objectContaining({ excerpt: '第一处关键逻辑负责权限快筛' }),
@@ -447,6 +448,7 @@ describe('v0.5 六项核心增强验收测试', () => {
           calls.push({ target, mode, isDir });
         },
       },
+      mediaContext: () => ({ homeDir: root, profileId: 'default', owns: () => true }),
     } as unknown as CoreService;
 
     const openFn = CoreService.prototype.openLinkOrFileTarget.bind(fakeCore);

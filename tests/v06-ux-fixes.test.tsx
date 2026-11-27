@@ -52,6 +52,7 @@ describe('v0.6 右击真实点击链路、Reactive 子个体收口、Swarm 折�
           openedCalls.push({ target, mode });
         },
       },
+      mediaContext: () => ({ homeDir: root, profileId: 'default', owns: () => true }),
     } as unknown as CoreService;
     const openFn = CoreService.prototype.openLinkOrFileTarget.bind(fakeCore);
 

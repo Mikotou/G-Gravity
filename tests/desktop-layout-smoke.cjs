@@ -20,13 +20,14 @@ async function checkActivitySeam(page) {
   const { tabDuration, paneDuration } = await page.evaluate(async () => {
     // Measure the repeating streaming indicators after the active tab has finished changing from its idle color.
     await Promise.all(document.getAnimations().filter(a => a instanceof CSSTransition).map(a => a.finished.catch(() => {})));
-    const tabAnims = document.getAnimations().filter(a => a.animationName === 'gv-tab-breathe');
+    const tabAnims = document.getAnimations().filter(a => a.animationName === 'zh-rail-flow' || a.animationName === 'gv-tab-breathe');
     const paneAnims = document.getAnimations().filter(a => a.animationName === 'gv-activity-flow');
-    if (tabAnims.length !== 1) throw new Error('Expected 1 running gv-tab-breathe tab indicator, got ' + tabAnims.length);
+    if (tabAnims.length !== 1) throw new Error('Expected 1 running streaming tab indicator, got ' + tabAnims.length);
     if (paneAnims.length !== 1) throw new Error('Expected 1 running gv-activity-flow pane rail indicator, got ' + paneAnims.length);
     for (const a of [...tabAnims, ...paneAnims]) a.pause();
     return {
       tabDuration: Number(tabAnims[0].effect.getTiming().duration),
+      tabAnimName: tabAnims[0].animationName,
       paneDuration: Number(paneAnims[0].effect.getTiming().duration),
     };
   });
@@ -34,7 +35,7 @@ async function checkActivitySeam(page) {
     {
       label: '.tab[data-tab-state="streaming"]',
       selector: '.tab[data-tab-state="streaming"]',
-      animName: 'gv-tab-breathe',
+      animName: tabDuration ? 'zh-rail-flow' : 'gv-tab-breathe',
       duration: tabDuration,
       isTab: true,
     },
@@ -87,7 +88,7 @@ async function checkActivitySeam(page) {
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const reducedCount = await page.evaluate(() =>
-    document.getAnimations().filter(a => ['gv-activity-flow', 'gv-tab-breathe', 'gv-busy-line'].includes(a.animationName)).length
+    document.getAnimations().filter(a => ['gv-activity-flow', 'zh-rail-flow', 'gv-tab-breathe', 'gv-busy-line'].includes(a.animationName)).length
   );
   assert.equal(reducedCount, 0, 'Expected 0 streaming rail/tab animations under prefers-reduced-motion: reduce, got ' + reducedCount);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -116,6 +117,16 @@ async function checkActivitySeam(page) {
       bundle: true,
       tsconfig: 'tsconfig.renderer.json',
       define: { 'process.env.NODE_ENV': '"production"' },
+      plugins: [
+        {
+          // v0.3.6：esbuild 直编渲染层夹具时 stub Vite 专属 `?worker&url` 虚拟导出
+          name: 'vite-worker-url-stub',
+          setup(b) {
+            b.onResolve({ filter: /\?worker&url$/ }, (args) => ({ path: args.path, namespace: 'vite-worker-url' }));
+            b.onLoad({ filter: /.*/, namespace: 'vite-worker-url' }, () => ({ contents: 'export default "";', loader: 'js' }));
+          },
+        },
+      ],
       logLevel: 'error',
     });
     await writeFile(path.join(dir, 'index.html'), '<meta charset="utf-8"><link rel="stylesheet" href="fixture.css"><style>#root{height:100vh;width:100%;display:flex}#root>.pane{height:100%;width:100%}</style><div id="root"></div><script src="fixture.js"></script>');
@@ -230,9 +241,11 @@ async function checkActivitySeam(page) {
         const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
         el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
       });
-      await page.getByTestId('selection-annotate-btn').click();
-      await page.getByTestId('selection-notation-input').pressSequentially(comment);
-      await page.getByTestId('selection-notation-save-btn').click();
+      await page.getByTestId('selection-quote-btn').click();
+      const commentBox = page.locator('[data-testid^="composer-annotation-comment-"]').last();
+      await commentBox.waitFor();
+      await commentBox.pressSequentially(comment);
+      await commentBox.press('Enter');
     }
     await annotate('strong', '意见一'); await annotate('p:nth-of-type(2)', '意见二');
     assert.equal(await page.evaluate(() => CSS.highlights.get('gravity-annotations')?.size), 2);

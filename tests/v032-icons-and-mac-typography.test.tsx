@@ -278,18 +278,29 @@ describe('v0.3.2 双端图标视觉、macOS 排版体系与 FE-14 / FE-15 / FE-1
       { label: '.about-hero img', exact: '.about-hero img' },
     ];
 
+    const rootTokenDecls = getEffectiveDeclarations(
+      allRules,
+      (sel, rule) => rule.atContext.length === 0 && (sel === ':root' || sel.startsWith(':root['))
+    );
+    const resolveCssVar = (raw: string): string => {
+      const m = /^var\(\s*(--[a-z0-9-]+)\s*(?:,\s*([^)]+))?\)$/i.exec(raw.trim());
+      if (!m) return raw;
+      return rootTokenDecls.get(m[1]) ?? m[2] ?? '';
+    };
+
     for (const target of targets) {
       const decls = getEffectiveDeclarations(allRules, (sel, rule) => rule.atContext.length === 0 && sel === target.exact);
       const boxShadow = decls.get('box-shadow');
       const filter = decls.get('filter') ?? '';
+      const resolvedFilter = resolveCssVar(filter);
 
       expect(
         isBoxShadowNone(boxShadow),
         `${target.label} 不应保留外层矩形 box-shadow，当前为: ${boxShadow}`
       ).toBe(true);
       expect(
-        filter,
-        `${target.label} 应使用贴合透明轮廓的 filter: drop-shadow(...)，当前为: "${filter}"`
+        resolvedFilter,
+        `${target.label} 应使用贴合透明轮廓的 filter: drop-shadow(...)，当前为: "${filter}" -> "${resolvedFilter}"`
       ).toMatch(/drop-shadow\(/i);
     }
 

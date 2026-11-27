@@ -832,7 +832,7 @@ describe('Q-T2b / Q-T3b / Q-T4b：Plan 提问卡 v2 对抗与边界验证', () =
  * P-T2b & D-01：PlanArtifactPanel 缓存复用、unchanged 收口、跨账号/会话隔离、锚点与 owner 边界
  * ======================================================================= */
 describe('P-T2b & D-01：PlanArtifactPanel 增量读取、异常收口、切换清理与安全链接边界', () => {
-  it('真命中 unchanged 复用缓存；snapshot=null 收 unchanged 重拉仍无则收口空态；切换会话丢弃在途旧响应；truncated 横幅与 #anchor 滚动；D-01 planArtifactOwner 严格隔离', async () => {
+  it('真命中 unchanged 复用缓存；snapshot=null 收 unchanged 重拉仍无则收口空态；切换会话重置抽屉并丢弃在途旧响应；truncated 横幅与 #anchor 滚动；D-01 planArtifactOwner 严格隔离', async () => {
     let listener: ((e: PlanArtifactChangedEvent) => void) | undefined;
     const unsubSpy = vi.fn();
     const openLinkOrFileTarget = vi.fn().mockResolvedValue({ opened: true, modeUsed: 'browser', resolvedTarget: '' });
@@ -840,53 +840,79 @@ describe('P-T2b & D-01：PlanArtifactPanel 增量读取、异常收口、切换�
 
     const planPath = 'D:\\sandbox-home\\.gemini\\brain\\sess-a\\implementation_plan.md';
     let resolveSlowA!: (v: PlanArtifactSnapshot) => void;
+    const fullContent = [
+      '# 计划总览',
+      '',
+      '## 目标清单',
+      '',
+      '- [跳转目标](#目标清单)',
+      '- [官网文档](https://example.com/spec)',
+      '- [工作区设计](./docs/design.md)',
+      '- [打开本体](file:///D:/sandbox-home/.gemini/brain/sess-a/implementation_plan.md)',
+    ].join('\n');
 
-    const getSessionPlanArtifact = vi
-      .fn<(input: { profileId: string; sessionId: string; knownRevision?: number }) => Promise<PlanArtifactSnapshot>>()
-      // 1) 首次正常 ready（含 truncated: true + 锚点 + 外链 + 工作区文件 + 本体链接）
-      .mockResolvedValueOnce({
-        status: 'ready',
-        owner: { profileId: 'p1', sessionId: 'sess-a' },
-        revision: 3,
-        filePath: planPath,
-        truncated: true,
-        updatedAt: '2026-11-27T01:00:00Z',
-        content: [
-          '# 计划总览',
-          '',
-          '## 目标清单',
-          '',
-          '- [跳转目标](#目标清单)',
-          '- [官网文档](https://example.com/spec)',
-          '- [工作区设计](./docs/design.md)',
-          '- [打开本体](file:///D:/sandbox-home/.gemini/brain/sess-a/implementation_plan.md)',
-        ].join('\n'),
-      })
-      // 2) 事件通知 rev=3 时后端返回 unchanged -> 复用现有缓存并结束 loading
-      .mockResolvedValueOnce({
-        status: 'unchanged',
-        owner: { profileId: 'p1', sessionId: 'sess-a' },
-        revision: 3,
-      })
-      // 3) 触发一个在途的慢响应（用于随后切换会话丢弃验证）
-      .mockImplementationOnce(
-        () =>
-          new Promise<PlanArtifactSnapshot>((resolve) => {
+    let sessASummaryCalls = 0;
+    let sessBSummaryCalls = 0;
+    const getSessionPlanArtifact = vi.fn(
+      async (input: { profileId: string; sessionId: string; view?: 'summary' | 'content'; knownRevision?: number }): Promise<PlanArtifactSnapshot> => {
+        const view = input.view ?? 'summary';
+        if (input.sessionId === 'sess-b') {
+          if (view === 'summary') sessBSummaryCalls += 1;
+          return {
+            status: 'unchanged',
+            view,
+            owner: { profileId: 'p2', sessionId: 'sess-b' },
+            revision: 0,
+          };
+        }
+        if (view === 'summary') {
+          sessASummaryCalls += 1;
+          if (sessASummaryCalls === 1) {
+            return {
+              status: 'ready',
+              view: 'summary',
+              owner: { profileId: 'p1', sessionId: 'sess-a' },
+              revision: 3,
+              summaryRevision: 3,
+              contentRevision: 3,
+              filePath: planPath,
+              truncated: true,
+              updatedAt: '2026-11-27T01:00:00Z',
+              outline: {
+                title: '计划总览',
+                sections: [{ id: 'sec-1', heading: '目标清单', summary: '链接与锚点清单' }],
+                sectionCount: 1,
+              },
+            };
+          }
+          if (sessASummaryCalls === 2) {
+            return {
+              status: 'unchanged',
+              view: 'summary',
+              owner: { profileId: 'p1', sessionId: 'sess-a' },
+              revision: 3,
+              summaryRevision: 3,
+              contentRevision: 3,
+            };
+          }
+          return new Promise<PlanArtifactSnapshot>((resolve) => {
             resolveSlowA = resolve;
-          })
-      )
-      // 4) 切换到 p2/sess-b 后，首次异常收到 unchanged -> 自动去掉 knownRevision 重拉一次
-      .mockResolvedValueOnce({
-        status: 'unchanged',
-        owner: { profileId: 'p2', sessionId: 'sess-b' },
-        revision: 0,
-      })
-      // 5) 重拉仍为 unchanged -> 按空态 missing 收口，不卡 Loading
-      .mockResolvedValueOnce({
-        status: 'unchanged',
-        owner: { profileId: 'p2', sessionId: 'sess-b' },
-        revision: 0,
-      });
+          });
+        }
+        return {
+          status: 'ready',
+          view: 'content',
+          owner: { profileId: 'p1', sessionId: 'sess-a' },
+          revision: 3,
+          summaryRevision: 3,
+          contentRevision: 3,
+          filePath: planPath,
+          truncated: true,
+          updatedAt: '2026-11-27T01:00:00Z',
+          content: fullContent,
+        };
+      }
+    );
 
     window.gravityDesktop = {
       ...getFallbackDesktopBridge(),
@@ -902,17 +928,24 @@ describe('P-T2b & D-01：PlanArtifactPanel 增量读取、异常收口、切换�
     };
 
     const { rerender } = render(wrap(<PlanArtifactPanel profileId="p1" sessionId="sess-a" cwd={'F:\\repo'} />));
+    const outline = await screen.findByTestId('plan-outline');
+    expect(outline.textContent).toContain('目标清单');
+    expect(screen.queryByTestId('plan-artifact-document')).toBeNull();
+
+    // 按需打开抽屉读取原文
+    fireEvent.click(screen.getByTestId('plan-source-open'));
     const doc = await screen.findByTestId('plan-artifact-document');
     expect(doc.textContent).toContain('目标清单');
     // truncated 横幅
-    expect(screen.getByTestId('plan-artifact-panel').textContent).toContain('文档较长，仅显示前一部分');
+    expect(screen.getByTestId('plan-source-drawer').textContent).toContain('文档较长，仅显示前一部分');
 
     // 同 revision 事件客户端去重（0 冗余 IPC）；新 revision 后端返回 unchanged 时携带 knownRevision: 3，复用缓存并退出 loading
-    await act(async () => listener?.({ profileId: 'p1', sessionId: 'sess-a', revision: 3 }));
-    expect(getSessionPlanArtifact).toHaveBeenCalledTimes(1);
+    await act(async () => listener?.({ profileId: 'p1', sessionId: 'sess-a', revision: 3, summaryRevision: 3, contentRevision: 3 }));
+    expect(getSessionPlanArtifact).toHaveBeenCalledTimes(2);
 
-    await act(async () => listener?.({ profileId: 'p1', sessionId: 'sess-a', revision: 4 }));
-    expect(getSessionPlanArtifact).toHaveBeenNthCalledWith(2, { profileId: 'p1', sessionId: 'sess-a', knownRevision: 3 });
+    await act(async () => listener?.({ profileId: 'p1', sessionId: 'sess-a', revision: 4, summaryRevision: 4, contentRevision: 4 }));
+    expect(getSessionPlanArtifact).toHaveBeenCalledWith({ profileId: 'p1', sessionId: 'sess-a', view: 'summary', knownRevision: 3 });
+    expect(getSessionPlanArtifact).toHaveBeenCalledWith({ profileId: 'p1', sessionId: 'sess-a', view: 'content' });
     expect(screen.getByTestId('plan-artifact-document').textContent).toContain('目标清单');
 
     // #anchor 页内滚动（遵循 reduced-motion -> behavior: 'auto'），0 次 IPC
@@ -949,7 +982,7 @@ describe('P-T2b & D-01：PlanArtifactPanel 增量读取、异常收口、切换�
       action: 'default-app',
       cwd: 'F:\\repo',
       sessionId: 'sess-a',
-      planArtifactOwner: { profileId: 'p1', sessionId: 'sess-a', revision: 3 },
+      planArtifactOwner: expect.objectContaining({ profileId: 'p1', sessionId: 'sess-a', revision: 3, contentRevision: 3 }),
     });
 
     await act(async () => fireEvent.click(screen.getByRole('button', { name: '打开本体' })));
@@ -958,30 +991,35 @@ describe('P-T2b & D-01：PlanArtifactPanel 增量读取、异常收口、切换�
       action: 'default-app',
       cwd: 'F:\\repo',
       sessionId: 'sess-a',
-      planArtifactOwner: { profileId: 'p1', sessionId: 'sess-a', revision: 3 },
+      planArtifactOwner: expect.objectContaining({ profileId: 'p1', sessionId: 'sess-a', revision: 3, contentRevision: 3 }),
     });
 
-    // 发起第 3 次（慢请求）后立即切换 profileId/sessionId
+    // 发起慢刷新请求后立即直接 rerender 切换 profileId/sessionId -> 抽屉必须复位，旧订阅退订
     fireEvent.click(screen.getByTestId('plan-artifact-refresh'));
     rerender(wrap(<PlanArtifactPanel profileId="p2" sessionId="sess-b" cwd={'F:\\repo2'} />));
     expect(unsubSpy).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('plan-source-drawer')).toBeNull();
 
     // 旧会话迟到结果返回 -> 必须被 ownerRef 丢弃，绝不污染 p2/sess-b
     await act(async () => {
       resolveSlowA({
         status: 'ready',
+        view: 'summary',
         owner: { profileId: 'p1', sessionId: 'sess-a' },
         revision: 99,
-        content: '# LEAKED OLD SESSION',
+        summaryRevision: 99,
+        contentRevision: 99,
+        outline: { title: 'LEAKED OLD SESSION', sections: [], sectionCount: 0 },
       });
       await Promise.resolve();
     });
 
     await waitFor(() => {
-      const panelText = screen.getByTestId('plan-artifact-panel').textContent || '';
-      expect(panelText).toContain('暂无 implementation_plan.md');
+      expect(screen.getByTestId('plan-empty')).toBeTruthy();
+      const panelText = screen.getByTestId('inspector-view-plan').textContent || '';
       expect(panelText).not.toContain('LEAKED OLD SESSION');
       expect(panelText).not.toContain('正在读取');
+      expect(screen.queryByTestId('plan-source-line')).toBeNull();
     });
 
     restoreMatchMedia();

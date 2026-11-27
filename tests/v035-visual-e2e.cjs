@@ -632,9 +632,19 @@ function injectOfflineDesktopBridge(data) {
     status: 'ready',
     owner: { profileId: 'profile-work', sessionId: 'sess-plan-qa' },
     revision: 7,
+    summaryRevision: 7,
+    contentRevision: 7,
     filePath: 'C:\\Temp\\gravity-qa-isolated-profile\\brain\\sess-plan-qa\\implementation_plan.md',
     truncated: true,
     updatedAt: '2026-11-27T03:12:00.000Z',
+    outline: {
+      title: 'Gravity v0.3.5 实施计划',
+      sections: [
+        { id: 's1', heading: '1. 验收里程碑', summary: 'OKLCH 5 阶热力图与 Plan 提问卡 v2' },
+        { id: 's2', heading: '2. 安全与隐私红线', summary: '只读预览绝不自动加载远程图片信标' },
+      ],
+      sectionCount: 2,
+    },
     content: [
       '# Gravity v0.3.5 实施计划',
       '',
@@ -905,7 +915,14 @@ function injectOfflineDesktopBridge(data) {
     }),
     getSessionInspector: async (id) => inspectorBySession[id] || { sessionId: id, diffs: [], todos: [], terminals: [] },
     getSessionPlanArtifact: async (input) => {
-      if (input.sessionId === 'sess-plan-qa') return planArtifactDoc;
+      if (input.sessionId === 'sess-plan-qa') {
+        const view = input.view || 'summary';
+        if (view === 'summary') {
+          const { content: _omit, ...summaryDoc } = planArtifactDoc;
+          return { ...summaryDoc, view: 'summary' };
+        }
+        return { ...planArtifactDoc, view: 'content' };
+      }
       return { status: 'missing', owner: { profileId: input.profileId, sessionId: input.sessionId }, revision: 0 };
     },
     listWorkspaceFiles: async () => ['src/renderer/App.tsx', 'src/renderer/components/PlanArtifactPanel.tsx'],
@@ -1306,33 +1323,48 @@ async function main() {
     console.log('[M3] Passed Plan QuestionBar v2 & narrow <420px stepper collapse');
 
     /* =====================================================================
-     * M4: 右侧 Plan 页 6 态待办 + 截断横幅 + 长路径折行 + 只读 implementation_plan.md
+     * M4: 右侧 Plan 页 6 态待办 + 截断横幅 + 长路径折行 + 按需只读原文抽屉 implementation_plan.md
      * =================================================================== */
     await setInspectorWidth(page, 380);
     await page.getByTestId('inspector-tab-plan').click();
-    await page.getByTestId('plan-artifact-document').waitFor({ timeout: 10000 });
+    await page.getByTestId('plan-timeline').waitFor({ timeout: 10000 });
+    await page.getByTestId('plan-source-open').waitFor({ timeout: 10000 });
     await delay(150);
     const planView = page.getByTestId('inspector-view-plan');
-    const planCheck = await planView.evaluate((el) => {
+    const timelineCheck = await planView.evaluate((el) => {
       const items = Array.from(el.querySelectorAll('[data-testid^="plan-item-"]')).map((n) => n.dataset.status);
       const bar = el.querySelector('[data-testid="plan-progressbar"]');
       const barWidth = bar ? Math.round(bar.getBoundingClientRect().width) : 0;
+      const overflow = Math.round(el.scrollWidth - el.clientWidth);
+      const truncatedHint = Boolean(el.querySelector('[data-testid="plan-truncated-hint"]'));
+      const docInline = Boolean(el.querySelector('[data-testid="plan-artifact-document"]'));
+      return { items, barWidth, overflow, truncatedHint, docInline };
+    });
+    assert.deepEqual(timelineCheck.items, ['completed', 'in_progress', 'pending', 'skipped', 'failed', 'unknown']);
+    assert.ok(timelineCheck.barWidth > 40, `[M4] progressbar width too small: ${timelineCheck.barWidth}`);
+    assert.ok(timelineCheck.overflow <= 1, `[M4] plan view horizontal overflow: ${timelineCheck.overflow}`);
+    assert.equal(timelineCheck.truncatedHint, true);
+    assert.equal(timelineCheck.docInline, false, '[M4] v0.3.6 Plan source should open on demand, not inline');
+    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'm4-plan-tab-and-artifact.png') });
+
+    // v0.3.6：点击底部文档入口按需展开只读原文抽屉
+    await page.getByTestId('plan-source-open').click();
+    await page.getByTestId('plan-artifact-document').waitFor({ timeout: 10000 });
+    await delay(120);
+    const drawerCheck = await planView.evaluate((el) => {
       const doc = el.querySelector('[data-testid="plan-artifact-document"]');
       const imgsInDoc = doc ? doc.querySelectorAll('img').length : -1;
       const overflow = Math.round(el.scrollWidth - el.clientWidth);
-      const truncatedHint = Boolean(el.querySelector('[data-testid="plan-truncated-hint"]'));
       const artifactTruncated = (el.textContent || '').includes('文档较长，仅显示前一部分');
-      return { items, barWidth, imgsInDoc, overflow, truncatedHint, artifactTruncated };
+      return { imgsInDoc, overflow, artifactTruncated };
     });
-    assert.deepEqual(planCheck.items, ['completed', 'in_progress', 'pending', 'skipped', 'failed', 'unknown']);
-    assert.ok(planCheck.barWidth > 40, `[M4] progressbar width too small: ${planCheck.barWidth}`);
-    assert.equal(planCheck.imgsInDoc, 0, '[M4] plan artifact rendered <img> tag');
-    assert.ok(planCheck.overflow <= 1, `[M4] plan view horizontal overflow: ${planCheck.overflow}`);
-    assert.equal(planCheck.truncatedHint, true);
-    assert.equal(planCheck.artifactTruncated, true);
-    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'm4-plan-tab-and-artifact.png') });
-    report.m4 = planCheck;
-    console.log('[M4] Passed Plan 6-state todos, wrapping & readonly implementation_plan.md');
+    assert.equal(drawerCheck.imgsInDoc, 0, '[M4] plan artifact rendered <img> tag');
+    assert.ok(drawerCheck.overflow <= 1, `[M4] plan drawer horizontal overflow: ${drawerCheck.overflow}`);
+    assert.equal(drawerCheck.artifactTruncated, true);
+    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'm4-plan-source-drawer.png') });
+    await page.getByTestId('plan-source-close').click();
+    report.m4 = { ...timelineCheck, ...drawerCheck };
+    console.log('[M4] Passed Plan 6-state todos, wrapping & on-demand readonly implementation_plan.md drawer');
 
     /* =====================================================================
      * M5: 设置中心 8 项导航 + 外观 3 二级页签 + Approvals 规则 & C1 三色徽章（暗+亮）+ Plugins 隔离横幅

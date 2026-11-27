@@ -1368,6 +1368,9 @@ describe('Area 5: Renderer UI full-stack (Settings translator card, 6-tab Right 
     expect(screen.queryByTestId('translator-model-select')).toBeNull();
     expect((screen.getByTestId('translator-model-input') as HTMLInputElement).value).toBe('gpt-4o-mini');
     fireEvent.click(screen.getByTestId('settings-tab-approvals'));
+    // v0.3.6 B1：未保存表单切组弹出「继续编辑 / 放弃修改」守卫，确认放弃后再切往审批组
+    expect(screen.getByTestId('settings-section-dirty-confirm')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('settings-section-dirty-discard'));
     fireEvent.click(await screen.findByTestId('drawer-tab-reviewer'));
     const provider = within(screen.getByTestId('approval-drawer')).getAllByRole('combobox')
       .find(el => (el as HTMLSelectElement).value === 'gemini-api-key')!;
