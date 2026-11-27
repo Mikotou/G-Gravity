@@ -826,15 +826,16 @@ describe('v0.3.5 P2 全量前端修复验证', () => {
     expect(costEl.textContent).toBe('$0.420');
     expect(costEl.textContent).not.toContain('模型');
 
-    // ARIA 树角色属性完整
-    const treeEl = screen.getByRole('tree', { name: '对话分支树' });
-    const items = within(treeEl).getAllByRole('treeitem');
+    // v0.3.6：列表语义 + aria-current（替代无方向键导航的 tree/treeitem），且仅在按钮上单次标记 aria-current
+    const listEl = screen.getByRole('list', { name: '对话分支树' });
+    const items = within(listEl).getAllByRole('listitem');
     expect(items).toHaveLength(2);
-    expect(items[0].getAttribute('aria-level')).toBe('1');
-    expect(items[0].getAttribute('aria-expanded')).toBe('true');
-    expect(items[1].getAttribute('aria-level')).toBe('2');
-    expect(items[1].getAttribute('aria-setsize')).toBe('2');
-    expect(items[1].getAttribute('aria-posinset')).toBe('2');
+    expect(items[0].getAttribute('data-depth')).toBe('0');
+    expect(items[0].getAttribute('data-has-children')).toBe('true');
+    expect(items[0].getAttribute('aria-current')).toBeNull();
+    expect(items[1].getAttribute('data-depth')).toBe('1');
+    expect(screen.getByTestId('tree-node-root-1').getAttribute('aria-current')).toBe('true');
+    expect(screen.getByTestId('tree-node-child-1').getAttribute('aria-current')).toBeNull();
   });
 
   it('Composer：批量附件 Promise.allSettled 部分失败保留成功文件、IME 组合态拦截、生成中按 Enter 明确提示', async () => {
@@ -1132,13 +1133,13 @@ describe('v0.3.5 P2 全量前端修复验证', () => {
       )
     );
 
-    // 表格与代码块支持键盘聚焦滚动
+    // 表格与代码块支持键盘聚焦滚动（v0.3.6 B10：移除冗余 role="region" 避免地标污染）
     const tableWrap = container.querySelector('.md-table-wrap')!;
     const pre = container.querySelector('.code-block pre')!;
     expect(tableWrap.getAttribute('tabindex')).toBe('0');
-    expect(tableWrap.getAttribute('role')).toBe('region');
+    expect(tableWrap.getAttribute('role')).toBeNull();
     expect(pre.getAttribute('tabindex')).toBe('0');
-    expect(pre.getAttribute('role')).toBe('region');
+    expect(pre.getAttribute('role')).toBeNull();
 
     // 清理错误的 lang 与空状态冗余 aria-live
     const langLabel = container.querySelector('.code-block-head > span')!;
@@ -1502,9 +1503,9 @@ describe('v0.3.5 FE-BUG-05 & FE-BUG-09 热力图 DST/键盘漫游与检视器/�
 
     cleanup();
 
-    // IconsPanel 接入 usePrefsFeedback 捕获 onSetAppIcon 失败
+    // IconsPanel 接入 usePrefsFeedback 捕获 onSetAppIcon 失败（从固定图标切换为「跟随主题」）
     const failIcon = vi.fn().mockRejectedValue(new Error('磁盘只读'));
-    render(wrapI18n(<IconsPanel preferences={makePreferences({ appIcon: 'auto' })} onSetAppIcon={failIcon} />));
+    render(wrapI18n(<IconsPanel preferences={makePreferences({ appIcon: 'gravity-ubuntu' })} onSetAppIcon={failIcon} />));
     await act(async () => {
       fireEvent.click(screen.getByTestId('icon-variant-auto'));
     });

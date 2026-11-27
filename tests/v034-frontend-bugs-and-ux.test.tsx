@@ -434,7 +434,7 @@ describe('Gravity v0.3.4 前端功能、图标主题动效、缺陷清零与用�
       resolveEffectiveGravityIconId('auto', 'custom', { baseThemeId: 'solarized-dark', polarity: 'dark' })
     ).toBe('gravity-solarized');
 
-    // 2) IconsPanel 首位增加 icon-variant-auto（跟随主题）
+    // 2) v0.3.6：IconsPanel 网格上方提供独立「跟随主题」开关，下方 6 套原创图标维持 3×2 网格
     const onSetAppIcon = vi.fn().mockResolvedValue(undefined);
     const iconPrefs: ClientPreferences = {
       locale: 'zh-CN',
@@ -446,11 +446,18 @@ describe('Gravity v0.3.4 前端功能、图标主题动效、缺陷清零与用�
     };
     const iconsView = render(wrap(<IconsPanel preferences={iconPrefs} onSetAppIcon={onSetAppIcon} />));
     const grid = screen.getByTestId('app-icons-grid');
-    const autoBtn = screen.getByTestId('icon-variant-auto');
-    expect(grid.firstElementChild).toBe(autoBtn);
-    expect(autoBtn.className).toContain('is-selected');
-    fireEvent.click(autoBtn);
-    expect(onSetAppIcon).toHaveBeenCalledWith('auto');
+    const autoToggle = screen.getByTestId('icon-variant-auto') as HTMLInputElement;
+    expect(grid.children).toHaveLength(6);
+    expect(autoToggle.type).toBe('checkbox');
+    expect(autoToggle.checked).toBe(true);
+    // 关闭跟随主题开关 -> 锁定为当前主题推荐图标
+    fireEvent.click(autoToggle);
+    expect(onSetAppIcon).toHaveBeenCalledWith(resolveEffectiveGravityIconId('auto', 'macos-light'));
+    // 重新以固定图标渲染并打开开关 -> 切回 'auto'
+    iconsView.rerender(wrap(<IconsPanel preferences={{ ...iconPrefs, appIcon: 'gravity-ubuntu' }} onSetAppIcon={onSetAppIcon} />));
+    expect((screen.getByTestId('icon-variant-auto') as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(screen.getByTestId('icon-variant-auto'));
+    expect(onSetAppIcon).toHaveBeenLastCalledWith('auto');
     iconsView.unmount();
 
     // 3) 完整 <App /> 联动测试：appIcon='auto' 切主题时 ActivityRail 徽标与 document favicon 必须同步切换

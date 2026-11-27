@@ -183,6 +183,10 @@ describe('工作台交互回归', () => {
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(screen.queryByTestId('send-prompt-btn-' + primary)).toBeNull();
     fireEvent.click(screen.getByTestId('cancel-prompt-btn-' + primary));
+    // v0.3.6 B13/B14：首个取消请求在途时同步重复 Esc 去重；请求返回后若回合仍未收口可再次停止
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(cancelPrompt.mock.calls).toEqual([[primary]]);
+    await act(async () => { await Promise.resolve(); });
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(cancelPrompt.mock.calls).toEqual([[primary], [primary]]);
     expect(input.value).toBe('下一轮草稿');

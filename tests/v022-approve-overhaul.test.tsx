@@ -969,12 +969,12 @@ describe('v0.2.2 Approve for me 完整逻辑修复（无外部复核 + 有外部
       </I18nProvider>
     );
 
-    // 打开 Approve for me 菜单：展示外部复核累计/本会话用量与“未连接外部复核”提示
+    // 打开 Approve for me 菜单：精简展示外部复核连接态与统计入口（累计/会话明细归口 Context 检视器）
     fireEvent.click(screen.getByTestId(`approval-mode-pill-${session.sessionId}`));
     const usageBox = screen.getByTestId(`approval-menu-reviewer-usage-${session.sessionId}`);
     expect(usageBox.textContent).toContain('外部复核 API 用量');
-    expect(usageBox.textContent).toContain('客户端累计');
-    expect(usageBox.textContent).toContain('本会话');
+    expect(usageBox.textContent).toMatch(/未连接|未启用/);
+    expect(screen.getByTestId(`approval-open-reviewer-stats-btn-${session.sessionId}`)).toBeTruthy();
 
     // 未连接时点击「AI 代审」不调用切换，而是弹出引导提示并支持一键跳转外部复核设置
     fireEvent.click(screen.getByTestId(`approval-menu-mode-hybrid-${session.sessionId}`));

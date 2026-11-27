@@ -156,7 +156,10 @@ describe('App → 真正 CoreService → ACP 桩子进程', () => {
     });
     await waitFor(async () => expect((await core.getSessionMessagePage(branchId)).messages.some(m => m.annotations?.[0].comment === '请解释这个词')).toBe(true));
     await waitFor(async () => expect((await core.getSessionMessagePage(branchId)).messages.some(m => m.role === 'assistant' && !m.isStreaming)).toBe(true));
-    expect((await core.getSessionMessagePage(sessionId)).messages.find(m => m.id === sent.id)?.annotations).toEqual(annotations);
+    const origAnnotations = (await core.getSessionMessagePage(sessionId)).messages.find(m => m.id === sent.id)?.annotations;
+    expect(origAnnotations).toHaveLength(annotations.length);
+    expect(origAnnotations).toMatchObject(annotations);
+    expect(origAnnotations?.[0]?.id).toMatch(/^ann-legacy-1-/);
   });
 
   it('真实权限挂起经 Request View 允许一次返回 ACP，并呈现审计', async () => {

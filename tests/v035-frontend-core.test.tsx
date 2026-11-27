@@ -665,7 +665,7 @@ describe('v0.3.5 Plan 检视器', () => {
     await act(async () => {});
   });
 
-  it('只读 implementation_plan.md：knownRevision 增量读取、事件刷新、手动刷新不带 knownRevision、D-01 planArtifactOwner 仅限计划本体、#anchor 面板内滚动', async () => {
+  it('只读 implementation_plan.md：先 summary 后按需抽屉 content、knownRevision 增量读取、事件刷新、手动刷新、D-01 planArtifactOwner 仅限计划本体、#anchor 抽屉内滚动', async () => {
     let listener: ((e: PlanArtifactChangedEvent) => void) | undefined;
     const planFilePath = 'D:\\sandbox-home\\.gemini\\brain\\s-plan\\implementation_plan.md';
     const content = [
@@ -678,18 +678,41 @@ describe('v0.3.5 Plan 检视器', () => {
       '',
       '![图](https://example.com/a.png)',
     ].join('\n');
+    const planSessionId = 's-plan-doc';
     let revision = 1;
-    const getSessionPlanArtifact = vi.fn(async (input: { profileId: string; sessionId: string; knownRevision?: number }) =>
-      input.knownRevision === revision
-        ? { status: 'unchanged' as const, owner: { profileId: 'p1', sessionId: 's-plan' }, revision }
-        : {
-            status: 'ready' as const,
-            owner: { profileId: 'p1', sessionId: 's-plan' },
+    const getSessionPlanArtifact = vi.fn(
+      async (input: { profileId: string; sessionId: string; view?: 'summary' | 'content'; knownRevision?: number }) => {
+        const view = input.view ?? 'summary';
+        if (input.knownRevision === revision) {
+          return {
+            status: 'unchanged' as const,
+            view,
+            owner: { profileId: 'p1', sessionId: planSessionId },
             revision,
-            filePath: planFilePath,
-            content: content + (revision > 1 ? '\n\n新增' : ''),
-            updatedAt: '2026-11-26T00:00:00Z',
-          }
+            summaryRevision: revision,
+            contentRevision: revision,
+          };
+        }
+        return {
+          status: 'ready' as const,
+          view,
+          owner: { profileId: 'p1', sessionId: planSessionId },
+          revision,
+          summaryRevision: revision,
+          contentRevision: revision,
+          filePath: planFilePath,
+          ...(view === 'content'
+            ? { content: content + (revision > 1 ? '\n\n新增' : '') }
+            : {
+                outline: {
+                  title: 'Plan',
+                  sections: [{ id: 's1', heading: '实施步骤', summary: revision > 1 ? '含新增步骤' : '第一步与第二步' }],
+                  sectionCount: 1,
+                },
+              }),
+          updatedAt: '2026-11-26T00:00:00Z',
+        };
+      }
     );
     const openLinkOrFileTarget = vi.fn().mockResolvedValue({ opened: true, modeUsed: 'browser', resolvedTarget: '' });
     window.gravityDesktop = {
@@ -703,27 +726,58 @@ describe('v0.3.5 Plan 检视器', () => {
         };
       },
     };
-    renderPlan({ sessionId: 's-plan', diffs: [], todos: [], terminals: [], plan: { state: 'empty', revision: 1, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 } });
-    // 结构化待办为空不影响文档预览
+    render(
+      wrap(
+        <RightInspector
+          open
+          width={420}
+          activeTab="plan"
+          profileId="p1"
+          sessionId={planSessionId}
+          inspectorData={{
+            sessionId: planSessionId,
+            diffs: [],
+            todos: [],
+            terminals: [],
+            plan: { state: 'unreceived', revision: 1, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 },
+          }}
+          sessionMessages={[]}
+          telemetry={telemetry()}
+          onSelectTab={() => {}}
+          onFocusDiffFile={() => {}}
+          onCommitWidth={() => {}}
+          onOpenRateCardsSettings={() => {}}
+        />
+      )
+    );
+    // v0.3.6：先只读 summary 展示概要态，不提前加载原文
+    const outlineEl = await screen.findByTestId('plan-outline');
+    expect(outlineEl.textContent).toContain('实施步骤');
+    expect(getSessionPlanArtifact).toHaveBeenCalledWith({ profileId: 'p1', sessionId: planSessionId, view: 'summary' });
+    expect(screen.queryByTestId('plan-artifact-document')).toBeNull();
+
+    // 点击「查看原文」按需打开抽屉读取 content
+    fireEvent.click(screen.getByTestId('plan-source-open'));
     const doc = await screen.findByTestId('plan-artifact-document');
-    expect(getSessionPlanArtifact).toHaveBeenCalledWith({ profileId: 'p1', sessionId: 's-plan' });
+    expect(getSessionPlanArtifact).toHaveBeenLastCalledWith({ profileId: 'p1', sessionId: planSessionId, view: 'content' });
     expect(doc.textContent).toContain('第一步');
     expect(document.querySelectorAll('img')).toHaveLength(0);
     expect(doc.innerHTML).not.toContain('<img');
 
-    // 其他会话事件忽略；同会话新修订按 knownRevision 增量读取
-    await act(async () => listener?.({ profileId: 'p1', sessionId: 'other', revision: 9 }));
-    expect(getSessionPlanArtifact).toHaveBeenCalledTimes(1);
+    // 其他会话事件忽略；同会话新修订触发 summary 增量与抽屉正文刷新
+    const callsBefore = getSessionPlanArtifact.mock.calls.length;
+    await act(async () => listener?.({ profileId: 'p1', sessionId: 'other', revision: 9, summaryRevision: 9, contentRevision: 9 }));
+    expect(getSessionPlanArtifact).toHaveBeenCalledTimes(callsBefore);
     revision = 2;
-    await act(async () => listener?.({ profileId: 'p1', sessionId: 's-plan', revision: 2 }));
-    expect(getSessionPlanArtifact).toHaveBeenLastCalledWith({ profileId: 'p1', sessionId: 's-plan', knownRevision: 1 });
+    await act(async () => listener?.({ profileId: 'p1', sessionId: planSessionId, revision: 2, summaryRevision: 2, contentRevision: 2 }));
+    expect(getSessionPlanArtifact).toHaveBeenCalledWith({ profileId: 'p1', sessionId: planSessionId, view: 'summary', knownRevision: 1 });
     await waitFor(() => expect(screen.getByTestId('plan-artifact-document').textContent).toContain('新增'));
 
-    // 手动刷新不传 knownRevision
+    // 抽屉内手动刷新不传 knownRevision
     await act(async () => fireEvent.click(screen.getByTestId('plan-artifact-refresh')));
-    expect(getSessionPlanArtifact).toHaveBeenLastCalledWith({ profileId: 'p1', sessionId: 's-plan' });
+    expect(getSessionPlanArtifact).toHaveBeenCalledWith({ profileId: 'p1', sessionId: planSessionId, view: 'content' });
 
-    // FE-BUG-08：标题生成确定性 id 与 data-anchor，点击 #anchor 直接面板内滚动，绝不调用 openLinkOrFileTarget
+    // FE-BUG-08：标题生成确定性 id 与 data-anchor，点击 #anchor 直接抽屉内滚动，绝不调用 openLinkOrFileTarget
     const targetHeading = doc.querySelector<HTMLElement>('[data-anchor="实施步骤"]')!;
     expect(targetHeading).toBeTruthy();
     expect(targetHeading.id).toContain('实施步骤');
@@ -736,23 +790,23 @@ describe('v0.3.5 Plan 检视器', () => {
     // D-01：外链与工作区其它文件链接走常规安全打开，不传 planArtifactOwner
     await act(async () => fireEvent.click(screen.getByRole('button', { name: '文档' })));
     expect(openLinkOrFileTarget).toHaveBeenLastCalledWith(
-      expect.objectContaining({ target: 'https://example.com/doc', action: 'browser', sessionId: 's-plan' })
+      expect.objectContaining({ target: 'https://example.com/doc', action: 'browser', sessionId: planSessionId })
     );
     expect(openLinkOrFileTarget.mock.calls.at(-1)?.[0].planArtifactOwner).toBeUndefined();
 
     await act(async () => fireEvent.click(screen.getByRole('button', { name: '代码' })));
     expect(openLinkOrFileTarget).toHaveBeenLastCalledWith(
-      expect.objectContaining({ target: './src/app.ts', action: 'default-app', sessionId: 's-plan' })
+      expect.objectContaining({ target: './src/app.ts', action: 'default-app', sessionId: planSessionId })
     );
     expect(openLinkOrFileTarget.mock.calls.at(-1)?.[0].planArtifactOwner).toBeUndefined();
 
-    // D-01：仅打开计划文档本体（文件头按钮或精准指向 snapshot.filePath 的链接）才携带 planArtifactOwner
+    // D-01：仅打开计划文档本体（抽屉打开按钮或精准指向 snapshot.filePath 的链接）才携带 planArtifactOwner
     await act(async () => fireEvent.click(screen.getByTestId('plan-artifact-open-file')));
     expect(openLinkOrFileTarget).toHaveBeenLastCalledWith(
       expect.objectContaining({
         target: planFilePath,
         action: 'default-app',
-        planArtifactOwner: { profileId: 'p1', sessionId: 's-plan', revision: 2 },
+        planArtifactOwner: expect.objectContaining({ profileId: 'p1', sessionId: planSessionId, revision: 2, contentRevision: 2 }),
       })
     );
 
@@ -760,90 +814,226 @@ describe('v0.3.5 Plan 检视器', () => {
     expect(openLinkOrFileTarget).toHaveBeenLastCalledWith(
       expect.objectContaining({
         action: 'default-app',
-        planArtifactOwner: { profileId: 'p1', sessionId: 's-plan', revision: 2 },
+        planArtifactOwner: expect.objectContaining({ profileId: 'p1', sessionId: planSessionId, revision: 2, contentRevision: 2 }),
       })
     );
 
-    // 折叠
-    fireEvent.click(screen.getByTestId('plan-artifact-toggle'));
-    expect(screen.getByTestId('plan-artifact-toggle').getAttribute('aria-expanded')).toBe('false');
+    // 关闭原文抽屉回到概要态
+    fireEvent.click(screen.getByTestId('plan-source-close'));
+    expect(screen.queryByTestId('plan-source-drawer')).toBeNull();
+    expect(screen.getByTestId('plan-outline')).toBeTruthy();
   });
 
-  it('FE-BUG-08：snapshot === null 收到 unchanged 时无 knownRevision 重拉一次，仍无内容则按空态收口不卡 Loading', async () => {
-    // 场景 A：首次 unchanged，重拉一次返回 ready
+  it('FE-BUG-08：snapshot === null 收到 unchanged 时无 knownRevision 重拉一次，仍无内容则按纯空态收口不卡 Loading', async () => {
+    // 场景 A：首次 unchanged，重拉一次返回 ready（旧桥接返回 content 时前端自动提取概要）
     const retryFetcher = vi
       .fn()
-      .mockResolvedValueOnce({ status: 'unchanged', owner: { profileId: 'p1', sessionId: 's-plan' }, revision: 3 })
+      .mockResolvedValueOnce({ status: 'unchanged', owner: { profileId: 'p1', sessionId: 's-plan-retry' }, revision: 3 })
       .mockResolvedValueOnce({
         status: 'ready',
-        owner: { profileId: 'p1', sessionId: 's-plan' },
+        owner: { profileId: 'p1', sessionId: 's-plan-retry' },
         revision: 3,
-        content: '# Recovered',
+        content: '# Recovered\n\n## Section A\nBody',
       });
     window.gravityDesktop = { ...getFallbackDesktopBridge(), getSessionPlanArtifact: retryFetcher };
-    const { unmount } = renderPlan(undefined);
-    expect((await screen.findByTestId('plan-artifact-document')).textContent).toContain('Recovered');
+    const { unmount } = render(
+      wrap(
+        <RightInspector
+          open
+          width={420}
+          activeTab="plan"
+          profileId="p1"
+          sessionId="s-plan-retry"
+          inspectorData={undefined}
+          sessionMessages={[]}
+          telemetry={telemetry()}
+          onSelectTab={() => {}}
+          onFocusDiffFile={() => {}}
+          onCommitWidth={() => {}}
+          onOpenRateCardsSettings={() => {}}
+        />
+      )
+    );
+    expect((await screen.findByTestId('plan-outline')).textContent).toContain('Recovered');
     expect(retryFetcher).toHaveBeenCalledTimes(2);
-    expect(retryFetcher.mock.calls[1][0]).toEqual({ profileId: 'p1', sessionId: 's-plan' });
+    expect(retryFetcher.mock.calls[1][0]).toEqual({ profileId: 'p1', sessionId: 's-plan-retry', view: 'summary' });
     unmount();
 
-    // 场景 B：连续 unchanged 也不卡 Loading，按 missing 空态收口
-    const stuckFetcher = vi.fn().mockResolvedValue({ status: 'unchanged', owner: { profileId: 'p1', sessionId: 's-plan' }, revision: 0 });
+    // 场景 B：连续 unchanged 也不卡 Loading，按纯空态收口且 0 文件栏
+    const stuckFetcher = vi.fn().mockResolvedValue({ status: 'unchanged', owner: { profileId: 'p1', sessionId: 's-plan-stuck' }, revision: 0 });
     window.gravityDesktop = { ...getFallbackDesktopBridge(), getSessionPlanArtifact: stuckFetcher };
-    renderPlan(undefined);
-    expect(await screen.findByTestId('plan-artifact-missing')).toBeTruthy();
-    expect(screen.getByTestId('plan-artifact-panel').getAttribute('data-status')).toBe('missing');
+    render(
+      wrap(
+        <RightInspector
+          open
+          width={420}
+          activeTab="plan"
+          profileId="p1"
+          sessionId="s-plan-stuck"
+          inspectorData={undefined}
+          sessionMessages={[]}
+          telemetry={telemetry()}
+          onSelectTab={() => {}}
+          onFocusDiffFile={() => {}}
+          onCommitWidth={() => {}}
+          onOpenRateCardsSettings={() => {}}
+        />
+      )
+    );
+    expect(await screen.findByTestId('plan-empty')).toBeTruthy();
+    expect(screen.queryByTestId('plan-source-line')).toBeNull();
   });
 
-  it('missing / unavailable 状态与不支持该接口的旧桥接', async () => {
+  it('unavailable 状态（0 文件名）与不支持该接口的旧桥接（0 文件栏）', async () => {
     window.gravityDesktop = {
       ...getFallbackDesktopBridge(),
-      getSessionPlanArtifact: vi.fn().mockResolvedValue({ status: 'unavailable', owner: { profileId: 'p1', sessionId: 's-plan' }, revision: 0, reason: '权限不足' }),
+      getSessionPlanArtifact: vi.fn().mockResolvedValue({ status: 'unavailable', owner: { profileId: 'p1', sessionId: 's-plan-unavail' }, revision: 0, reason: '权限不足' }),
     };
-    const { unmount } = renderPlan(undefined);
-    expect((await screen.findByTestId('plan-artifact-unavailable')).textContent).toContain('权限不足');
+    const { unmount } = render(
+      wrap(
+        <RightInspector
+          open
+          width={420}
+          activeTab="plan"
+          profileId="p1"
+          sessionId="s-plan-unavail"
+          inspectorData={undefined}
+          sessionMessages={[]}
+          telemetry={telemetry()}
+          onSelectTab={() => {}}
+          onFocusDiffFile={() => {}}
+          onCommitWidth={() => {}}
+          onOpenRateCardsSettings={() => {}}
+        />
+      )
+    );
+    const unavail = await screen.findByTestId('plan-unavailable');
+    expect(unavail.textContent).toContain('权限不足');
+    expect(unavail.textContent).not.toContain('implementation_plan.md');
     unmount();
     const legacy = { ...getFallbackDesktopBridge() } as Partial<GravityDesktopBridge>;
     delete legacy.getSessionPlanArtifact;
     delete legacy.onPlanArtifactChanged;
     window.gravityDesktop = legacy as GravityDesktopBridge;
-    renderPlan(undefined);
-    expect(screen.queryByTestId('plan-artifact-panel')).toBeNull();
+    render(
+      wrap(
+        <RightInspector
+          open
+          width={420}
+          activeTab="plan"
+          profileId="p1"
+          sessionId="s-plan-legacy"
+          inspectorData={undefined}
+          sessionMessages={[]}
+          telemetry={telemetry()}
+          onSelectTab={() => {}}
+          onFocusDiffFile={() => {}}
+          onCommitWidth={() => {}}
+          onOpenRateCardsSettings={() => {}}
+        />
+      )
+    );
+    expect(screen.getByTestId('plan-empty')).toBeTruthy();
+    expect(screen.queryByTestId('plan-source-line')).toBeNull();
   });
 
-  it('todos 为空但 implementation_plan.md 已就绪时隐藏矛盾的「本会话还没有 Plan / Todo」空态', async () => {
+  it('unreceived + 文档就绪展示概要态并隐藏空态；missing 展示纯空态；plan.state === empty（状态 ④）隐藏文件栏', async () => {
     window.gravityDesktop = {
       ...getFallbackDesktopBridge(),
       getSessionPlanArtifact: vi.fn().mockResolvedValue({
         status: 'ready',
-        owner: { profileId: 'p1', sessionId: 's-plan' },
+        view: 'summary',
+        owner: { profileId: 'p1', sessionId: 's-plan-outline-only' },
         revision: 1,
+        summaryRevision: 1,
+        contentRevision: 1,
         filePath: '/repo/implementation_plan.md',
-        content: '# 实施计划\n- 第一步',
+        outline: { title: '实施计划', sections: [{ id: 'sec-1', heading: '第一步' }], sectionCount: 1 },
       }),
     };
-    const emptyInspector = {
-      sessionId: 's-plan',
+    const unreceivedInspector = {
+      sessionId: 's-plan-outline-only',
       diffs: [],
       todos: [],
       terminals: [],
-      plan: { state: 'empty' as const, revision: 1, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 },
+      plan: { state: 'unreceived' as const, revision: 1, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 },
     };
-    const { unmount } = renderPlan(emptyInspector);
-    expect((await screen.findByTestId('plan-artifact-document')).textContent).toContain('实施计划');
-    await waitFor(() => expect(screen.queryByText('本会话还没有 Plan / Todo')).toBeNull());
+    const { unmount } = render(
+      wrap(
+        <RightInspector
+          open
+          width={420}
+          activeTab="plan"
+          profileId="p1"
+          sessionId="s-plan-outline-only"
+          inspectorData={unreceivedInspector}
+          sessionMessages={[]}
+          telemetry={telemetry()}
+          onSelectTab={() => {}}
+          onFocusDiffFile={() => {}}
+          onCommitWidth={() => {}}
+          onOpenRateCardsSettings={() => {}}
+        />
+      )
+    );
+    expect((await screen.findByTestId('plan-outline')).textContent).toContain('实施计划');
+    expect(screen.queryByTestId('plan-empty')).toBeNull();
     unmount();
+
+    // 状态 ④（DEC-04）：plan.state === 'empty' 时即使存在计划文档也不展示文件栏
+    const clearedView = render(
+      wrap(
+        <RightInspector
+          open
+          width={420}
+          activeTab="plan"
+          profileId="p1"
+          sessionId="s-plan-outline-only"
+          inspectorData={{
+            ...unreceivedInspector,
+            plan: { state: 'empty', revision: 2, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 },
+          }}
+          sessionMessages={[]}
+          telemetry={telemetry()}
+          onSelectTab={() => {}}
+          onFocusDiffFile={() => {}}
+          onCommitWidth={() => {}}
+          onOpenRateCardsSettings={() => {}}
+        />
+      )
+    );
+    expect(await screen.findByTestId('plan-cleared')).toBeTruthy();
+    expect(screen.queryByTestId('plan-source-line')).toBeNull();
+    expect(screen.getByTestId('inspector-view-plan').textContent).not.toContain('implementation_plan.md');
+    clearedView.unmount();
 
     window.gravityDesktop = {
       ...getFallbackDesktopBridge(),
       getSessionPlanArtifact: vi.fn().mockResolvedValue({
         status: 'missing',
-        owner: { profileId: 'p1', sessionId: 's-plan' },
+        owner: { profileId: 'p1', sessionId: 's-plan-missing' },
         revision: 0,
       }),
     };
-    renderPlan(emptyInspector);
-    await screen.findByTestId('plan-artifact-missing');
-    expect(screen.getByText('本会话还没有 Plan / Todo')).toBeTruthy();
+    render(
+      wrap(
+        <RightInspector
+          open
+          width={420}
+          activeTab="plan"
+          profileId="p1"
+          sessionId="s-plan-missing"
+          inspectorData={{ ...unreceivedInspector, sessionId: 's-plan-missing' }}
+          sessionMessages={[]}
+          telemetry={telemetry()}
+          onSelectTab={() => {}}
+          onFocusDiffFile={() => {}}
+          onCommitWidth={() => {}}
+          onOpenRateCardsSettings={() => {}}
+        />
+      )
+    );
+    expect(await screen.findByTestId('plan-empty')).toBeTruthy();
+    expect(screen.queryByTestId('plan-source-line')).toBeNull();
   });
 });
