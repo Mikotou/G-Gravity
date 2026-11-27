@@ -129,6 +129,9 @@ function findTsCyclesInDir(rootDir: string): string[][] {
       } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
         const target = resolveRel(file, node.moduleSpecifier.text);
         if (target) targets.add(target);
+      } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteralLike(node.argument.literal)) {
+        const target = resolveRel(file, node.argument.literal.text);
+        if (target) targets.add(target);
       } else if (
         ts.isCallExpression(node) &&
         node.expression.kind === ts.SyntaxKind.ImportKeyword &&
@@ -350,18 +353,59 @@ describe('A01 · 依赖图零环、单文件规模与 IPC 1:1 契约及 100 次�
     expect(sharedCycles.map((c) => c.join(' <-> ')), 'src/shared/**/*.ts 存在循环依赖').toEqual([]);
   });
 
-  it('A01-2: 单文件规模守卫（<=650 / core-service<=420 / index<=160）与 IPC 1:1 对齐（含 APP_COPY_TEXT）', () => {
+  it('A01-2: 单文件规模守卫（main & shared 全员 <=650 / shared 23 文件 / core-service<=420 / index<=160）、0 反向边与 93 通道 IPC 1:1 对齐', () => {
     const mainRoot = path.resolve(REPO_ROOT, 'src', 'main');
-    const oversized = listTsFiles(mainRoot)
+    const sharedRoot = path.resolve(REPO_ROOT, 'src', 'shared');
+
+    // 1. src/main 单文件规模与架构分层边界（0 acp->services，0 storage->session 回流）
+    const mainFiles = listTsFiles(mainRoot);
+    const oversizedMain = mainFiles
       .map((f) => ({ rel: path.relative(REPO_ROOT, f).replace(/\\/g, '/'), loc: countLines(f) }))
       .filter((x) => x.loc > 650);
-    expect(oversized).toEqual([]);
+    expect(oversizedMain).toEqual([]);
     expect(countLines(path.join(mainRoot, 'core-service.ts'))).toBeLessThanOrEqual(420);
     expect(countLines(path.join(mainRoot, 'index.ts'))).toBeLessThanOrEqual(160);
 
-    // 1:1 通道核对
+    const acpToServices: string[] = [];
+    const storageToSession: string[] = [];
+    for (const file of mainFiles) {
+      const rel = path.relative(mainRoot, file).replace(/\\/g, '/');
+      const layer = rel.split('/')[0];
+      if (layer !== 'acp' && layer !== 'storage') continue;
+      const ast = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+      const checkSpec = (spec: string) => {
+        if (!spec.startsWith('.')) return;
+        const resolved = path.relative(mainRoot, path.resolve(path.dirname(file), spec)).replace(/\\/g, '/');
+        const targetLayer = resolved.split('/')[0];
+        if (layer === 'acp' && targetLayer === 'services') acpToServices.push(`${rel} -> ${resolved}`);
+        if (layer === 'storage' && targetLayer === 'session') storageToSession.push(`${rel} -> ${resolved}`);
+      };
+      const visit = (node: ts.Node) => {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) checkSpec(node.moduleSpecifier.text);
+        else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) checkSpec(node.moduleSpecifier.text);
+        else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteralLike(node.argument.literal)) checkSpec(node.argument.literal.text);
+        ts.forEachChild(node, visit);
+      };
+      visit(ast);
+    }
+    expect(acpToServices, 'src/main/acp 不得依赖 services/').toEqual([]);
+    expect(storageToSession, 'src/main/storage 不得向上依赖 session/').toEqual([]);
+
+    // 2. v0.3.6 src/shared 23 文件且全员 <= 650 LOC
+    const sharedFiles = listTsFiles(sharedRoot);
+    expect(sharedFiles).toHaveLength(23);
+    const oversizedShared = sharedFiles
+      .map((f) => ({ rel: path.relative(REPO_ROOT, f).replace(/\\/g, '/'), loc: countLines(f) }))
+      .filter((x) => x.loc > 650);
+    expect(oversizedShared, 'src/shared 全量文件必须 <= 650 LOC').toEqual([]);
+
+    // 3. 93 通道（73 invoke + 20 event）1:1 核对
     const expected = new Set<string>(Object.values(IPC_CHANNELS));
+    expect(expected.size).toBe(93);
+    expect([...expected].filter((ch) => !ch.startsWith('gravity:event:'))).toHaveLength(73);
+    expect([...expected].filter((ch) => ch.startsWith('gravity:event:'))).toHaveLength(20);
     expect(expected.has(IPC_CHANNELS.APP_COPY_TEXT)).toBe(true);
+    expect(expected.has(IPC_CHANNELS.VOICE_APPEND)).toBe(true);
 
     const preloadSrc = readFileSync(path.join(mainRoot, 'preload.ts'), 'utf8');
     const preloadAst = ts.createSourceFile('preload.ts', preloadSrc, ts.ScriptTarget.Latest, true);
@@ -427,15 +471,20 @@ describe('A01 · 依赖图零环、单文件规模与 IPC 1:1 契约及 100 次�
  * ========================================================================== */
 
 describe('A02 · 跨平台资产分离、本地翻译 13 文件清单与真实断网 Bergamot Worker 验证', () => {
-  it('A02-1: package.json 分平台 assets/quota 与图标声明准确，本地翻译 13 文件与许可完整', () => {
+  it('A02-1: package.json 分平台 assets/quota、本地语音与图标声明准确，本地翻译 13 文件与许可完整', () => {
     const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as {
-      build: { files: string[]; win: { files: string[] }; mac: { files: string[] } };
+      build: { files: string[]; win: { files: string[] }; mac: { files: string[]; extendInfo?: Record<string, string> } };
     };
     expect(pkg.build.files).toContain('assets/local-translation/**/*');
+    expect(pkg.build.files).toContain('assets/local-voice/**/*');
+    expect(pkg.build.files).toContain('!assets/local-voice/build/**/*');
+    expect(pkg.build.files).toContain('!assets/local-voice/.gitignore');
+    expect(pkg.build.files).toContain('!assets/local-voice/.gitattributes');
     expect(pkg.build.files).toContain('!dist/**/*.map');
     expect(pkg.build.files).toContain('!dist/**/*.d.ts');
     expect(pkg.build.files.some((f) => f.includes('assets/quota'))).toBe(false);
     expect(pkg.build.files.some((f) => f.includes('assets/icons'))).toBe(false);
+    expect(pkg.build.mac.extendInfo?.NSMicrophoneUsageDescription?.trim().length).toBeGreaterThan(10);
 
     expect(pkg.build.win.files).toEqual(['assets/icons/*.ico', 'assets/quota/read-quota.ps1']);
     expect(pkg.build.mac.files).toEqual([
@@ -487,7 +536,7 @@ describe('A02 · 跨平台资产分离、本地翻译 13 文件清单与真实�
           e.isDirectory() ? walk(path.join(d, e.name)) : [path.relative(winAppDir, path.join(d, e.name)).replace(/\\/g, '/')]
         );
       const packed = walk(winAppDir);
-      expect(packed.filter((f) => /-mac\.png$|-macos\.|\.map$|\.d\.ts$/i.test(f))).toEqual([]);
+      expect(packed.filter((f) => /-mac\.png$|-macos\.|\.map$|\.d\.ts$|^assets\/local-voice\/build\/|^assets\/local-voice\/\.git/i.test(f))).toEqual([]);
     }
   });
 

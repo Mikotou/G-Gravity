@@ -17,7 +17,6 @@ import * as quota from '../src/main/accounts/account-quota';
 import { openExternalTarget } from '../src/main/services/external-opener';
 import { inspectLocalTargets, resolveLocalTarget } from '../src/main/services/local-media-inspector';
 import { PlanArtifactReader } from '../src/main/session/plan-artifact-reader';
-import { hasPlanText, planReferences } from '../src/main/session/plan-references';
 import { SessionMultiplexer } from '../src/main/session/session-multiplexer';
 import { declaredModels } from '../src/main/session/session-options-store';
 import { ClientStore } from '../src/main/storage/client-store';
@@ -357,13 +356,7 @@ it('checks physical LOC, all static TypeScript dependencies (including types) an
     edges: [...edges.values()].reduce((sum, dep) => sum + dep.size, 0), cycles: 0, reverse: backEdges.length }));
 });
 
-it('matches Implementation_Plan.md case-insensitively and downgrades .dmg/.mpkg/.app targets to reveal-in-folder', async () => {
-  expect(hasPlanText('See docs/Implementation_Plan.md for steps')).toBe(true);
-  const refs = [...planReferences([{
-    id: 'm1', sessionId: 's1', role: 'assistant', content: 'Updated docs/Implementation_Plan.md', createdAt: '',
-  }])];
-  expect(refs).toEqual(['docs/Implementation_Plan.md']);
-
+it('downgrades .dmg/.mpkg/.app targets to reveal-in-folder', async () => {
   const dir = tempDir();
   const dmg = join(dir, 'Gravity-0.3.5-mac-arm64.dmg');
   const mpkg = join(dir, 'Installer.mpkg');
@@ -402,32 +395,40 @@ it.runIf(process.platform === 'darwin')('handles macOS /tmp aliases, APFS case-i
   expect(sameLocalPath(planFile, upperAliasPlanPath)).toBe(true);
   expect(localPathMember(wsCanonical, aliasPlanPath)).toBe('implementation_plan.md');
 
-  // 1. PlanArtifactReader accepts /tmp alias reference when cwd is /private/tmp, and openExternalTarget accepts /tmp & file:///tmp
-  const gen = {};
+  // 1. PlanArtifactReader accepts /tmp alias homeDir for owned brain artifact, and openExternalTarget accepts /tmp & file:///tmp
+  const homeCanonical = join(canonicalBase, 'HomeDir');
+  const homeAlias = join(base, 'HomeDir');
+  const brainDir = join(homeCanonical, '.gemini', 'antigravity-cli', 'brain', 'mac-s1');
+  mkdirSync(brainDir, { recursive: true });
+  const brainPlanFile = join(brainDir, 'implementation_plan.md');
+  writeFileSync(brainPlanFile, '# macOS Plan\n', 'utf8');
+  const aliasBrainPlan = join(homeAlias, '.gemini', 'antigravity-cli', 'brain', 'mac-s1', 'implementation_plan.md');
+
   const reader = new PlanArtifactReader(
-    owner => owner.sessionId === 'mac-s1' ? {
-      cwd: wsCanonical,
-      homeDir: outsideDir,
-      generation: gen,
-      references: () => [aliasPlanPath],
-    } : undefined,
+    owner => owner.sessionId === 'mac-s1' ? { homeDir: homeAlias, epoch: 1 } : undefined,
     () => {},
   );
   clean.push(() => reader.clear());
   const snap = await reader.get({ profileId: 'default', sessionId: 'mac-s1' });
   expect(snap.status).toBe('ready');
-  expect(snap.filePath).toBe(planFile);
+  expect(snap.filePath).toBe(brainPlanFile);
 
   const handler = vi.fn(async () => {});
-  for (const target of [aliasPlanPath, pathToFileURL(aliasPlanPath).href]) {
+  const mediaCtx = {
+    homeDir: homeCanonical,
+    profileId: 'default',
+    owns: (o: { profileId: string; sessionId?: string }) => o.profileId === 'default' && o.sessionId === 'mac-s1',
+  };
+  for (const target of [aliasBrainPlan, pathToFileURL(aliasBrainPlan).href]) {
     const res = await openExternalTarget(
       { target, action: 'reveal-in-folder', sessionId: 'mac-s1', planArtifactOwner: { profileId: 'default', sessionId: 'mac-s1', revision: snap.revision } },
-      { openTargetHandler: handler, homeDir: outsideDir },
+      { openTargetHandler: handler, homeDir: homeCanonical },
       undefined,
       owner => reader.get(owner),
+      mediaCtx,
     );
     expect(res.opened).toBe(true);
-    expect(res.resolvedTarget).toBe(planFile);
+    expect(res.resolvedTarget).toBe(brainPlanFile);
   }
 
   // 2. APFS case-insensitive workspace symlink escape must be blocked even when path changes case
@@ -541,17 +542,4 @@ it('strips legacy layout.json keys so reviseMessage and switchConversationBranch
   layoutSpy.mockRestore();
   expect(treeUpdates.at(-1)).toBe(2);
   expect((await core.getConversationTree(root.sessionId)).totalBranches).toBe(2);
-
-  // 3) Real agy Windows leading-slash location path normalization
-  if (process.platform === 'win32') {
-    const locRefs = [...planReferences([{
-      id: 'm-loc', sessionId: 's1', role: 'assistant', content: '', createdAt: '',
-      toolCalls: [{
-        toolCallId: 't1', rawToolName: 'write_file', canonicalToolName: 'Write', compactTarget: 'implementation_plan.md',
-        status: 'completed', argsSummary: '{}', startedAt: '',
-        locations: [{ path: '/C:/work/implementation_plan.md' }],
-      }],
-    }])];
-    expect(locRefs).toEqual(['C:/work/implementation_plan.md']);
-  }
 });

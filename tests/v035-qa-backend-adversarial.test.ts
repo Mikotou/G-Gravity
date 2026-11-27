@@ -1029,7 +1029,7 @@ describe('BE-S05 (P01): planHistoryChecked resume optimization, stale-generation
     // 1. First resume of legacy session with unreceived plan uses session/load
     await f.core.resumeSession(f.id, f.cwd);
     expect(methods).toEqual(['session/load']);
-    expect(f.core.messages.hasCheckedPlanHistory(f.id)).toBe(true);
+    expect(f.core.inspector.needsPlanReplay(f.id)).toBe(false);
 
     // 2. Second close + resume must skip session/load and use session/resume
     await f.core.closeSession(f.id);
@@ -1118,8 +1118,8 @@ describe('BE-S05 (P01): planHistoryChecked resume optimization, stale-generation
 /* ============================================================================
  * BE-S06 (P02): Hardlink, real isolated profile, TOCTOU, ADS/NUL/UNC, >128KiB D-02, D-01, D-05, ~/.gemini 0-byte
  * ========================================================================== */
-describe('BE-S06 (P02): PlanArtifactReader security boundaries, D-01 opener, D-02 truncation, D-05 revisions, and synthetic ~/.gemini 0-byte proof', () => {
-  it('blocks hardlinks, TOCTOU swaps, ADS/NUL/UNC/malformed file URLs, enforces D-02 truncation & 4MiB/NUL rejection, and writes 0 bytes to synthetic ~/.gemini', async () => {
+describe('BE-S06 (P02): PlanArtifactReader security boundaries, D-01 opener, 128KiB hard cap, D-05 revisions, and synthetic ~/.gemini 0-byte proof', () => {
+  it('blocks hardlinks, TOCTOU swaps, ADS/NUL/UNC/malformed file URLs, enforces 128KiB pre-read hard cap & NUL rejection, and writes 0 bytes to synthetic ~/.gemini', async () => {
     const f = await setupCoreFixture();
     await f.core.createSession({ cwd: f.cwd });
     const owner = { profileId: 'default', sessionId: f.id };
@@ -1132,59 +1132,76 @@ describe('BE-S06 (P02): PlanArtifactReader security boundaries, D-01 opener, D-0
     writeFileSync(join(f.homeDir, '.gemini', 'antigravity-cli', 'settings.json'), '{"model":"official"}', 'utf8');
     writeFileSync(join(pluginSkillDir, 'SKILL.md'), '---\nname: Demo\n---\n', 'utf8');
     const brainPlan = join(brainDir, 'implementation_plan.md');
-    // 1. D-02: Multi-byte UTF-8 > 128 KiB (50,000 x 3-byte '计' = 150,000 bytes; 131,072 falls mid-character!)
+
+    // 1. Multi-byte UTF-8 > 128 KiB (50,000 x 3-byte '计' = 150,000 bytes) MUST be hard-rejected BEFORE physical read
     const multiBytePlan = '计'.repeat(50_000);
     writeFileSync(brainPlan, multiBytePlan, 'utf8');
     const geminiBefore = snapshotTreeHashes(join(f.homeDir, '.gemini'));
 
-    const truncSnap = await f.core.getSessionPlanArtifact(owner);
-    expect(truncSnap).toMatchObject({ status: 'ready', source: 'brain-artifact', truncated: true });
-    expect(Buffer.byteLength(truncSnap.content!, 'utf8')).toBeLessThanOrEqual(131_072);
-    expect(Buffer.byteLength(truncSnap.content!, 'utf8')).toBeGreaterThanOrEqual(131_069);
-    expect(truncSnap.content!.includes('\uFFFD')).toBe(false);
-    expect(truncSnap.content!).toBe('计'.repeat(Math.floor(131_072 / 3)));
+    const preReadSpy = vi.spyOn(localSafety, 'readBoundedLocalFile');
+    const overCapSummary = await f.core.getSessionPlanArtifact(owner);
+    const overCapContent = await f.core.getSessionPlanArtifact({ ...owner, view: 'content' });
+    expect(overCapSummary.status).toBe('unavailable');
+    expect(overCapSummary.content).toBeUndefined();
+    expect(overCapContent.status).toBe('unavailable');
+    expect(overCapContent.content).toBeUndefined();
+    expect(preReadSpy).not.toHaveBeenCalled();
+    preReadSpy.mockRestore();
 
-    // 2. Verify synthetic ~/.gemini is 100% unchanged after read
-    expect(snapshotTreeHashes(join(f.homeDir, '.gemini'))).toEqual(geminiBefore);
+    // Exact <= 131,072 bytes multi-byte UTF-8 succeeds cleanly in both summary and content views
+    const maxMultiByte = '计'.repeat(Math.floor(131_072 / 3)); // 131,070 bytes
+    writeFileSync(brainPlan, maxMultiByte, 'utf8');
+    const exactSummary = await f.core.getSessionPlanArtifact(owner);
+    expect(exactSummary).toMatchObject({ status: 'ready', view: 'summary', source: 'brain-artifact', truncated: false });
+    expect(exactSummary.content).toBeUndefined();
+    const exactContent = await f.core.getSessionPlanArtifact({ ...owner, view: 'content' });
+    expect(exactContent).toMatchObject({ status: 'ready', view: 'content', source: 'brain-artifact', truncated: false, content: maxMultiByte });
 
-    // 3. >128 KiB with NUL byte hidden in the tail past 131,072 -> unavailable
-    const tailNul = Buffer.concat([Buffer.alloc(140_000, 65), Buffer.from([0]), Buffer.alloc(100, 66)]);
-    const wsPlan = join(f.cwd, 'implementation_plan.md');
-    rmSync(brainPlan);
-    f.core.messages.set(f.id, [{ id: 'ref-ws', sessionId: f.id, role: 'assistant', createdAt: '', content: 'See implementation_plan.md.' }]);
-    writeFileSync(wsPlan, tailNul);
-    expect((await f.core.getSessionPlanArtifact(owner)).status).toBe('unavailable');
+    // 2. Verify synthetic ~/.gemini is 100% unchanged after read (update baseline for our test's own write of brainPlan)
+    const geminiAfterMax = snapshotTreeHashes(join(f.homeDir, '.gemini'));
+    expect(geminiAfterMax['antigravity-cli/settings.json']).toBe(geminiBefore['antigravity-cli/settings.json']);
+    expect(geminiAfterMax['config/plugins/chrome-devtools-plugin/skills/demo/SKILL.md']).toBe(
+      geminiBefore['config/plugins/chrome-devtools-plugin/skills/demo/SKILL.md']
+    );
 
-    // 4. > 4 MiB valid ASCII -> unavailable
-    writeFileSync(wsPlan, Buffer.alloc(4 * 1024 * 1024 + 1, 65));
-    expect((await f.core.getSessionPlanArtifact(owner)).status).toBe('unavailable');
-    // D-05: knownRevision: 0 on unavailable must NOT return unchanged!
+    // 3. NUL byte inside <=128 KiB brain artifact -> unavailable
+    writeFileSync(brainPlan, Buffer.concat([Buffer.alloc(4096, 65), Buffer.from([0]), Buffer.alloc(100, 66)]));
+    expect((await f.core.getSessionPlanArtifact({ ...owner, view: 'content' })).status).toBe('unavailable');
+
+    // 4. 131,073 B valid ASCII -> unavailable before read; D-05 knownRevision: 0 on unavailable must NOT return unchanged
+    writeFileSync(brainPlan, Buffer.alloc(131_073, 65));
+    expect((await f.core.getSessionPlanArtifact({ ...owner, view: 'content' })).status).toBe('unavailable');
     expect((await f.core.getSessionPlanArtifact({ ...owner, knownRevision: 0 })).status).toBe('unavailable');
 
-    // 5. Hardlink (nlink > 1) -> unavailable
-    rmSync(wsPlan);
+    // 5. Hardlink (nlink > 1) in brain -> unavailable before read
+    rmSync(brainPlan);
     const outsideSecret = join(f.dir, 'outside-secret.txt');
     writeFileSync(outsideSecret, 'TOP_SECRET_HARDLINK', 'utf8');
-    linkSync(outsideSecret, wsPlan);
-    const hardlinkSnap = await f.core.getSessionPlanArtifact(owner);
+    linkSync(outsideSecret, brainPlan);
+    const hardlinkSpy = vi.spyOn(localSafety, 'readBoundedLocalFile');
+    const hardlinkSnap = await f.core.getSessionPlanArtifact({ ...owner, view: 'content' });
     expect(hardlinkSnap.status).toBe('unavailable');
     expect(hardlinkSnap.content).toBeUndefined();
-    rmSync(wsPlan);
+    expect(hardlinkSpy).not.toHaveBeenCalled();
+    hardlinkSpy.mockRestore();
+    rmSync(brainPlan);
 
-    // 6. D-05: knownRevision: 0 on missing must NOT return unchanged
+    // 6. D-05: knownRevision: 0 on missing must NOT return unchanged (even if workspace has implementation_plan.md)
+    writeFileSync(join(f.cwd, 'implementation_plan.md'), 'unowned workspace plan', 'utf8');
+    f.core.messages.set(f.id, [{ id: 'ref-ws', sessionId: f.id, role: 'assistant', createdAt: '', content: 'See implementation_plan.md.' }]);
     expect((await f.core.getSessionPlanArtifact({ ...owner, knownRevision: 0 })).status).toBe('missing');
 
-    // 7. TOCTOU swap mid-read -> unavailable
-    writeFileSync(wsPlan, 'initial-valid-plan', 'utf8');
+    // 7. TOCTOU swap mid-read in brain -> unavailable
+    writeFileSync(brainPlan, '# Initial Valid Plan\nDetails here.\n', 'utf8');
     const origRead = localSafety.readBoundedLocalFile;
-    vi.spyOn(localSafety, 'readBoundedLocalFile').mockImplementationOnce(async (real, lim) => {
-      const data = await origRead(real, lim);
-      writeFileSync(real, 'swapped-during-read-content', 'utf8');
+    vi.spyOn(localSafety, 'readBoundedLocalFile').mockImplementationOnce(async (real, lim, strict) => {
+      const data = await origRead(real, lim, strict);
+      writeFileSync(real, '# Swapped During Read\nDifferent bytes.\n', 'utf8');
       return data;
     });
-    expect((await f.core.getSessionPlanArtifact(owner)).status).toBe('unavailable');
+    expect((await f.core.getSessionPlanArtifact({ ...owner, view: 'content' })).status).toBe('unavailable');
 
-    // 8. Windows ADS / reserved device name NUL / UNC / malformed file://%ZZ
+    // 8. Windows ADS / reserved device name NUL / UNC references in transcript NEVER leak or claim workspace files
     for (const dangerous of [
       '[Implementation plan](implementation_plan.md:stream)',
       '[Implementation plan](NUL)',
@@ -1194,31 +1211,30 @@ describe('BE-S06 (P02): PlanArtifactReader security boundaries, D-01 opener, D-0
       const snap = await f.core.getSessionPlanArtifact(owner);
       expect(snap.content).toBeUndefined();
     }
-    // Restore valid workspace plan and test malformed file URL on openExternalTarget
-    f.core.messages.set(f.id, [{ id: 'ref-ok', sessionId: f.id, role: 'assistant', createdAt: '', content: '[Implementation plan](docs/my_plan.md#overview)' }]);
-    mkdirSync(join(f.cwd, 'docs'), { recursive: true });
-    const anchorPlan = join(f.cwd, 'docs', 'my_plan.md');
-    writeFileSync(anchorPlan, '# Overview\nPlan content\n', 'utf8');
-    const readyAnchor = await f.core.getSessionPlanArtifact(owner);
-    expect(readyAnchor).toMatchObject({ status: 'ready', filePath: anchorPlan, truncated: false });
+
+    // Restore valid brain plan and test malformed file URL on openExternalTarget
+    writeFileSync(brainPlan, '# Overview\nPlan content\n', 'utf8');
+    const readyAnchor = await f.core.getSessionPlanArtifact({ ...owner, view: 'content' });
+    expect(readyAnchor).toMatchObject({ status: 'ready', source: 'brain-artifact', filePath: brainPlan, truncated: false, content: '# Overview\nPlan content\n' });
 
     await expect(
       f.core.openLinkOrFileTarget({ action: 'default-app', target: 'file://%ZZ', planArtifactOwner: { ...owner, revision: readyAnchor.revision } })
     ).rejects.toThrow(/无效的本地文件 URL/);
 
-    // 9. D-01: real openExternalTarget integration — plan file WITH owner, embedded https:// and workspace relative file WITHOUT owner
+    // 9. D-01: real openExternalTarget integration — brain plan WITH owner, embedded https:// and workspace relative file WITHOUT owner
+    mkdirSync(join(f.cwd, 'docs'), { recursive: true });
     const guideFile = join(f.cwd, 'docs', 'guide.md');
     writeFileSync(guideFile, '# Guide\n', 'utf8');
     writeFileSync(join(f.cwd, '.env'), 'SECRET=1\n', 'utf8');
 
     const openSelf = await f.core.openLinkOrFileTarget({
       action: 'default-app',
-      target: anchorPlan,
+      target: brainPlan,
       cwd: f.cwd,
       sessionId: f.id,
       planArtifactOwner: { ...owner, revision: readyAnchor.revision },
     });
-    expect(openSelf).toMatchObject({ opened: true, modeUsed: 'default-app', resolvedTarget: anchorPlan });
+    expect(openSelf).toMatchObject({ opened: true, modeUsed: 'default-app', resolvedTarget: brainPlan });
 
     const openHttps = await f.core.openLinkOrFileTarget({
       action: 'browser',
@@ -1256,7 +1272,7 @@ describe('BE-S06 (P02): PlanArtifactReader security boundaries, D-01 opener, D-0
     }
     const openAfterLru = await f.core.openLinkOrFileTarget({
       action: 'default-app',
-      target: anchorPlan,
+      target: brainPlan,
       planArtifactOwner: { ...owner, revision: readyAnchor.revision },
     });
     expect(openAfterLru.opened).toBe(true);
@@ -1277,8 +1293,12 @@ describe('BE-S06 (P02): PlanArtifactReader security boundaries, D-01 opener, D-0
 
     const geminiBefore = snapshotTreeHashes(join(f.homeDir, '.gemini'));
 
-    const defSnap = await f.core.getSessionPlanArtifact({ profileId: 'default', sessionId: 'same-id' });
-    expect(defSnap).toMatchObject({ status: 'ready', source: 'brain-artifact', content: 'DEFAULT_PROFILE_PLAN' });
+    const defSummary = await f.core.getSessionPlanArtifact({ profileId: 'default', sessionId: 'same-id' });
+    expect(defSummary).toMatchObject({ status: 'ready', view: 'summary', source: 'brain-artifact' });
+    expect(defSummary.outline).toBeDefined();
+    expect(defSummary.content).toBeUndefined();
+    const defSnap = await f.core.getSessionPlanArtifact({ profileId: 'default', sessionId: 'same-id', view: 'content' });
+    expect(defSnap).toMatchObject({ status: 'ready', view: 'content', source: 'brain-artifact', content: 'DEFAULT_PROFILE_PLAN' });
     expect((await f.core.getSessionPlanArtifact({ profileId: profB.profileId, sessionId: 'same-id' })).status).toBe('unavailable');
 
     // Switch to isolated Profile B and create session with identical sessionId
@@ -1286,8 +1306,12 @@ describe('BE-S06 (P02): PlanArtifactReader security boundaries, D-01 opener, D-0
     f.requestSpy.mockImplementationOnce(async method => (method === 'session/new' ? { sessionId: 'same-id' } : {}));
     await f.core.createSession({ cwd: f.cwd });
 
-    const isoSnap = await f.core.getSessionPlanArtifact({ profileId: profB.profileId, sessionId: 'same-id' });
-    expect(isoSnap).toMatchObject({ status: 'ready', source: 'brain-artifact', content: 'ISOLATED_PROFILE_PLAN' });
+    const isoSummary = await f.core.getSessionPlanArtifact({ profileId: profB.profileId, sessionId: 'same-id' });
+    expect(isoSummary).toMatchObject({ status: 'ready', view: 'summary', source: 'brain-artifact' });
+    expect(isoSummary.outline).toBeDefined();
+    expect(isoSummary.content).toBeUndefined();
+    const isoSnap = await f.core.getSessionPlanArtifact({ profileId: profB.profileId, sessionId: 'same-id', view: 'content' });
+    expect(isoSnap).toMatchObject({ status: 'ready', view: 'content', source: 'brain-artifact', content: 'ISOLATED_PROFILE_PLAN' });
     expect((await f.core.getSessionPlanArtifact({ profileId: 'default', sessionId: 'same-id' })).status).toBe('unavailable');
 
     const openedIso = await f.core.openLinkOrFileTarget({

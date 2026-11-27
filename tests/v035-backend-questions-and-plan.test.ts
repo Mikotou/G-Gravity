@@ -336,30 +336,46 @@ describe('authoritative inspector and replay', () => {
 });
 
 describe('read-only session plan artifacts', () => {
-  it('resolves a referenced workspace file, observes edits, verifies revisions on open and rejects stale/foreign owners', async () => {
+  it('reads owned brain artifact, observes edits, verifies summary/content revisions on open and rejects workspace or foreign owners', async () => {
     const f = await setup(), owner = { profileId: 'default', sessionId: f.id };
-    const file = join(f.cwd, 'implementation_plan.md');
-    writeFileSync(file, 'first');
-    expect((await f.core.getSessionPlanArtifact(owner)).status).toBe('missing');
+    // Workspace implementation_plan.md is NEVER claimed in v0.3.6 even if referenced
+    writeFileSync(join(f.cwd, 'implementation_plan.md'), 'workspace-unowned');
     f.core.messages.set(f.id, [{ id: 'ref', sessionId: f.id, role: 'user', createdAt: '', content: '',
       references: [{ kind: 'file', label: 'plan', value: 'implementation_plan.md' }] }]);
+    expect((await f.core.getSessionPlanArtifact(owner)).status).toBe('missing');
+
+    const brainDir = join(f.homeDir, '.gemini', 'antigravity-cli', 'brain', f.id);
+    mkdirSync(brainDir, { recursive: true });
+    const file = join(brainDir, 'implementation_plan.md');
+    writeFileSync(file, '# Plan Title\nFirst summary line.\n');
     const changed = vi.fn(); f.core.on('plan-artifact-changed', changed);
-    const ready = await f.core.getSessionPlanArtifact(owner);
-    expect(ready).toMatchObject({ status: 'ready', source: 'workspace-reference', content: 'first', filePath: file });
+    const summarySnap = await f.core.getSessionPlanArtifact(owner);
+    expect(summarySnap).toMatchObject({ status: 'ready', view: 'summary', source: 'brain-artifact', filePath: file });
+    expect(summarySnap.outline?.title).toBe('Plan Title');
+    expect(summarySnap.content).toBeUndefined();
+    const contentSnap = await f.core.getSessionPlanArtifact({ ...owner, view: 'content' });
+    expect(contentSnap).toMatchObject({ status: 'ready', view: 'content', source: 'brain-artifact', filePath: file, content: '# Plan Title\nFirst summary line.\n' });
+
     await expect(f.core.openLinkOrFileTarget({ action: 'default-app', target: 'file://%ZZ', planArtifactOwner: owner }))
       .rejects.toThrow(/无效.*文件.*URL/);
     expect(f.openTargetHandler).not.toHaveBeenCalled();
+
     const reads = vi.spyOn(localSafety, 'readBoundedLocalFile');
-    expect(await f.core.getSessionPlanArtifact({ ...owner, knownRevision: ready.revision })).toEqual({ owner, revision: ready.revision, status: 'unchanged' });
+    expect(await f.core.getSessionPlanArtifact({ ...owner, knownRevision: summarySnap.revision })).toMatchObject({
+      owner: expect.objectContaining(owner), revision: summarySnap.revision, status: 'unchanged',
+    });
     expect(reads).not.toHaveBeenCalled();
-    expect((await f.core.getSessionPlanArtifact(owner)).content).toBe('first');
+    expect((await f.core.getSessionPlanArtifact({ ...owner, view: 'content' })).content).toBe('# Plan Title\nFirst summary line.\n');
     expect(reads).toHaveBeenCalledTimes(1);
-    const open = { action: 'default-app' as const, target: file, planArtifactOwner: { ...owner, revision: ready.revision } };
+
+    const open = { action: 'default-app' as const, target: file, planArtifactOwner: { ...owner, revision: summarySnap.revision } };
     await f.core.openLinkOrFileTarget(open);
     expect(f.openTargetHandler).toHaveBeenCalledTimes(1);
-    writeFileSync(file, 'other');
-    await vi.waitFor(() => expect(changed.mock.calls.some(([e]) => e.revision > ready.revision)).toBe(true));
+
+    writeFileSync(file, '# Updated Title\nOther summary line.\n');
+    await vi.waitFor(() => expect(changed.mock.calls.some(([e]) => e.revision > summarySnap.revision)).toBe(true));
     await expect(f.core.openLinkOrFileTarget(open)).rejects.toThrow();
+
     for (const bad of [{ ...owner, profileId: 'foreign' }, { ...owner, sessionId: '../escape' }, { ...owner, sessionId: 'foreign' }]) {
       expect((await f.core.getSessionPlanArtifact(bad)).status).toBe('unavailable');
       await expect(f.core.openLinkOrFileTarget({ ...open, planArtifactOwner: bad })).rejects.toThrow();
@@ -368,20 +384,20 @@ describe('read-only session plan artifacts', () => {
     expect(f.openTargetHandler).toHaveBeenCalledTimes(1);
   });
 
-  it('emits the first artifact event for an explicit plain-text reference before any inspector read', async () => {
+  it('never claims workspace plain-text plan mentions or emits artifact events for unowned workspace files', async () => {
     const f = await setup(), owner = { profileId: 'default', sessionId: f.id };
     const subdir = join(f.cwd, 'project'); mkdirSync(subdir);
-    writeFileSync(join(subdir, 'implementation_plan.md'), 'from this session');
+    writeFileSync(join(subdir, 'implementation_plan.md'), 'from workspace');
     const event = vi.fn(); f.core.on('plan-artifact-changed', event);
     const turn = f.userTurn();
     f.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'See project/implementation_plan.md.' } });
     f.original.resolve({ stopReason: 'end_turn' }); await turn;
-    await vi.waitFor(() => expect(event).toHaveBeenCalled());
-    expect(event.mock.calls[0][0]).toMatchObject(owner);
-    expect(await f.core.getSessionPlanArtifact(owner)).toMatchObject({ content: 'from this session', source: 'workspace-reference' });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(event).not.toHaveBeenCalled();
+    expect(await f.core.getSessionPlanArtifact(owner)).toMatchObject({ status: 'missing' });
   });
 
-  it('requires explicit plan labels for renamed artifacts and preserves executable reveal and credential guards', async () => {
+  it('ignores renamed workspace plan links and preserves executable reveal and credential guards', async () => {
     const f = await setup(), owner = { profileId: 'default', sessionId: f.id };
     const target = join(f.cwd, 'release checklist.cmd'); writeFileSync(target, 'Review release notes');
     const name = 'release%20checklist.cmd';
@@ -389,15 +405,21 @@ describe('read-only session plan artifacts', () => {
     set('[release notes](' + name + ')');
     expect((await f.core.getSessionPlanArtifact(owner)).status).toBe('missing');
     set('[Implementation plan](' + name + ')');
-    const ready = await f.core.getSessionPlanArtifact(owner);
-    expect(ready).toMatchObject({ status: 'ready', filePath: target, content: 'Review release notes' });
-    expect(await f.core.openLinkOrFileTarget({ action: 'default-app', target, planArtifactOwner: { ...owner, revision: ready.revision } }))
+    expect((await f.core.getSessionPlanArtifact(owner)).status).toBe('missing');
+    // Executable target downgrade to reveal-in-folder and credential guards remain enforced on openLinkOrFileTarget
+    expect(await f.core.openLinkOrFileTarget({ action: 'default-app', target, cwd: f.cwd, sessionId: f.id }))
       .toMatchObject({ modeUsed: 'reveal-in-folder' });
     mkdirSync(join(f.cwd, '.git')); writeFileSync(join(f.cwd, '.git', 'config'), 'private state');
+    writeFileSync(join(f.cwd, '.env'), 'SECRET=1');
     set('[实施计划](.git/config)');
     expect((await f.core.getSessionPlanArtifact(owner)).content).toBeUndefined();
     set('[实施计划](.env)');
     expect((await f.core.getSessionPlanArtifact(owner)).content).toBeUndefined();
+    await expect(f.core.openLinkOrFileTarget({ action: 'default-app', target: '.env', cwd: f.cwd, sessionId: f.id })).rejects.toThrow();
+    mkdirSync(join(f.homeDir, '.gemini', 'antigravity-cli'), { recursive: true });
+    const geminiSettings = join(f.homeDir, '.gemini', 'antigravity-cli', 'settings.json');
+    writeFileSync(geminiSettings, '{"token":"secret"}');
+    await expect(f.core.openLinkOrFileTarget({ action: 'default-app', target: geminiSettings, cwd: f.cwd, sessionId: f.id })).rejects.toThrow();
   });
 
   it('enforces the UTF-8 byte limit and regular-file boundaries in the owned brain and rejects a redirected ancestor', async () => {
@@ -407,14 +429,17 @@ describe('read-only session plan artifacts', () => {
     const path = join(root, 'implementation_plan.md');
     const bytes = Buffer.alloc(131072, 65);
     writeFileSync(path, bytes);
-    expect(await f.core.getSessionPlanArtifact(owner)).toMatchObject({ status: 'ready', source: 'brain-artifact', content: bytes.toString() });
+    const summarySnap = await f.core.getSessionPlanArtifact(owner);
+    expect(summarySnap).toMatchObject({ status: 'ready', view: 'summary', source: 'brain-artifact' });
+    expect(summarySnap.content).toBeUndefined();
+    expect(await f.core.getSessionPlanArtifact({ ...owner, view: 'content' })).toMatchObject({ status: 'ready', source: 'brain-artifact', content: bytes.toString() });
     await f.core.openLinkOrFileTarget({ action: 'default-app', target: path, planArtifactOwner: owner });
     expect(f.openTargetHandler).toHaveBeenCalledWith(path, 'default-app', false);
     await expect(f.core.openLinkOrFileTarget({ action: 'default-app', target: path, sessionId: f.id })).rejects.toThrow();
     expect(readFileSync(path)).toEqual(bytes);
     for (const invalid of [Buffer.alloc(131073), Buffer.from([0xff, 0xfe]), Buffer.from([65, 0, 66])]) {
       writeFileSync(path, invalid);
-      expect((await f.core.getSessionPlanArtifact(owner)).status).toBe('unavailable');
+      expect((await f.core.getSessionPlanArtifact({ ...owner, view: 'content' })).status).toBe('unavailable');
     }
     rmSync(path); mkdirSync(path);
     expect((await f.core.getSessionPlanArtifact(owner)).status).toBe('unavailable');
@@ -426,11 +451,13 @@ describe('read-only session plan artifacts', () => {
   });
 
   it('preserves revisions across 210 sessions and returns first-read errors with revision zero', async () => {
-    const dir = directory(), generation = {};
-    const file = join(dir, 'implementation_plan.md');
-    writeFileSync(file, 'first');
-    const reader = new PlanArtifactReader(owner => ({ cwd: dir, homeDir: join(dir, 'absent'), generation,
-      references: () => owner.sessionId === 's0' || owner.sessionId === 'invalid' ? [file] : [] }), vi.fn());
+    const dir = directory();
+    const s0Dir = join(dir, '.gemini', 'antigravity-cli', 'brain', 's0');
+    const badDir = join(dir, '.gemini', 'antigravity-cli', 'brain', 'invalid');
+    mkdirSync(s0Dir, { recursive: true });
+    mkdirSync(badDir, { recursive: true });
+    writeFileSync(join(s0Dir, 'implementation_plan.md'), '# First\n');
+    const reader = new PlanArtifactReader(() => ({ homeDir: dir, epoch: 1 }), vi.fn());
     cleanup.push(() => reader.clear());
     const owner = { profileId: 'default', sessionId: 's0' };
     const ready = await reader.get(owner);
@@ -438,18 +465,39 @@ describe('read-only session plan artifacts', () => {
     for (let i = 1; i <= 210; i++) {
       expect((await reader.get({ ...owner, sessionId: 's' + i, knownRevision: 0 })).status).toBe('missing');
     }
-    expect(await reader.get({ ...owner, knownRevision: ready.revision })).toEqual({ owner, status: 'unchanged', revision: ready.revision });
-    writeFileSync(file, Buffer.from([0xff]));
+    expect(await reader.get({ ...owner, knownRevision: ready.revision })).toMatchObject({
+      owner: { ...owner, epoch: 1 }, status: 'unchanged', revision: ready.revision,
+    });
+    writeFileSync(join(badDir, 'implementation_plan.md'), Buffer.from([0xff]));
     expect(await reader.get({ ...owner, sessionId: 'invalid', knownRevision: 0 })).toMatchObject({ status: 'unavailable', revision: 0 });
   });
 
-  it('verifies alternate filesystem spellings for both a referenced plan and its owner-bound opener', async () => {
-    const f = await setup(), owner = { profileId: 'default', sessionId: f.id };
-    const dir = join(f.cwd, 'Long Plan Directory');
-    mkdirSync(dir);
-    const file = join(dir, 'implementation_plan.md');
+  it('verifies alternate filesystem spellings for both an owned brain plan and its owner-bound opener', async () => {
+    const baseDir = directory();
+    const spacedHome = join(baseDir, 'Long Home Directory');
+    const cwd = join(baseDir, 'workspace');
+    mkdirSync(cwd, { recursive: true });
+    const id = 'fixture-spelling';
+    const brainDir = join(spacedHome, '.gemini', 'antigravity-cli', 'brain', id);
+    mkdirSync(brainDir, { recursive: true });
+    const file = join(brainDir, 'implementation_plan.md');
     writeFileSync(file, 'same document');
-    const spellings = [file, join(f.cwd, 'LONG PLAN DIRECTORY', 'implementation_plan.md')];
+
+    const client = new AcpClient();
+    client.initializeResult = { protocolVersion: 1, agentInfo: { name: 'fixture', version: '1' }, agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } } };
+    vi.spyOn(client, 'start').mockResolvedValue(client.initializeResult);
+    vi.spyOn(client, 'connected', 'get').mockReturnValue(true);
+    vi.spyOn(client, 'request').mockImplementation(async (method) => method === 'session/new' ? { sessionId: id } : {});
+    const openTargetHandler = vi.fn(async () => {});
+    const core = new CoreService({ dataDir: join(baseDir, 'client'), homeDir: spacedHome, acp: client, openTargetHandler });
+    cleanup.push(() => core.dispose());
+    await core.createSession({ cwd });
+
+    const owner = { profileId: 'default', sessionId: id };
+    const snapshot = await core.getSessionPlanArtifact({ ...owner, view: 'content' });
+    expect(snapshot).toMatchObject({ status: 'ready', content: 'same document' });
+
+    const spellings = [file, join(baseDir, 'LONG HOME DIRECTORY', '.gemini', 'antigravity-cli', 'brain', id, 'implementation_plan.md')];
     if (process.platform === 'win32') {
       const result = spawnSync('cmd.exe', ['/d', '/c', 'for %I in ("%GRAVITY_TEST_PLAN_FILE%") do @echo %~sI'], {
         env: { ...process.env, GRAVITY_TEST_PLAN_FILE: file }, encoding: 'utf8', windowsHide: true, windowsVerbatimArguments: true,
@@ -459,69 +507,69 @@ describe('read-only session plan artifacts', () => {
       expect(existsSync(short)).toBe(true);
       spellings.push(short);
     }
-    for (const path of spellings) {
-      f.core.messages.set(f.id, [{ id: 'ref', sessionId: f.id, role: 'assistant', createdAt: '', content: '',
-        references: [{ kind: 'file', label: 'Implementation plan', value: path }] }]);
-      const snapshot = await f.core.getSessionPlanArtifact(owner);
-      if (!existsSync(path)) { expect(snapshot.status).toBe('missing'); continue; }
-      expect(snapshot).toMatchObject({ status: 'ready', content: 'same document' });
-      expect(await f.core.openLinkOrFileTarget({ action: 'default-app', target: path, planArtifactOwner: owner }))
+    for (const candidatePath of spellings) {
+      if (!existsSync(candidatePath)) continue;
+      expect(await core.openLinkOrFileTarget({ action: 'default-app', target: candidatePath, planArtifactOwner: owner }))
         .toMatchObject({ modeUsed: 'default-app', resolvedTarget: snapshot.filePath });
     }
   });
 
-  it('uses the tail on notifications, indexes archived references on demand and tolerates an unreadable index', async () => {
+  it('performs zero archived page reads on streaming notifications and tolerates an unreadable message index for owned brain plans', async () => {
     const f = await setup(), owner = { sessionId: f.id, profileId: 'default' };
-    const file = join(f.cwd, 'implementation_plan.md');
-    writeFileSync(file, 'archived');
+    const brainDir = join(f.homeDir, '.gemini', 'antigravity-cli', 'brain', f.id);
+    mkdirSync(brainDir, { recursive: true });
+    writeFileSync(join(brainDir, 'implementation_plan.md'), 'archived');
     const ref: ChatMessageItem = { id: 'ref', sessionId: f.id, role: 'assistant', createdAt: '', content: '[plan](implementation_plan.md#step)' };
     f.core.messages.set(f.id, [ref, ...Array.from({ length: 3 * MESSAGE_PAGE_SIZE }, (_, i) => ({ ...ref, id: 'm' + i, content: '' }))]);
     f.core.messages.save(); f.core.messages.load('default');
     const scan = vi.spyOn(f.core.messages, 'get').mockImplementation(() => { throw Error('full scan'); });
-    const search = vi.spyOn(f.core.messages, 'planReferences');
     const disk = vi.spyOn(f.core.store, 'read');
-    const notify = () => f.core.emit('message-upserted', { sessionId: f.id, message: { ...ref, content: '', todos: [] } });
-    notify(); await vi.waitFor(() => expect(search).toHaveBeenCalledWith(f.id, false));
+    f.core.emit('message-upserted', { sessionId: f.id, message: { ...ref, content: '', todos: [] } });
     const pageReads = () => disk.mock.calls.filter(([file]) => file.startsWith('messages-page-')).length;
     expect(pageReads()).toBe(0);
-    const ready = await f.core.getSessionPlanArtifact(owner);
+    const ready = await f.core.getSessionPlanArtifact({ ...owner, view: 'content' });
     expect(ready).toMatchObject({ status: 'ready', content: 'archived' });
-    const coldReads = pageReads(); expect(coldReads).toBeGreaterThan(0);
-    f.core.messages.commitInteraction(f.id, [{ ...ref, content: 'See implementation_plan.md#step.' }]);
-    search.mockClear(); notify(); await vi.waitFor(() => expect(search).toHaveBeenCalledWith(f.id, false));
-    expect((await f.core.getSessionPlanArtifact({ ...owner, knownRevision: ready.revision })).status).toBe('unchanged');
-    expect(pageReads()).toBe(coldReads);
+    expect(pageReads()).toBe(0);
+    expect((await f.core.getSessionPlanArtifact({ ...owner, view: 'content', knownRevision: ready.revision })).status).toBe('unchanged');
     f.core.store.write('message-index-v2-default.json', { [f.id]: { pages: [{ file: 'invalid-index' }], recent: [ref] } });
     f.core.messages.load('default');
-    expect(await f.core.getSessionPlanArtifact(owner)).toMatchObject({ status: 'ready', content: 'archived' });
+    expect(await f.core.getSessionPlanArtifact({ ...owner, view: 'content' })).toMatchObject({ status: 'ready', content: 'archived' });
     expect(scan).not.toHaveBeenCalled(); scan.mockRestore();
   });
 
-  it('bounds the preview and validates the entire file, including split UTF-8 and binary tails', async () => {
+  it('enforces the 128 KiB hard cap before physical read and validates UTF-8 and binary boundaries in owned brain', async () => {
     const f = await setup(), owner = { sessionId: f.id, profileId: 'default' };
-    const file = join(f.cwd, 'implementation_plan.md');
-    f.core.messages.set(f.id, [{ id: 'ref', sessionId: f.id, role: 'assistant', createdAt: '',
-      content: '[plan](implementation_plan.md?view=source#milestone)' }]);
+    const brainDir = join(f.homeDir, '.gemini', 'antigravity-cli', 'brain', f.id);
+    mkdirSync(brainDir, { recursive: true });
+    const file = join(brainDir, 'implementation_plan.md');
     expect(await f.core.getSessionPlanArtifact({ ...owner, knownRevision: 0 })).toMatchObject({ status: 'missing', revision: 0 });
     writeFileSync(file, Buffer.from([255]));
     const invalidOwner = { ...owner, sessionId: 'other' };
     expect(await f.core.getSessionPlanArtifact({ ...invalidOwner, knownRevision: 0 })).toMatchObject({ status: 'unavailable', revision: 0 });
+
+    // Multi-byte UTF-8 fitting exactly within 131,072 bytes succeeds with truncated: false
     for (const char of ['é', '界', '🙂']) {
-      for (let split = 1; split < Buffer.byteLength(char); split++) {
-        const prefix = 'a'.repeat(131_072 - split);
-        writeFileSync(file, prefix + char + 'tail');
-        expect(await f.core.getSessionPlanArtifact(owner)).toMatchObject({ status: 'ready', truncated: true, content: prefix });
-      }
+      const charBytes = Buffer.byteLength(char);
+      const exact = 'a'.repeat(131_072 - charBytes) + char;
+      expect(Buffer.byteLength(exact, 'utf8')).toBe(131_072);
+      writeFileSync(file, exact);
+      expect(await f.core.getSessionPlanArtifact({ ...owner, view: 'content' })).toMatchObject({ status: 'ready', truncated: false, content: exact });
     }
-    const cap = 4 * 1024 * 1024, bytes = Buffer.alloc(cap, 65);
-    writeFileSync(file, bytes);
-    expect(await f.core.getSessionPlanArtifact(owner)).toMatchObject({ status: 'ready', truncated: true, content: 'A'.repeat(131_072) });
+
+    // 131,073 bytes MUST be hard-rejected BEFORE readBoundedLocalFile is called
+    writeFileSync(file, Buffer.alloc(131_073, 65));
+    const readSpy = vi.spyOn(localSafety, 'readBoundedLocalFile');
+    expect(await f.core.getSessionPlanArtifact({ ...owner, view: 'content' })).toMatchObject({ status: 'unavailable' });
+    expect(await f.core.getSessionPlanArtifact({ ...owner, view: 'summary' })).toMatchObject({ status: 'unavailable' });
+    expect(readSpy).not.toHaveBeenCalled();
+    readSpy.mockRestore();
+
+    // NUL byte and truncated/invalid UTF-8 inside <= 131,072 bytes are rejected
+    const base = Buffer.alloc(131_072, 65);
     for (const tail of [Buffer.from([0]), Buffer.from([255]), Buffer.from([0xe2, 0x82])]) {
-      writeFileSync(file, Buffer.concat([bytes.subarray(0, -tail.length), tail]));
-      expect(await f.core.getSessionPlanArtifact(owner)).toMatchObject({ status: 'unavailable' });
+      writeFileSync(file, Buffer.concat([base.subarray(0, -tail.length), tail]));
+      expect(await f.core.getSessionPlanArtifact({ ...owner, view: 'content' })).toMatchObject({ status: 'unavailable' });
     }
-    writeFileSync(file, Buffer.alloc(cap + 1, 65));
-    expect(await f.core.getSessionPlanArtifact(owner)).toMatchObject({ status: 'unavailable' });
   });
 
   it('never follows traversal, private state or unowned workspace references from a transcript', async () => {

@@ -741,10 +741,10 @@ describe('BE-09: LocalMediaInspector case-insensitive artifact.root & >64KB offs
       const imgPath = path.join(brainDir, 'preview.png');
       writeFileSync(imgPath, createValidPng(32, 24));
 
-      // Query with lowercase sessionId while directory on disk has uppercase SESS-MIXED-99
+      // Query with lowercase sessionId while directory on disk has uppercase SESS-MIXED-99 (authorized via owns)
       const result = await inspectLocalTargets(
         { targets: ['preview.png'], sessionId: 'sess-mixed-99', includePreviewData: true },
-        { homeDir }
+        { homeDir, profileId: 'default', owns: (o) => o.profileId === 'default' && o.sessionId === 'sess-mixed-99' }
       );
 
       expect(result.items['preview.png']).toMatchObject({
@@ -753,6 +753,23 @@ describe('BE-09: LocalMediaInspector case-insensitive artifact.root & >64KB offs
         width: 32,
         height: 24,
       });
+
+      // v0.3.6 security guard: brain access MUST be denied when `owns` is absent or denies ownership
+      const withoutOwns = await inspectLocalTargets(
+        { targets: ['preview.png', imgPath], sessionId: 'sess-mixed-99', includePreviewData: true },
+        { homeDir }
+      );
+      expect(withoutOwns.items['preview.png'].exists).toBe(false);
+      expect(withoutOwns.items[imgPath].exists).toBe(false);
+      expect(withoutOwns.items[imgPath].previewDataUrl).toBeUndefined();
+
+      const foreignOwns = await inspectLocalTargets(
+        { targets: ['preview.png', imgPath], sessionId: 'sess-mixed-99', includePreviewData: true },
+        { homeDir, profileId: 'default', owns: (o) => o.sessionId === 'other-session' }
+      );
+      expect(foreignOwns.items['preview.png'].exists).toBe(false);
+      expect(foreignOwns.items[imgPath].exists).toBe(false);
+      expect(foreignOwns.items[imgPath].previewDataUrl).toBeUndefined();
 
       // On macOS (case-insensitive APFS), path.posix.relative is case-sensitive, so raw
       // `relative(expected, realpathSync(artifact.root)) !== ''` falsely returns 'forbidden'.

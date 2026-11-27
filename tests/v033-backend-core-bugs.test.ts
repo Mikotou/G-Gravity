@@ -736,18 +736,26 @@ describe('v0.3.3 后端核心与生命周期 Bug 回归（CORE-01 ~ CORE-18）',
     // Profile B's fresh telemetry must NOT have default profile's session created by endTurn during switch
     expect(core.telemetry.getSessionTelemetry(s1.sessionId)).toBeUndefined();
 
-    // 2. dispose() resilience: throwing during saveMessages MUST NOT skip telemetry.dispose() or swarm.flush()
+    // 2. v0.3.6 4-step resumable quit: Step 1 checkpoint failure MUST keep CoreService & telemetry alive for retry,
+    // and retrying dispose() after fault clears MUST execute swarm.flush() and telemetry.dispose().
     const telemetryDisposeSpy = vi.spyOn(core.telemetry, 'dispose');
     const swarmFlushSpy = vi.spyOn(core.swarm, 'flush');
     const origWrite = core.store.write.bind(core.store);
-    vi.spyOn(core.store, 'write').mockImplementation((name, value) => {
+    const writeSpy = vi.spyOn(core.store, 'write').mockImplementation((name, value) => {
       if (name.startsWith('message-index-v2-')) throw new Error('simulated disk full on saveMessages');
       return origWrite(name, value);
     });
 
-    await core.dispose().catch(() => {});
+    await expect(core.dispose()).rejects.toThrow('simulated disk full on saveMessages');
+    expect(core.disposed).toBe(false);
+    expect(core.savingForQuit).toBe(false);
+    expect(telemetryDisposeSpy).not.toHaveBeenCalled();
+
+    writeSpy.mockRestore();
+    await core.dispose();
+    expect(core.disposed).toBe(true);
     expect(telemetryDisposeSpy).toHaveBeenCalledTimes(1);
-    expect(swarmFlushSpy).toHaveBeenCalledTimes(1);
+    expect(swarmFlushSpy).toHaveBeenCalled();
   });
 
   it('CORE-11 & CORE-12: waiting_question / 活动回合拒绝归档，且 reviseMessage 异步失败自动脱敏凭据不产生未捕获异常', async () => {

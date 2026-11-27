@@ -8,12 +8,21 @@ const user = (content: string): ChatMessageItem => ({ id: 'u', role: 'user', ses
 
 describe('批注记录、窗格位置和提问', () => {
   it('读入中英文旧批注时去掉模板，保留带换行的原文、意见和用户追加的正文', () => {
-    const zh = restoreAnnotatedMessage(user('> 原有引用\n\n【逐处标记批注 (Notations)】\n1. 针对原文「上半段\n\n下半段」：一条评论\n\n评论续行（第 7 条消息）\n\n请严格结合以上逐处标记位置与批注说明进行修改或解答。'));
+    const zhRaw = '> 原有引用\n\n【逐处标记批注 (Notations)】\n1. 针对原文「上半段\n\n下半段」：一条评论\n\n评论续行（第 7 条消息）\n\n请严格结合以上逐处标记位置与批注说明进行修改或解答。';
+    const zh = restoreAnnotatedMessage(user(zhRaw));
     expect(zh.content).toBe('');
-    expect(zh.annotations).toEqual([{ excerpt: '原有引用' }, { excerpt: '上半段\n\n下半段', comment: '一条评论\n\n评论续行', messageNumber: 7 }]);
-    const en = restoreAnnotatedMessage(user('[Multi-spot Selection Notations]\n1. Regarding "La": Explain this (message 2)\n\nMy own message'));
+    expect(zh.annotations).toEqual([
+      { id: expect.stringMatching(/^ann-legacy-1-/), excerpt: '原有引用' },
+      { id: expect.stringMatching(/^ann-legacy-2-/), excerpt: '上半段\n\n下半段', comment: '一条评论\n\n评论续行', messageNumber: 7 },
+    ]);
+    expect(restoreAnnotatedMessage(user(zhRaw)).annotations).toEqual(zh.annotations);
+    const enRaw = '[Multi-spot Selection Notations]\n1. Regarding "La": Explain this (message 2)\n\nMy own message';
+    const en = restoreAnnotatedMessage(user(enRaw));
     expect(en.content).toBe('My own message');
-    expect(en.annotations).toEqual([{ excerpt: 'La', comment: 'Explain this', messageNumber: 2 }]);
+    expect(en.annotations).toEqual([
+      { id: expect.stringMatching(/^ann-legacy-1-/), excerpt: 'La', comment: 'Explain this', messageNumber: 2 },
+    ]);
+    expect(restoreAnnotatedMessage(user(enRaw)).annotations).toEqual(en.annotations);
     const malformed = user('[Multi-spot Selection Notations]\nA user-authored example');
     expect(restoreAnnotatedMessage(malformed)).toBe(malformed);
     expect(restoreAnnotatedMessage(user(modelMessage(en.content, en.annotations)))).toEqual(en);

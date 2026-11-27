@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict');
 const { execFile, spawn } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { createServer } = require('node:http');
-const { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises');
+const { copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { promisify } = require('node:util');
@@ -710,12 +711,316 @@ async function exerciseLiveChat(page, cwd) {
   }
 }
 
-async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, fixture) {
+async function hashTree(rootDir) {
+  const out = {};
+  async function walk(dir) {
+    const entries = await readdir(dir, { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      const rel = path.relative(rootDir, full).replace(/\\/g, '/');
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.isFile()) {
+        const bytes = await readFile(full);
+        out[rel] = createHash('sha256').update(bytes).digest('hex');
+      }
+    }
+  }
+  await walk(rootDir);
+  return out;
+}
+
+async function prepareSyntheticGeminiHome(baseDir) {
+  const home = path.join(baseDir, 'synthetic-user-home');
+  const roaming = path.join(home, 'AppData', 'Roaming');
+  const local = path.join(home, 'AppData', 'Local');
+  const temp = path.join(local, 'Temp');
+  const cliDir = path.join(home, '.gemini', 'antigravity-cli');
+  const brainDir = path.join(cliDir, 'brain', 'qa-untouched-session');
+  await Promise.all([roaming, temp, brainDir].map(d => mkdir(d, { recursive: true })));
+  await writeFile(path.join(cliDir, 'settings.json'), '{"model":"official-untouched"}\n', 'utf8');
+  await writeFile(path.join(brainDir, 'implementation_plan.md'), '# Untouched Plan\nDo not modify.\n', 'utf8');
+  const geminiDir = path.join(home, '.gemini');
+  const baselineHashes = await hashTree(geminiDir);
+  return {
+    home,
+    geminiDir,
+    baselineHashes,
+    env: { USERPROFILE: home, APPDATA: roaming, LOCALAPPDATA: local, TEMP: temp, TMP: temp },
+  };
+}
+
+/**
+ * PKG-V1 (static): Verify bundled local-voice runtime, 59.7 MB ggml-base-q5_1.bin weight,
+ * OpenCC dictionaries, 7 licenses, pcm-worklet-*.js bundle, and zero dev/cross-platform leakage.
+ */
+async function verifyPackagedVoiceManifest(root) {
+  const appDir = path.join(root, 'win-unpacked', 'resources', 'app');
+  const voiceDir = path.join(appDir, 'assets', 'local-voice');
+  const sources = JSON.parse(await readFile(path.join(voiceDir, 'sources.json'), 'utf8'));
+
+  const requiredRuntime = [
+    'ggml-base-q5_1.bin',
+    'whisper.cjs',
+    'whisper.wasm',
+    'worker.cjs',
+    'model.cjs',
+    'sources.json',
+    'test-clip.pcm',
+    'test-clip.wav',
+    'TSCharacters.txt',
+    'TSPhrases.txt',
+  ];
+  for (const name of requiredRuntime) {
+    const filePath = path.join(voiceDir, name);
+    const info = await stat(filePath).catch(() => null);
+    assert.ok(info && info.isFile() && info.size > 0, `PKG-V1 missing packaged local-voice asset: ${name}`);
+  }
+
+  // Exact byte size + SHA-256 verification for bundled model & runtime/fixture/OpenCC assets
+  const sha256File = async (rel) => createHash('sha256').update(await readFile(path.join(voiceDir, rel))).digest('hex');
+  const modelStat = await stat(path.join(voiceDir, sources.model.fileName));
+  assert.equal(modelStat.size, sources.model.sizeBytes, `PKG-V1 model size mismatch: expected ${sources.model.sizeBytes}, got ${modelStat.size}`);
+  assert.equal(await sha256File(sources.model.fileName), sources.model.sha256, 'PKG-V1 bundled ggml-base-q5_1.bin SHA-256 mismatch');
+  assert.equal(await sha256File('whisper.cjs'), sources.runtime.jsSha256, 'PKG-V1 whisper.cjs SHA-256 mismatch');
+  assert.equal(await sha256File('whisper.wasm'), sources.runtime.wasmSha256, 'PKG-V1 whisper.wasm SHA-256 mismatch');
+  assert.equal(await sha256File('test-clip.pcm'), sources.fixture.pcmSha256, 'PKG-V1 test-clip.pcm SHA-256 mismatch');
+  assert.equal(await sha256File('test-clip.wav'), sources.fixture.wavSha256, 'PKG-V1 test-clip.wav SHA-256 mismatch');
+  for (const [dictName, expectedHash] of Object.entries(sources.simplifiedChinese.files)) {
+    assert.equal(await sha256File(dictName), expectedHash, `PKG-V1 OpenCC ${dictName} SHA-256 mismatch`);
+  }
+
+  // All 7 open-source licenses present & non-empty
+  const licenses = [sources.model.license, ...sources.runtime.licenses, sources.simplifiedChinese.license];
+  assert.equal(new Set(licenses).size, 7);
+  for (const lic of licenses) {
+    const text = await readFile(path.join(voiceDir, lic), 'utf8');
+    assert.ok(text.trim().length > 50, `PKG-V1 empty license: ${lic}`);
+  }
+
+  // Separate pcm-worklet-*.js asset bundled in dist/renderer/assets/
+  const rendererAssetsDir = path.join(appDir, 'dist', 'renderer', 'assets');
+  const rendererAssets = await readdir(rendererAssetsDir);
+  const workletFile = rendererAssets.find(f => /^pcm-worklet-.*\.js$/i.test(f));
+  assert.ok(workletFile, 'PKG-V1 missing bundled pcm-worklet-*.js in dist/renderer/assets');
+
+  // Zero forbidden/leakage files inside release/win-unpacked/resources/app
+  const leaked = [];
+  async function scanLeak(dir) {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      const rel = path.relative(appDir, full).replace(/\\/g, '/');
+      if (entry.isDirectory()) {
+        if (rel === 'assets/local-voice/build') leaked.push(rel);
+        else await scanLeak(full);
+      } else if (/-mac\.png$|-macos\.|\.map$|\.d\.ts$|^assets\/local-voice\/\.git/i.test(rel)) {
+        leaked.push(rel);
+      }
+    }
+  }
+  await scanLeak(appDir);
+  assert.deepEqual(leaked, [], `PKG-V1 unexpected files leaked into win-unpacked: ${leaked.join(', ')}`);
+
+  // Portable single-file Gravity.exe exists
+  const portableExe = path.join(root, 'Gravity.exe');
+  const portableStat = await stat(portableExe).catch(() => null);
+  assert.ok(portableStat && portableStat.isFile() && portableStat.size > 50 * 1024 * 1024, 'PKG-V1 portable Gravity.exe missing or unexpectedly small');
+  console.log(`PKG-V1 manifest verified: bundled ggml-base-q5_1.bin (${modelStat.size} B, SHA-256 OK), whisper runtime, OpenCC, 7 licenses, ${workletFile}, 0 leaked files.`);
+  return { workletFile };
+}
+
+/**
+ * PKG-V1 (runtime) + PKG-V2 (AudioWorklet under file:// & strict CSP) + PKG-V3 (real contextBridge PCM16 & binary rejection)
+ * + PKG-V4 (offline Whisper real transcription on bundled test-clip.pcm).
+ */
+async function checkPackagedVoiceRuntime(page, workletFile, label) {
+  const result = await page.evaluate(async (workletAsset) => {
+    const bridge = window.gravityDesktop;
+    const protocol = location.protocol;
+    const cspMeta = document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content') || '';
+
+    // PKG-V1: Idle zero-permission check (no active lease -> getUserMedia MUST be denied by Electron permission handler)
+    const boot = await bridge.getBootstrap();
+    const initialVoice = await bridge.getVoiceState();
+    let idleGumRejected = false;
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s.getTracks().forEach(t => t.stop());
+    } catch {
+      idleGumRejected = true;
+    }
+
+    // PKG-V1b: device-list lease under file:// allows enumerateDevices and revokes on release-media
+    const deviceLease = await bridge.voiceArmCapture({ owner: { profileId: 'default' }, purpose: 'device-list' });
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(d => d.kind === 'audioinput').length;
+    const deviceReleased = await bridge.voiceArmCapture({ op: 'release-media', captureId: deviceLease.captureId });
+
+    // PKG-V2 + PKG-V3: mic-test lease -> leased getUserMedia -> media-ready closes window -> AudioWorklet under file:// CSP -> real PCM16 over contextBridge
+    const micLease = await bridge.voiceArmCapture({ owner: { profileId: 'default' }, purpose: 'mic-test' });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const liveTrackCount = stream.getAudioTracks().filter(t => t.readyState === 'live').length;
+
+    // media-ready MUST close the permission lease immediately
+    await bridge.voiceArmCapture({ op: 'media-ready', captureId: micLease.captureId });
+    let secondGumAfterReadyRejected = false;
+    try {
+      const s2 = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s2.getTracks().forEach(t => t.stop());
+    } catch {
+      secondGumAfterReadyRejected = true;
+    }
+
+    // Load real bundled pcm-worklet-*.js under file:// + strict CSP and collect non-zero PCM16 ArrayBuffer
+    const ctx = new AudioContext();
+    if (ctx.state === 'suspended') await ctx.resume();
+    const workletUrl = new URL('./assets/' + workletAsset, location.href).href;
+    await ctx.audioWorklet.addModule(workletUrl);
+    const node = new AudioWorkletNode(ctx, 'gravity-pcm16');
+    const chunks = [];
+    const chunkReady = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('AudioWorklet did not produce PCM16 within 5s')), 5000);
+      node.port.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer && event.data.byteLength > 0) {
+          chunks.push(event.data);
+          const samples = new Int16Array(event.data);
+          let maxAbs = 0;
+          for (let i = 0; i < samples.length; i++) {
+            const v = Math.abs(samples[i]);
+            if (v > maxAbs) maxAbs = v;
+          }
+          if (maxAbs > 0) {
+            clearTimeout(timer);
+            resolve({ byteLength: event.data.byteLength, maxAbs });
+          }
+        }
+      };
+    });
+    const mediaSrc = ctx.createMediaStreamSource(stream);
+    const osc = ctx.createOscillator();
+    const oscGain = ctx.createGain();
+    oscGain.gain.value = 0.25;
+    osc.frequency.value = 440;
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    mediaSrc.connect(node);
+    osc.connect(oscGain);
+    oscGain.connect(node);
+    node.connect(mute);
+    mute.connect(ctx.destination);
+    osc.start();
+
+    const firstChunkMeta = await chunkReady;
+    osc.stop();
+    stream.getTracks().forEach(t => t.stop());
+    await ctx.close();
+
+    // PKG-V3: Send real ArrayBuffer (seq 1) and Uint8Array (seq 2) over real contextBridge -> preload -> ipcMain
+    const pcmAb = chunks[chunks.length - 1];
+    const pcmU8 = new Uint8Array(pcmAb.slice(0));
+    const ack1 = await bridge.voiceAppend({ captureId: micLease.captureId, seq: 1, pcm16: pcmAb });
+    const ack2 = await bridge.voiceAppend({ captureId: micLease.captureId, seq: 2, pcm16: pcmU8 });
+
+    // Adversarial binary rejections across real contextBridge
+    const rejectedBadAppend = [];
+    for (const badPcm of [
+      new Uint8Array(3),
+      new Uint8Array(0),
+      new Uint8Array(32770),
+      new Uint8Array(new ArrayBuffer(16), 2, 4),
+      new Int16Array(4),
+    ]) {
+      const rejected = await bridge.voiceAppend({ captureId: micLease.captureId, seq: 3, pcm16: badPcm }).then(() => false, () => true);
+      rejectedBadAppend.push(rejected);
+    }
+
+    // Representative argument-accepting non-VOICE_APPEND invoke channels MUST reject Uint8Array / ArrayBuffer / nested binary across real IPC
+    const rejectedOtherChannels = [];
+    for (const [name, call] of [
+      ['copyText', () => bridge.copyText(new Uint8Array(4))],
+      ['updatePreferences', () => bridge.updatePreferences({ locale: new Uint8Array(4) })],
+      ['listSessions', () => bridge.listSessions(new ArrayBuffer(4))],
+      ['updateVoiceConfig', () => bridge.updateVoiceConfig({ locale: new Uint8Array(4) })],
+      ['voiceAbort', () => bridge.voiceAbort({ captureId: 'x', reason: new Uint8Array(4) })],
+      ['getSessionPlanArtifact', () => bridge.getSessionPlanArtifact({ sessionId: 's', path: new ArrayBuffer(4) })],
+      ['sendPrompt', () => bridge.sendPrompt({ sessionId: 's', text: new Uint8Array(4) })],
+      ['saveWorkspaceLayout', () => bridge.saveWorkspaceLayout({ nested: new Uint8Array(4) })],
+    ]) {
+      const rejected = await Promise.resolve().then(call).then(() => false, () => true);
+      rejectedOtherChannels.push({ name, rejected });
+    }
+
+    const releasedMic = await bridge.voiceArmCapture({ op: 'release-media', captureId: micLease.captureId });
+
+    // PKG-V4: Real offline Whisper transcription of bundled English test-clip.pcm inside packaged Gravity.exe
+    const t0 = performance.now();
+    const localTest = await bridge.testVoiceConnection();
+    const whisperLatencyMs = Math.round(performance.now() - t0);
+
+    return {
+      protocol,
+      cspMeta,
+      bootstrapVoiceModel: boot.voiceState?.model,
+      initialVoiceModel: initialVoice.model,
+      initialActiveCapture: initialVoice.activeCapture ?? null,
+      idleGumRejected,
+      audioInputs,
+      deviceReleasedState: deviceReleased.state,
+      liveTrackCount,
+      secondGumAfterReadyRejected,
+      firstChunkMeta,
+      ack1,
+      ack2,
+      rejectedBadAppend,
+      rejectedOtherChannels,
+      releasedMicState: releasedMic.state,
+      localTest,
+      whisperLatencyMs,
+    };
+  }, workletFile);
+
+  assert.equal(result.protocol, 'file:');
+  assert.match(result.cspMeta, /script-src\s+'self'\s*;/i);
+  assert.doesNotMatch(result.cspMeta, /wasm-unsafe-eval|unsafe-eval/i);
+  assert.equal(result.bootstrapVoiceModel?.status, 'ready');
+  assert.equal(result.bootstrapVoiceModel?.source, 'bundled');
+  assert.equal(result.bootstrapVoiceModel?.sha256Verified, true);
+  assert.equal(result.initialVoiceModel?.status, 'ready');
+  assert.equal(result.initialVoiceModel?.source, 'bundled');
+  assert.equal(result.initialVoiceModel?.sha256Verified, true);
+  assert.equal(result.initialActiveCapture, null);
+  assert.equal(result.idleGumRejected, true, 'PKG-V1: getUserMedia MUST be denied without an active lease');
+  assert.ok(result.audioInputs >= 1, 'PKG-V1: enumerateDevices under device-list lease must see fake audioinput');
+  assert.equal(result.deviceReleasedState, 'released');
+  assert.equal(result.liveTrackCount, 1);
+  assert.equal(result.secondGumAfterReadyRejected, true, 'PKG-V1: second getUserMedia after media-ready MUST be denied');
+  assert.ok(result.firstChunkMeta.byteLength > 0 && result.firstChunkMeta.byteLength % 2 === 0, 'PKG-V2: worklet must produce even-length PCM16');
+  assert.ok(result.firstChunkMeta.maxAbs > 0, 'PKG-V2: worklet must produce non-zero PCM16 audio samples');
+  assert.equal(result.ack1.accepted, true, 'PKG-V3: real contextBridge ArrayBuffer voiceAppend must succeed');
+  assert.equal(result.ack2.accepted, true, 'PKG-V3: real contextBridge Uint8Array voiceAppend must succeed');
+  assert.ok(result.rejectedBadAppend.every(Boolean), 'PKG-V3: all malformed PCM16 buffers must be rejected');
+  assert.ok(result.rejectedOtherChannels.every(x => x.rejected), `PKG-V3: non-VOICE_APPEND channels must reject binary payloads: ${JSON.stringify(result.rejectedOtherChannels)}`);
+  assert.equal(result.releasedMicState, 'released');
+  assert.equal(result.localTest.ok, true, `PKG-V4 offline Whisper testVoiceConnection failed: ${JSON.stringify(result.localTest)}`);
+  assert.match(result.localTest.transcriptPreview || '', /library opens at (?:9|nine)/i);
+  console.log(`${label} — PKG-V1..V4 OK (file:// strict CSP, idle 0-perm, AudioWorklet ${result.firstChunkMeta.byteLength}B peak=${result.firstChunkMeta.maxAbs}, contextBridge PCM16 + binary rejection, offline Whisper "${result.localTest.transcriptPreview}" in ${result.whisperLatencyMs}ms)`);
+}
+
+async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, fixture, voiceOptions) {
   const portFile = path.join(profile, 'DevToolsActivePort');
   await rm(portFile, { force: true });
-  const childEnv = { ...process.env, ...fixture?.env, AGY_BINARY_PATH: fixture?.binary ?? (liveWorkspace ? (process.env.AGY_BINARY_PATH || '') : path.join(profile, 'offline', 'agy.exe')), AGY_RENDERER_URL: '' };
+  const childEnv = {
+    ...process.env,
+    ...voiceOptions?.env,
+    ...fixture?.env,
+    AGY_BINARY_PATH: fixture?.binary ?? (liveWorkspace ? (process.env.AGY_BINARY_PATH || '') : path.join(profile, 'offline', 'agy.exe')),
+    AGY_RENDERER_URL: '',
+  };
   delete childEnv.ELECTRON_RUN_AS_NODE;
-  const child = spawn(executable, ['--user-data-dir=' + profile, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0'], {
+  const launchArgs = ['--user-data-dir=' + profile, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0'];
+  if (!liveWorkspace && !fixture) launchArgs.push('--use-fake-device-for-media-stream');
+  const child = spawn(executable, launchArgs, {
     cwd: liveWorkspace || process.cwd(),
     env: childEnv,
     windowsHide: true, stdio: 'ignore',
@@ -723,6 +1028,7 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
   const exited = new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject); });
   // The portable launcher extracts Electron before creating its actual desktop window.
   let browser;
+  let bodyOk = false;
   try {
     const deadline = Date.now() + 45000;
     while (!browser && Date.now() < deadline) {
@@ -757,6 +1063,7 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
       await checkRecoveryAndCache(page, liveWorkspace, fixture);
       await checkProfileModelHistory(page, liveWorkspace, fixture);
       assert.deepEqual(errors, []);
+      bodyOk = true;
       return;
     }
     if (!liveWorkspace) assert.ok(connection.lastError);
@@ -764,6 +1071,20 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
     const welcome = page.getByTestId('empty-pane-0');
     await welcome.getByRole('heading').waitFor();
     assert.equal(await page.locator('[data-testid^="session-pane-"]').count(), 0);
+    // PKG-V1: Track idle mediaDevices calls across startup settle and opening Settings -> General
+    if (!liveWorkspace) {
+      await page.evaluate(() => {
+        window.__qaIdleMediaCalls = { getUserMedia: 0, enumerateDevices: 0 };
+        const md = navigator.mediaDevices;
+        if (md && !md.__qaWrapped) {
+          md.__qaWrapped = true;
+          const origGum = md.getUserMedia.bind(md);
+          const origEnum = md.enumerateDevices.bind(md);
+          md.getUserMedia = (...args) => { window.__qaIdleMediaCalls.getUserMedia++; return origGum(...args); };
+          md.enumerateDevices = (...args) => { window.__qaIdleMediaCalls.enumerateDevices++; return origEnum(...args); };
+        }
+      });
+    }
     // Observe a settled, empty launch before exercising navigation and opening a conversation.
     await delay(2500);
     assert.ok(await welcome.isVisible());
@@ -787,6 +1108,13 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
     if (!liveWorkspace) {
       await page.getByTestId('settings-tab-general').press('Enter');
       assert.match(await page.getByTestId('translation-engine').textContent(), /本地|离线/);
+      // PKG-V1: Verify opening Settings -> General kept 0 active captures and zero idle getUserMedia/enumerateDevices calls
+      const idleCheck = await page.evaluate(async () => ({
+        voice: await window.gravityDesktop.getVoiceState(),
+        mediaCalls: window.__qaIdleMediaCalls,
+      }));
+      assert.equal(idleCheck.voice.activeCapture ?? null, null);
+      assert.deepEqual(idleCheck.mediaCalls, { getUserMedia: 0, enumerateDevices: 0 }, 'PKG-V1: Opening app & Settings->General must make 0 getUserMedia/enumerateDevices calls');
     }
     if (firstLaunch) {
       await page.getByTestId('settings-tab-themes').press('Enter');
@@ -796,6 +1124,15 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
     await page.keyboard.press('Escape');
     await welcome.getByRole('heading').waitFor();
     if (!liveWorkspace) {
+      if (voiceOptions?.workletFile) {
+        await checkPackagedVoiceRuntime(page, voiceOptions.workletFile, path.relative(process.cwd(), executable));
+      }
+      if (voiceOptions?.emptyUserDataOnly) {
+        assert.deepEqual(errors, []);
+        console.log(path.relative(process.cwd(), executable) + ' — Empty userData offline voice & compliance smoke OK');
+        bodyOk = true;
+        return;
+      }
       if (!firstLaunch) await checkExternalSampleTests(page, profile);
       await checkRecordedSession(page, firstLaunch);
       if (firstLaunch) {
@@ -814,6 +1151,7 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
     }
     assert.deepEqual(errors, []);
     console.log(path.relative(process.cwd(), executable) + ' — Gravity, desktop IPC, icons, settings and persisted theme OK');
+    bodyOk = true;
   } finally {
     if (browser) {
       const session = await browser.newBrowserCDPSession().catch(() => undefined);
@@ -822,9 +1160,10 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
     }
     let timer;
     try {
-      await Promise.race([exited, new Promise((_, reject) => {
+      const exitCode = await Promise.race([exited, new Promise((_, reject) => {
         timer = setTimeout(() => { child.kill(); reject(new Error('Test instance did not exit')); }, 10000);
       })]);
+      if (bodyOk) assert.equal(exitCode, 0, `Packaged Gravity.exe exited with non-zero code: ${exitCode}`);
     } finally { clearTimeout(timer); }
   }
 }
@@ -833,7 +1172,7 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
   assert.equal(process.platform, 'win32');
   const profile = await mkdtemp(path.join(tmpdir(), 'gravity-package-'));
   const synthetic = process.env.GRAVITY_DESKTOP_SYNTHETIC === 'recovery-cache';
-  let workspace, liveProfile;
+  let workspace, liveProfile, emptyVoiceProfile, synthHomeBase;
   try {
     const artifacts = path.resolve('tests/artifacts');
     await mkdir(artifacts, { recursive: true });
@@ -843,9 +1182,31 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
       await inspectPackage(path.join(releaseRoot, 'Gravity.exe'), profile, true, workspace, fixture);
       return;
     }
+    const { workletFile } = await verifyPackagedVoiceManifest(releaseRoot);
+    synthHomeBase = await mkdtemp(path.join(tmpdir(), 'gravity-package-home-'));
+    const synthHome = await prepareSyntheticGeminiHome(synthHomeBase);
+
+    // 1. Cold empty userData offline smoke on portable Gravity.exe (PKG-V1..V4 + 4-step clean quit + ~/.gemini 0-byte write)
+    emptyVoiceProfile = await mkdtemp(path.join(tmpdir(), 'gravity-package-empty-'));
+    await inspectPackage(path.join(releaseRoot, 'Gravity.exe'), emptyVoiceProfile, true, undefined, undefined, {
+      workletFile,
+      emptyUserDataOnly: true,
+      env: synthHome.env,
+    });
+    // Confirm 4-step clean exit persisted durable window-state.json & preferences.json without corrupting ~/.gemini
+    const savedWinState = JSON.parse(await readFile(path.join(emptyVoiceProfile, 'window-state.json'), 'utf8'));
+    assert.ok(savedWinState?.bounds?.width >= 960 && savedWinState?.bounds?.height >= 640, 'PKG-V4: 4-step quit must flush window-state.json');
+    const savedPrefs = JSON.parse(await readFile(path.join(emptyVoiceProfile, 'preferences.json'), 'utf8'));
+    assert.equal(savedPrefs.theme, 'solarized-dark');
+    assert.deepEqual(await hashTree(synthHome.geminiDir), synthHome.baselineHashes, 'PKG-V4: ~/.gemini must have 0 bytes written after empty userData portable run');
+
+    // 2. Full seeded offline smoke on win-unpacked/Gravity.exe AND portable Gravity.exe
     await seedRecordedSession(profile, workspace);
-    await inspectPackage(path.join(releaseRoot, 'win-unpacked/Gravity.exe'), profile, true);
-    await inspectPackage(path.join(releaseRoot, 'Gravity.exe'), profile, false);
+    await inspectPackage(path.join(releaseRoot, 'win-unpacked/Gravity.exe'), profile, true, undefined, undefined, { workletFile, env: synthHome.env });
+    await inspectPackage(path.join(releaseRoot, 'Gravity.exe'), profile, false, undefined, undefined, { workletFile, env: synthHome.env });
+    assert.deepEqual(await hashTree(synthHome.geminiDir), synthHome.baselineHashes, 'PKG-V4: ~/.gemini must have 0 bytes written across full offline smoke runs');
+    console.log('PKG-V4 ~/.gemini 0-byte write proof OK (recursive SHA-256 identical before and after win-unpacked + portable runs).');
+
     if (process.env.GRAVITY_DESKTOP_LIVE) {
       liveProfile = await mkdtemp(path.join(tmpdir(), 'gravity-package-live-'));
       if (process.env.GRAVITY_DESKTOP_LIVE === 'titles') await seedTitleFixture(liveProfile, workspace);
@@ -854,6 +1215,8 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
   } finally {
     if (synthetic) await removeRecoveryProfile(profile);
     else await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
+    if (emptyVoiceProfile) await rm(emptyVoiceProfile, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
+    if (synthHomeBase) await rm(synthHomeBase, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
     if (liveProfile) await rm(liveProfile, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
     if (workspace) await rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
   }
