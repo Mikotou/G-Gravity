@@ -9,6 +9,18 @@
  */
 
 import type { ConversationTreeState } from './conversation-tree';
+import {
+  DEFAULT_MODEL_RATE_CARDS,
+  resolveModelRateCard,
+  type ModelRateCard,
+} from './model-rate-cards';
+import type { VoiceExternalTelemetrySnapshot } from './voice-contract';
+
+export {
+  DEFAULT_MODEL_RATE_CARDS,
+  resolveModelRateCard,
+  type ModelRateCard,
+};
 
 export type TelemetryUsageSource = 'acp-reported' | 'estimated' | 'mixed';
 
@@ -77,189 +89,6 @@ export interface ContextTokenBreakdown {
   toolCallsTokens: number;
   attachmentsTokens: number;
 }
-
-/**
- * 分模型四维 Token 参考单价配置（单位：USD / 1M Tokens，可在设置中编辑）
- */
-export interface ModelRateCard {
-  modelId: string;
-  displayName: string;
-  inputPerMillionUsd: number;
-  cachedInputPerMillionUsd: number;
-  outputPerMillionUsd: number;
-  thinkingPerMillionUsd: number;
-}
-
-export const DEFAULT_MODEL_RATE_CARDS: readonly ModelRateCard[] = [
-  {
-    modelId: 'default',
-    displayName: 'Default Reference (Gemini Pro Tier)',
-    inputPerMillionUsd: 1.25,
-    cachedInputPerMillionUsd: 0.31,
-    outputPerMillionUsd: 10.0,
-    thinkingPerMillionUsd: 10.0,
-  },
-  {
-    modelId: 'gemini-4-carbon',
-    displayName: 'Gemini 4 Carbon',
-    inputPerMillionUsd: 2.0,
-    cachedInputPerMillionUsd: 0.5,
-    outputPerMillionUsd: 12.0,
-    thinkingPerMillionUsd: 12.0,
-  },
-  {
-    modelId: 'gemini-4-argon',
-    displayName: 'Gemini 4 Argon',
-    inputPerMillionUsd: 1.5,
-    cachedInputPerMillionUsd: 0.375,
-    outputPerMillionUsd: 10.0,
-    thinkingPerMillionUsd: 10.0,
-  },
-  {
-    modelId: 'gemini-4-hydrogen',
-    displayName: 'Gemini 4 Hydrogen',
-    inputPerMillionUsd: 1.25,
-    cachedInputPerMillionUsd: 0.31,
-    outputPerMillionUsd: 8.0,
-    thinkingPerMillionUsd: 8.0,
-  },
-  {
-    modelId: 'gemini-4-neon',
-    displayName: 'Gemini 4 Neon',
-    inputPerMillionUsd: 1.5,
-    cachedInputPerMillionUsd: 0.375,
-    outputPerMillionUsd: 10.0,
-    thinkingPerMillionUsd: 10.0,
-  },
-  {
-    modelId: 'gemini-pro-orchestrator',
-    displayName: 'Orchestrator (Carbon / Argon)',
-    inputPerMillionUsd: 2.0,
-    cachedInputPerMillionUsd: 0.5,
-    outputPerMillionUsd: 12.0,
-    thinkingPerMillionUsd: 12.0,
-  },
-  {
-    modelId: 'gemini-3.8-flash',
-    displayName: 'Gemini 3.8 Flash',
-    inputPerMillionUsd: 0.3,
-    cachedInputPerMillionUsd: 0.075,
-    outputPerMillionUsd: 2.5,
-    thinkingPerMillionUsd: 2.5,
-  },
-  {
-    modelId: 'claude-sonnet-4-6',
-    displayName: 'Claude Sonnet 4.6',
-    inputPerMillionUsd: 3.0,
-    cachedInputPerMillionUsd: 0.3,
-    outputPerMillionUsd: 15.0,
-    thinkingPerMillionUsd: 15.0,
-  },
-  {
-    modelId: 'claude-opus-4-6-thinking',
-    displayName: 'Claude Opus 4.6',
-    inputPerMillionUsd: 5.0,
-    cachedInputPerMillionUsd: 0.5,
-    outputPerMillionUsd: 25.0,
-    thinkingPerMillionUsd: 25.0,
-  },
-  {
-    modelId: 'gemini-2.5-pro',
-    displayName: 'Gemini 2.5 Pro',
-    inputPerMillionUsd: 1.25,
-    cachedInputPerMillionUsd: 0.31,
-    outputPerMillionUsd: 10.0,
-    thinkingPerMillionUsd: 10.0,
-  },
-  {
-    modelId: 'gemini-2.5-flash',
-    displayName: 'Gemini 2.5 Flash',
-    inputPerMillionUsd: 0.3,
-    cachedInputPerMillionUsd: 0.075,
-    outputPerMillionUsd: 2.5,
-    thinkingPerMillionUsd: 2.5,
-  },
-  {
-    modelId: 'gemini-2.5-flash-lite',
-    displayName: 'Gemini 2.5 Flash-Lite',
-    inputPerMillionUsd: 0.1,
-    cachedInputPerMillionUsd: 0.025,
-    outputPerMillionUsd: 0.4,
-    thinkingPerMillionUsd: 0.4,
-  },
-  {
-    modelId: 'gemini-3.5-flash-lite',
-    displayName: 'Gemini 3.5 Flash-Lite',
-    inputPerMillionUsd: 0.1,
-    cachedInputPerMillionUsd: 0.025,
-    outputPerMillionUsd: 0.4,
-    thinkingPerMillionUsd: 0.4,
-  },
-  {
-    modelId: 'gemini-3-flash',
-    displayName: 'Gemini 3 Flash',
-    inputPerMillionUsd: 0.3,
-    cachedInputPerMillionUsd: 0.075,
-    outputPerMillionUsd: 2.5,
-    thinkingPerMillionUsd: 2.5,
-  },
-  {
-    modelId: 'gpt-4o-mini',
-    displayName: 'GPT-4o mini',
-    inputPerMillionUsd: 0.15,
-    cachedInputPerMillionUsd: 0.075,
-    outputPerMillionUsd: 0.6,
-    thinkingPerMillionUsd: 0.6,
-  },
-  {
-    modelId: 'gpt-4o',
-    displayName: 'GPT-4o',
-    inputPerMillionUsd: 2.5,
-    cachedInputPerMillionUsd: 1.25,
-    outputPerMillionUsd: 10.0,
-    thinkingPerMillionUsd: 10.0,
-  },
-  {
-    modelId: 'gpt-4.1-mini',
-    displayName: 'GPT-4.1 mini',
-    inputPerMillionUsd: 0.4,
-    cachedInputPerMillionUsd: 0.1,
-    outputPerMillionUsd: 1.6,
-    thinkingPerMillionUsd: 1.6,
-  },
-  {
-    modelId: 'gpt-4.1-nano',
-    displayName: 'GPT-4.1 nano',
-    inputPerMillionUsd: 0.1,
-    cachedInputPerMillionUsd: 0.025,
-    outputPerMillionUsd: 0.4,
-    thinkingPerMillionUsd: 0.4,
-  },
-  {
-    modelId: 'gpt-5-mini',
-    displayName: 'GPT-5 mini',
-    inputPerMillionUsd: 0.25,
-    cachedInputPerMillionUsd: 0.025,
-    outputPerMillionUsd: 2.0,
-    thinkingPerMillionUsd: 2.0,
-  },
-  {
-    modelId: 'o4-mini',
-    displayName: 'o4-mini',
-    inputPerMillionUsd: 1.1,
-    cachedInputPerMillionUsd: 0.275,
-    outputPerMillionUsd: 4.4,
-    thinkingPerMillionUsd: 4.4,
-  },
-  {
-    modelId: 'gpt-oss-120b-medium',
-    displayName: 'GPT-OSS 120B (Medium)',
-    inputPerMillionUsd: 0.15,
-    cachedInputPerMillionUsd: 0.04,
-    outputPerMillionUsd: 0.6,
-    thinkingPerMillionUsd: 0.6,
-  },
-] as const;
 
 /** 这四类用量互斥。计费前已从普通输入中扣除缓存输入、从普通输出中扣除思考，四项可以直接相加。 */
 export interface FourDimTokenCounts {
@@ -343,38 +172,6 @@ export function resolveModelCompactionLimit(modelId?: string): number {
     return 512_000;
   }
   return 256_000;
-}
-
-/** 完整模型名优先。带版本后缀或省略 `-thinking` 后缀时匹配对应型号，未知模型使用默认价卡。 */
-export function resolveModelRateCard(
-  modelId: string,
-  rateCards: readonly ModelRateCard[]
-): ModelRateCard {
-  const normalized = (modelId || '').trim().toLowerCase();
-  const exact = rateCards.find((r) => r.modelId.toLowerCase() === normalized);
-  if (exact) return exact;
-  const baseExact = rateCards.find(
-    (r) => r.modelId !== 'default' && r.modelId.toLowerCase().replace(/-thinking$/, '') === normalized
-  );
-  if (baseExact) return baseExact;
-  const fuzzy = rateCards.reduce<ModelRateCard | undefined>((best, card) => {
-    if (card.modelId === 'default') return best;
-    const candidate = card.modelId.toLowerCase();
-    const candidateBase = candidate.replace(/-thinking$/, '');
-    const matchedLen = normalized.includes(candidate)
-      ? candidate.length
-      : candidateBase !== candidate && normalized.includes(candidateBase)
-        ? candidateBase.length
-        : 0;
-    const bestLen = best
-      ? best.modelId.toLowerCase().replace(/-thinking$/, '').length
-      : 0;
-    return matchedLen > 0 && matchedLen > bestLen ? card : best;
-  }, undefined);
-  if (fuzzy) return fuzzy;
-  return (
-    rateCards.find((r) => r.modelId === 'default') ?? DEFAULT_MODEL_RATE_CARDS[0]
-  );
 }
 
 export interface ContextCompactionRecord {
@@ -661,6 +458,8 @@ export interface TelemetryDashboardSnapshot {
   externalReviewer?: ExternalReviewerTelemetrySnapshot;
   /** 外部翻译 API 累计与分时段用量统计（多服务商联合计算） */
   externalTranslator?: ExternalTranslatorTelemetrySnapshot;
+  /** 外部语音转写 API 独立用量与时长账本（单列展示，不混入 ACP Token 热力图） */
+  externalVoice?: VoiceExternalTelemetrySnapshot;
   /** 当前生效的模型单价表 */
   rateCards: ModelRateCard[];
   pricingSource: TelemetryPricingSource;
@@ -697,6 +496,7 @@ export function mergeTelemetryDashboard(previous: TelemetryDashboardSnapshot, in
           bySession: merge(previous.externalTranslator?.bySession ?? {}, incoming.externalTranslator.bySession),
         }
       : previous.externalTranslator,
+    externalVoice: incoming.externalVoice ?? previous.externalVoice,
   };
 }
 

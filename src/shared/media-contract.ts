@@ -7,6 +7,8 @@
  * 2. 本模块为纯无副作用函数与类型定义，供主进程、渲染层与测试共享。
  */
 
+import type { SessionOwner } from './session-owner';
+
 export const MAX_LOCAL_INSPECT_TARGETS = 48;
 export const MAX_INLINE_PREVIEW_BYTES = 4 * 1024 * 1024;
 export const MAX_MESSAGE_ATTACHMENTS = 20;
@@ -39,6 +41,9 @@ export interface InspectLocalTargetsInput {
   targets: string[];
   cwd?: string;
   sessionId?: string;
+  /** 可选归属信息：主进程在核验 brain/<sessionId> 私有产物范围时结合会话登记表校验 */
+  profileId?: string;
+  owner?: SessionOwner;
   includePreviewData?: boolean;
 }
 

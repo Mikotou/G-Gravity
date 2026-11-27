@@ -1,19 +1,48 @@
 import type { AcpPromptContentBlock } from './acp-protocol';
 import type { ReviseMessageInput, SendPromptInput } from './ipc-channels';
+import { MAX_MESSAGE_ATTACHMENTS, MAX_MESSAGE_ATTACHMENTS_TOTAL_BYTES } from './media-contract';
+import { ensureAnnotationIds, normalizeMessageAnnotations } from './message-annotation';
 import type { ChatMessageItem, MessageAttachmentPreview } from './session-contract';
 
 export function canResendAttachment(item: MessageAttachmentPreview): boolean {
   return Boolean(item.dataUrl || item.dataBase64 || item.uri || item.textContent !== undefined);
 }
 
+/**
+ * 修订前置全量校验与准备：在关闭原会话、创建新分支前完成消息/附件/标注体积与合法性核验。
+ * - `input.annotations === undefined`：沿用原消息标注（补齐确定性稳定 ID）；
+ * - `input.annotations === []`：显式清空标注。
+ */
 export function prepareRevision(messages: ChatMessageItem[], input: ReviseMessageInput) {
   const index = messages.findIndex(item => item.id === input.messageId && item.role === 'user');
   if (index < 0) throw new Error('原消息不存在');
   const original = messages[index];
+  if (input.attachmentIds !== undefined) {
+    if (!Array.isArray(input.attachmentIds) || input.attachmentIds.some(id => typeof id !== 'string' || !id.trim())) {
+      throw new Error('附件选择列表无效');
+    }
+  }
   const selected = (original.attachments || []).filter(a => !input.attachmentIds || input.attachmentIds.includes(a.id));
+  if (selected.length > MAX_MESSAGE_ATTACHMENTS) {
+    throw new Error(`单条消息最多包含 ${MAX_MESSAGE_ATTACHMENTS} 个附件`);
+  }
+  const totalAttachmentBytes = selected.reduce((sum, item) => sum + Math.max(0, Number(item.sizeBytes) || 0), 0);
+  if (totalAttachmentBytes > MAX_MESSAGE_ATTACHMENTS_TOTAL_BYTES) {
+    throw new Error('附件总大小超出上限');
+  }
   if (selected.some(a => !canResendAttachment(a))) throw new Error('请取消选择缺少原始内容的旧附件');
-  const annotations = input.annotations ?? original.annotations;
-  if (typeof input.text !== 'string' || input.text.length > 1000000 || (!input.text.trim() && !selected.length && !annotations?.length)) throw new Error('请输入消息或选择附件');
+
+  const annotations =
+    input.annotations !== undefined
+      ? normalizeMessageAnnotations(input.annotations)
+      : ensureAnnotationIds(original.annotations);
+
+  if (typeof input.text !== 'string' || input.text.length > 1_000_000) {
+    throw new Error('消息正文格式无效或超出长度上限');
+  }
+  if (!input.text.trim() && !selected.length && !annotations?.length) {
+    throw new Error('请输入消息或选择附件');
+  }
   const attachments: SendPromptInput['attachments'] = selected.map(a => ({
     name: a.name, mimeType: a.mimeType, sizeBytes: a.sizeBytes, uri: a.uri, textContent: a.textContent,
     dataBase64: a.dataBase64 || a.dataUrl?.split(',', 2)[1],

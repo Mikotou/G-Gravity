@@ -3,6 +3,13 @@
  * 协议载荷在各自的契约文件中定义，调用方可以从这里导入同一种类型和校验函数。
  */
 
+export * from './session-owner';
+export * from './line-diff';
+export * from './model-rate-cards';
+export * from './gravity-icons';
+export * from './message-annotation';
+export * from './plan-contract';
+export * from './voice-contract';
 export * from './acp-protocol';
 export * from './approval-contract';
 export * from './telemetry-contract';

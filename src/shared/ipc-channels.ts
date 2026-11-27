@@ -73,6 +73,27 @@ import type {
 import type { DiagnosticCode } from './diagnostic-contract';
 import type { InspectLocalTargetsInput, InspectLocalTargetsResult } from './media-contract';
 import type { QuestionSubmission, QuestionSubmissionReceipt } from './user-question';
+import type {
+  VoiceAbortInput,
+  VoiceAbortResult,
+  VoiceAppendInput,
+  VoiceAppendResult,
+  VoiceArmCaptureInput,
+  VoiceArmCaptureResult,
+  VoiceCaptureRevokedEvent,
+  VoiceConfigPatch,
+  VoiceDiscoverModelsInput,
+  VoiceDiscoverModelsResult,
+  VoiceFinishInput,
+  VoiceFinishResult,
+  VoiceInstallModelInput,
+  VoiceInstallModelResult,
+  VoiceSegmentEvent,
+  VoiceSettledEvent,
+  VoiceStateSnapshot,
+  VoiceTestConnectionInput,
+  VoiceTestConnectionResult,
+} from './voice-contract';
 
 export const IPC_CHANNELS = {
   // 系统、品牌与偏好（含主题、自定义配色导入导出、图标切换）
@@ -144,6 +165,17 @@ export const IPC_CHANNELS = {
   TRANSLATION_DISCOVER_MODELS: 'gravity:translation:discover-models',
   TRANSLATION_TEST_CONNECTION: 'gravity:translation:test-connection',
 
+  // 合规语音听写（本地离线 Whisper WASM + 可选外部兼容转写 API）
+  VOICE_GET_STATE: 'gravity:voice:get-state',
+  VOICE_UPDATE_CONFIG: 'gravity:voice:update-config',
+  VOICE_DISCOVER_MODELS: 'gravity:voice:discover-models',
+  VOICE_TEST_CONNECTION: 'gravity:voice:test-connection',
+  VOICE_INSTALL_MODEL: 'gravity:voice:install-model',
+  VOICE_ARM_CAPTURE: 'gravity:voice:arm-capture',
+  VOICE_APPEND: 'gravity:voice:append',
+  VOICE_FINISH: 'gravity:voice:finish',
+  VOICE_ABORT: 'gravity:voice:abort',
+
   // Context 遥测、24h/7d/30d 热力图与 Cost 单价表
   TELEMETRY_GET_DASHBOARD: 'gravity:telemetry:get-dashboard',
   TELEMETRY_UPDATE_RATE_CARDS: 'gravity:telemetry:update-rate-cards',
@@ -175,6 +207,9 @@ export const IPC_CHANNELS = {
   EVENT_UI_SCALE_COMMAND: 'gravity:event:ui-scale-command',
   EVENT_CONNECTION_UPDATED: 'gravity:event:connection-updated',
   EVENT_TRANSLATION_CONFIG_UPDATED: 'gravity:event:translation-config-updated',
+  EVENT_VOICE_SEGMENT: 'gravity:event:voice-segment',
+  EVENT_VOICE_SETTLED: 'gravity:event:voice-settled',
+  EVENT_VOICE_CAPTURE_REVOKED: 'gravity:event:voice-capture-revoked',
 } as const;
 
 export interface AcpConnectionStatus {
@@ -203,6 +238,8 @@ export interface AppBootstrapPayload {
   accounts: AccountsStateSnapshot;
   approvalConfig: ApproveForMeConfig;
   translationConfig: TranslationConfig;
+  /** 语音听写配置与本地模型/外部引擎状态快照 */
+  voiceState?: VoiceStateSnapshot;
   sessions: ManagedSessionSummary[];
   layout: WorkspaceLayoutState;
   pendingApprovals: PendingApprovalRequest[];
@@ -391,6 +428,17 @@ export interface GravityDesktopBridge {
     input?: Partial<ExternalTranslatorConfig>
   ): Promise<ExternalTranslatorTestResult>;
 
+  // 合规语音听写（9 invoke + 3 event）
+  getVoiceState?(): Promise<VoiceStateSnapshot>;
+  updateVoiceConfig?(patch: VoiceConfigPatch): Promise<VoiceStateSnapshot>;
+  discoverVoiceModels?(input: VoiceDiscoverModelsInput): Promise<VoiceDiscoverModelsResult>;
+  testVoiceConnection?(input?: VoiceTestConnectionInput): Promise<VoiceTestConnectionResult>;
+  installVoiceModel?(input?: VoiceInstallModelInput): Promise<VoiceInstallModelResult>;
+  voiceArmCapture?(input: VoiceArmCaptureInput): Promise<VoiceArmCaptureResult>;
+  voiceAppend?(input: VoiceAppendInput): Promise<VoiceAppendResult>;
+  voiceFinish?(input: VoiceFinishInput): Promise<VoiceFinishResult>;
+  voiceAbort?(input: VoiceAbortInput): Promise<VoiceAbortResult>;
+
   // Context 遥测、24h/7d/30d 热力图与 Cost 单价配置
   getTelemetryDashboard(): Promise<TelemetryDashboardSnapshot>;
   updateModelRateCards(rateCards: ModelRateCard[]): Promise<TelemetryDashboardSnapshot>;
@@ -427,6 +475,9 @@ export interface GravityDesktopBridge {
   onUiScaleCommand(listener: (command: UiScaleCommand) => void): () => void;
   onConnectionUpdated(listener: (status: AcpConnectionStatus) => void): () => void;
   onTranslationConfigUpdated(listener: (config: TranslationConfig) => void): () => void;
+  onVoiceSegment?(listener: (event: VoiceSegmentEvent) => void): () => void;
+  onVoiceSettled?(listener: (event: VoiceSettledEvent) => void): () => void;
+  onVoiceCaptureRevoked?(listener: (event: VoiceCaptureRevokedEvent) => void): () => void;
 }
 
 declare global {

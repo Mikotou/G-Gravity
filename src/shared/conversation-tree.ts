@@ -95,6 +95,51 @@ export function summarizeBranchSnippet(text: string | undefined, maxLen = 72): s
   return clean.length > maxLen ? `${clean.slice(0, maxLen - 1)}…` : clean;
 }
 
+export interface BranchMessageStats {
+  users: number;
+  own: number;
+  firstUser?: string;
+  firstOwnUser?: string;
+  latestUser?: string;
+  latestAssistant?: string;
+}
+
+/** 纯分支消息统计（下沉至共享契约，解除 storage/conversation-messages 对 session/ 的向上依赖）。 */
+export function summarizeBranchMessages(messages: readonly ChatMessageItem[]): BranchMessageStats {
+  const stats: BranchMessageStats = { users: 0, own: 0 };
+  for (const m of messages) {
+    if (m.role === 'system') continue;
+    if (!m.revisionHistory) stats.own++;
+    if (m.role === 'user') {
+      stats.users++;
+      const preview = summarizeBranchSnippet(m.content, 72);
+      const fork =
+        preview ||
+        summarizeBranchSnippet(m.annotations?.[0]?.comment || m.annotations?.[0]?.excerpt, 72);
+      stats.firstUser ??= fork;
+      if (!m.revisionHistory) stats.firstOwnUser ??= fork;
+      stats.latestUser = preview || fork;
+    } else if (m.content?.trim()) {
+      stats.latestAssistant = summarizeBranchSnippet(m.content, 84);
+    }
+  }
+  return stats;
+}
+
+export function mergeBranchMessageStats(
+  first: BranchMessageStats,
+  last: BranchMessageStats
+): BranchMessageStats {
+  return {
+    users: first.users + last.users,
+    own: first.own + last.own,
+    firstUser: first.firstUser ?? last.firstUser,
+    firstOwnUser: first.firstOwnUser ?? last.firstOwnUser,
+    latestUser: last.latestUser ?? first.latestUser,
+    latestAssistant: last.latestAssistant ?? first.latestAssistant,
+  };
+}
+
 /**
  * 纯函数：根据当前活跃分支的消息列表与会话树状态，计算指定用户消息是否处于分叉点，
  * 若处于分叉点则返回同级分支切换控件（‹ currentIndex+1 / totalCount ›）。
