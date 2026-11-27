@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useMemo, useState } from 'react';
-import { AlertCircle, AlertTriangle, Check, Copy, Info, Lightbulb, ShieldAlert, type LucideIcon } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Check, Copy, FileText, Info, Lightbulb, ShieldAlert, type LucideIcon } from 'lucide-react';
 import { ImageSessionContext, ImageWorkspace, MessageImage, resolveImage } from './MessageImage';
 import {
   extractLineAnchorBadge,
@@ -964,7 +964,7 @@ function fileMention(ctx: MarkdownContext, key: string, source: string, options:
   const embedded = /^(?:data|blob):/i.test(source);
   const name = labelText || extractTargetBaseName(source) || source;
   const url = addPreview(ctx, { source, label: name, image: explicitImage || isImageLink(source), title, origin: 'mention' });
-  if (embedded) return <span key={key} className="md-path-text">{labelText || '▧'}</span>;
+  if (embedded) return <span key={key} className="md-path-text">{labelText || <UiIcon icon={FileText} size="xs" />}</span>;
   const hasLabel = Boolean(labelNodes) || Boolean(labelText);
   const body: React.ReactNode = labelNodes ?? (explicitImage ? name : source);
   // 无法解析为预览地址时，仅本机绝对路径（含 macOS `~/Desktop/...`，交给主进程展开主目录）仍可点击；`//host` 网络路径始终不可点击。
@@ -1500,7 +1500,7 @@ function CodeBlock({ lang, text }: { lang: string; text: string }): React.ReactE
   const statusText = copied ? dict.copiedAction : failed ? dict.ui.v034.copyFailed : '';
   return (
     <div className={`code-block${collapsible && !expanded ? ' is-collapsed' : ''}`}>
-      <div className="code-block-head">
+      <div className="code-block-head" data-annotation-skip="">
         <span>{lang || 'text'}</span>
         {statusText && (
           <span className="code-copy-status" role="status">
@@ -1555,7 +1555,7 @@ function MarkdownAlertHeading({ kind }: { kind: AlertKind }): React.ReactElement
   const { dict } = useI18n();
   const Icon = ALERT_ICON[kind];
   return (
-    <div className="md-alert-title">
+    <div className="md-alert-title" data-annotation-skip="">
       <UiIcon icon={Icon} size="sm" />
       <span>{dict.ui.v035.calloutTitle[kind]}</span>
     </div>

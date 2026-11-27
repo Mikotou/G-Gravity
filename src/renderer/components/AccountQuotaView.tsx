@@ -105,6 +105,8 @@ export function AccountQuotaFooter({
     // F-02：额度弹层的 Esc 只关闭弹层本身。在捕获阶段截住并停止传播，避免 Composer / 窗格级 Esc 同时中断进行中的回合。
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || isImeComposing(event)) return;
+      // U4：上层模态对话框（设置中心 / 新建会话等）打开时 Esc 归其所有，额度弹层不截获
+      if (document.querySelector('dialog[open], [aria-modal="true"]')) return;
       event.preventDefault();
       event.stopPropagation();
       if (root.current?.querySelector('.quota-view')?.contains(document.activeElement)) lastTrigger.current?.focus();

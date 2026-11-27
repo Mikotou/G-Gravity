@@ -65,17 +65,12 @@
 .token-input{width:152px;height:26px;font-size:11.5px}
 .code-line{padding:8px 10px;border-radius:var(--radius-sm);background:var(--bg-code);border:1px solid var(--border-subtle);color:var(--text-secondary);font-family:var(--font-mono);font-size:11.5px;word-break:break-all}
 .selection-floating-bar{position:fixed;z-index:210;border-radius:99px;border:1px solid var(--border-strong);background:var(--bg-elevated);box-shadow:var(--shadow-lg);padding:3px 5px;animation:gv-pop var(--dur-1) var(--ease-out)}
-.selection-floating-bar.is-expanded{width:min(332px, calc(100vw - 28px));border-radius:var(--radius-md);padding:9px 10px}
 .selection-pill-actions{display:flex;align-items:center;gap:2px}
 .selection-pill-btn{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border-radius:99px;font-size:12px;font-weight:550;color:var(--text-primary);transition:background var(--dur-1), color var(--dur-1)}
 .selection-pill-btn:hover{background:var(--hover)}
 .selection-pill-btn.is-accent{color:var(--accent-text)}
 .selection-pill-btn.is-accent:hover{background:var(--accent-soft)}
 .selection-pill-sep{width:1px;height:14px;background:var(--border-subtle)}
-.selection-notation-editor{display:flex;flex-direction:column;gap:7px}
-.selection-notation-preview{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-secondary)}
-.selection-notation-textarea{height:auto;min-height:54px;padding:6px 8px;resize:vertical;font-size:12.5px;line-height:1.45}
-.selection-notation-foot{display:flex;align-items:center;gap:6px}
 .turn-notation-pins{display:flex;flex-direction:column;gap:5px;margin-left:24px}
 .turn-notation-card{display:flex;align-items:flex-start;gap:8px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid color-mix(in srgb, var(--accent-primary) 32%, var(--border-subtle));background:color-mix(in srgb, var(--accent-soft) 55%, var(--bg-surface));font-size:12px}
 .turn-notation-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
@@ -94,7 +89,7 @@
 .message-image{max-width:min(100%, 420px, 66cqi)}
 .composer-image-tray .message-image{max-width:100%}
 .composer-image-tray .message-image img{height:clamp(64px, 17vh, 150px);width:auto;max-width:min(62cqi, 250px);object-fit:contain;background:var(--bg-surface)}
-.sent-annotations + .md{margin-top:8px}
+.turn-notation-comment.is-quote-only{color:var(--muted-text);font-size:11.5px}
 .md h1, .md h2, .md h3{color:var(--text-primary)}
 .md strong{color:var(--text-primary);font-weight:680}
 .md:not(.md-compact) p, .md:not(.md-compact) li{color:color-mix(in srgb, var(--text-primary) 92%, var(--text-secondary))}

@@ -661,7 +661,7 @@ export function MediaGallery({ items }: { items: MediaPreviewItem[] }) {
   const visibleImages = imagesOpen ? images : images.slice(0, IMAGE_FOLD_LIMIT);
   const visibleFiles = filesOpen ? files : files.slice(0, FILE_FOLD_LIMIT);
   return (
-    <div className="message-images message-previews" data-testid="message-previews">
+    <div className="message-images message-previews" data-testid="message-previews" data-annotation-skip="">
       {images.length > 0 && (
         <section
           className={`md-media-gallery ${images.length === 1 ? 'is-single' : 'is-multi'}`}

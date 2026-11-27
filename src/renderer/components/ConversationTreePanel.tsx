@@ -193,7 +193,7 @@ export function ConversationTreePanel({
 
                 {node.latestAssistantPreview && (
                   <div className="conv-tree-reply" title={node.latestAssistantPreview}>
-                    <span className="conv-tree-reply-dot">⏺</span>
+                    <span className="conv-tree-reply-dot" aria-hidden="true">⏺</span>
                     <span className="conv-tree-reply-text">{node.latestAssistantPreview}</span>
                   </div>
                 )}

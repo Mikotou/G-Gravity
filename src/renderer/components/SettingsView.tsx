@@ -26,6 +26,7 @@ import {
   Trash2,
   UserRound,
   X,
+  Zap,
 } from 'lucide-react';
 import {
   APP_BRAND,
@@ -1319,7 +1320,7 @@ function ProjectsPanel({
             <option value="">{dict.ui.copy.defaultMode2}</option>
             {EXECUTION_MODE_ORDER.map((m) => (
               <option key={m} value={m}>
-                {m === 'full-access' ? `⚡ ${dict.executionModes[m].label} (full-access)` : dict.executionModes[m].label}
+                {m === 'full-access' ? `${dict.executionModes[m].label} (full-access)` : dict.executionModes[m].label}
               </option>
             ))}
           </select>
@@ -1390,7 +1391,7 @@ function ProjectsPanel({
                   <div className="list-row-title">
                     <span>{proj.name}</span>
                     {proj.pinned && <span className="badge badge-accent">{dict.ui.copy.pinned}</span>}
-                    {proj.defaultMode && <span className={`badge badge-mono${proj.defaultMode === 'full-access' ? ' badge-turbo' : ''}`}>{proj.defaultMode === 'full-access' ? `⚡ ${dict.executionModes[proj.defaultMode].label}` : proj.defaultMode}</span>}
+                    {proj.defaultMode && <span className={`badge badge-mono${proj.defaultMode === 'full-access' ? ' badge-turbo' : ''}`}>{proj.defaultMode === 'full-access' ? <><UiIcon icon={Zap} size="xs" />{dict.executionModes[proj.defaultMode].label}</> : proj.defaultMode}</span>}
                     {isDef && <span className="badge badge-success">{dict.ui.copy.default}</span>}
                   </div>
                   <div className="list-row-desc mono truncate" title={proj.path}>

@@ -101,7 +101,7 @@ export function ActivityRail({
           type="button"
           className="rail-brand-btn"
           onClick={onOpenAbout}
-          title={`Gravity · ${connection.connected ? dict.acpConnected : dict.acpDisconnected}`}
+          title="Gravity"
           aria-label="Gravity"
         >
           <img
@@ -152,11 +152,6 @@ export function ActivityRail({
               <span className="avatar avatar-lg">{initial}</span>
               <div className="account-menu-id">
                 <strong className="truncate">{profileName}</strong>
-                <span className={`account-menu-conn ${connection.connected ? 'is-on' : 'is-off'}`}>
-                  <span className={`status-dot ${connection.connected ? 'is-idle' : 'is-error'}`} />
-                  {connection.connected ? dict.acpConnected : dict.acpDisconnected}
-                  {connection.agyVersion ? ` · ${connection.agyVersion}` : ''}
-                </span>
               </div>
             </div>
             <div className="menu-sep" />
@@ -181,7 +176,7 @@ export function ActivityRail({
               <div className="segmented segmented-sm locale-toggle" data-testid="locale-switcher">
                 <button
                   type="button"
-                  className={`segmented-btn ${dict.ui.copy.labelItem}`}
+                  className={`segmented-btn ${locale === 'zh-CN' ? 'is-active' : ''}`}
                   onClick={() => onChangeLocale('zh-CN')}
                   lang="zh-CN"
                   aria-label="简体中文"

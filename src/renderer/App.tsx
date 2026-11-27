@@ -1501,9 +1501,11 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         void patchLayout({ layoutMode: SPLIT_CYCLE[(SPLIT_CYCLE.indexOf(layout.layoutMode) + 1) % SPLIT_CYCLE.length] });
         return;
       }
-      if (e.shiftKey && e.key === 'Tab' && !isTypingTarget(e.target) && !isNativeFocusControl(e.target)) {
+      // U6：仅裸 Shift+Tab 循环模式；Ctrl/⌘/Alt+Shift+Tab 留给系统与浏览器，只读或已归档会话不改模式
+      if (e.shiftKey && e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && !isTypingTarget(e.target) && !isNativeFocusControl(e.target)) {
         e.preventDefault();
         const active = sessions.find((s) => s.sessionId === focusedSessionId && s.status !== 'closed');
+        if (active && (active.readOnly || active.archivedAt)) return;
         if (active) {
           // v0.3.2：Shift+Tab 仅在 default / accept-edits / plan 三档安全循环，绝不盲切进入 Turbo（full-access）。
           // 处于 Turbo 时按 Shift+Tab 回落到 default（indexOf 返回 -1 → 0）。

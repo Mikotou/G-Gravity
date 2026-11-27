@@ -108,7 +108,6 @@
 .feedback-hint{color:var(--muted-text);font-size:11.5px}
 .approval-pill{position:relative}
 .approval-usage-title{font-weight:600}
-.approval-usage-total{color:var(--accent-text);font-weight:600}
 .approval-usage-link{justify-content:flex-start;margin-top:2px;padding:2px 4px;font-size:11px}
 .request-view{--request-accent:var(--status-warning);position:relative;border:1px solid color-mix(in srgb, var(--request-accent) 30%, var(--hairline-strong))}
 .request-view.risk-safe, .request-view.risk-low{--request-accent:var(--status-success)}

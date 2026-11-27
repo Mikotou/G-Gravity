@@ -1,7 +1,7 @@
 import { getComponentCopy } from '../i18n/domains/copy';
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, Copy, ExternalLink, FileCode2, FolderOpen, Image as ImageIcon, MessageSquarePlus, Pencil, Quote, Trash2, X } from 'lucide-react';
+import { Check, Copy, ExternalLink, FileCode2, FolderOpen, Image as ImageIcon, MessageSquareQuote, Pencil, Quote, Trash2, X } from 'lucide-react';
 import { EXECUTABLE_OR_SCRIPT_EXT_RE, isPlausibleLocalFileCandidate, type ClientLocale } from '@shared';
 import { getDesktopBridge } from '../services/desktop-bridge';
 import { copyMessageImageToClipboard } from './MessageImage';
@@ -11,23 +11,9 @@ import { UI_DICTIONARIES, stripIpcErrorPrefix } from '../i18n/locales';
 import { isImeComposing } from '../lib/platform-keys';
 import { copyTextToClipboard } from '../lib/clipboard';
 import { Icon } from './ui/Icon';
+import { setActiveAnnotation, type AnnotationDraftItem } from '../lib/annotation-drafts';
 
-export interface TextQuoteItem {
-  id: string;
-  messageId: string;
-  text: string;
-}
-
-export interface TextNotationItem {
-  id: string;
-  messageId: string;
-  selectedText: string;
-  messageNumber?: number;
-  start?: number;
-  anchorText?: string;
-  comment: string;
-  createdAt: string;
-}
+export type { AnnotationDraftItem } from '../lib/annotation-drafts';
 
 export type DetectedTargetKind = 'url' | 'openable-file' | 'executable-file' | 'directory' | 'image';
 
@@ -156,7 +142,8 @@ export function detectContextTargetFromElement(targetEl: HTMLElement | null): De
 }
 
 /* ============================================================================
- * 1. 划词悬浮工具条（支持一键 Quote 引用 + Codex 式原地添加多处 Notation）
+ * 1. 划词悬浮工具条：主按钮「引用」（创建条目并聚焦该条自己的批注框），次按钮「仅引用」
+ *    组件由调用方以选区 key 绑定，选区变化即重建，绝不串用上一次的状态。
  * ========================================================================== */
 
 export interface SelectionFloatingBarProps {
@@ -164,123 +151,37 @@ export interface SelectionFloatingBarProps {
   y: number;
   selectedText: string;
   locale: ClientLocale;
+  /** 主操作：引用并聚焦批注框 */
   onQuote: () => void;
-  onAddNotation: (comment: string) => void;
+  /** 次操作：仅引用（不写批注，焦点回主输入框） */
+  onQuoteOnly: () => void;
   onDismiss: () => void;
 }
 
-export function SelectionFloatingBar({
-  x,
-  y,
-  selectedText,
-  locale: _locale,
-  onQuote,
-  onAddNotation,
-  onDismiss,
-}: SelectionFloatingBarProps): React.ReactElement {
-  const [annotating, setAnnotating] = useState(false);
-  const [comment, setComment] = useState('');
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    if (annotating) {
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
-  }, [annotating]);
-
-  const { keys, dict } = useI18n();
-  const clampedLeft = typeof window !== 'undefined' ? Math.max(16, Math.min(x, window.innerWidth - (annotating ? 340 : 210))) : x;
-  const clampedTop = typeof window !== 'undefined' ? Math.max(12, Math.min(y, window.innerHeight - (annotating ? 190 : 56))) : y;
-
-  function submitNotation(): void {
-    const trimmed = comment.trim();
-    if (!trimmed) return;
-    onAddNotation(trimmed);
-  }
-
+export function SelectionFloatingBar({ x, y, onQuote, onQuoteOnly }: SelectionFloatingBarProps): React.ReactElement {
+  const { dict } = useI18n();
+  const t6 = dict.ui.v036;
+  const clampedLeft = typeof window !== 'undefined' ? Math.max(16, Math.min(x, window.innerWidth - 220)) : x;
+  const clampedTop = typeof window !== 'undefined' ? Math.max(12, Math.min(y, window.innerHeight - 56)) : y;
   return typeof document !== 'undefined'
     ? createPortal(
         <div
-          className={`selection-floating-bar ${annotating ? 'is-expanded' : ''}`}
+          className="selection-floating-bar"
           style={{ left: clampedLeft, top: clampedTop }}
           onMouseDown={(e) => e.stopPropagation()}
           data-testid="selection-floating-bar"
         >
-          {!annotating ? (
-            <div className="selection-pill-actions">
-              <button
-                type="button"
-                className="selection-pill-btn"
-                onClick={onQuote}
-                data-testid="selection-quote-btn"
-              >
-                <Icon icon={Quote} size="xs" />
-                <span>{dict.ui.copy.quote}</span>
-              </button>
-              <span className="selection-pill-sep" />
-              <button
-                type="button"
-                className="selection-pill-btn is-accent"
-                onClick={() => setAnnotating(true)}
-                data-testid="selection-annotate-btn"
-              >
-                <Icon icon={MessageSquarePlus} size="xs" />
-                <span>{dict.ui.copy.notation}</span>
-              </button>
-            </div>
-          ) : (
-            <div className="selection-notation-editor" data-testid="selection-notation-editor">
-              <div className="selection-notation-preview">
-                <span className="badge badge-accent badge-mono">Notation</span>
-                <span className="truncate">「{selectedText.replace(/\s+/g, ' ').slice(0, 72)}」</span>
-                <button
-                  type="button"
-                  className="icon-btn icon-btn-sm"
-                  onClick={onDismiss}
-                  aria-label={dict.ui.copy.close}
-                >
-                  <Icon icon={X} size="xs" />
-                </button>
-              </div>
-              <textarea
-                ref={inputRef}
-                className="input selection-notation-textarea"
-                rows={2}
-                placeholder={dict.ui.copy.fmtAddNotationForThis(keys(['enter']))}
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                onKeyDown={(e) => {
-                  // 输入法组词时回车 / Esc 交给输入法（macOS 拼音确认、取消候选）。
-                  if (isImeComposing(e)) return;
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    submitNotation();
-                  } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    onDismiss();
-                  }
-                }}
-                data-testid="selection-notation-input"
-              />
-              <div className="selection-notation-foot">
-                <button type="button" className="btn btn-ghost btn-sm" onClick={onQuote}>
-                  <Icon icon={Quote} size="xs" />
-                  <span>{dict.ui.copy.quoteInstead}</span>
-                </button>
-                <span className="spacer" />
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  disabled={!comment.trim()}
-                  onClick={submitNotation}
-                  data-testid="selection-notation-save-btn"
-                >
-                  <Icon icon={Check} size="xs" />
-                  <span>{dict.ui.copy.saveMark}</span>
-                </button>
-              </div>
-            </div>
-          )}
+          <div className="selection-pill-actions">
+            <button type="button" className="selection-pill-btn is-accent" onClick={onQuote} data-testid="selection-quote-btn">
+              <Icon icon={MessageSquareQuote} size="xs" />
+              <span>{t6.annQuote}</span>
+            </button>
+            <span className="selection-pill-sep" />
+            <button type="button" className="selection-pill-btn" onClick={onQuoteOnly} data-testid="selection-quote-only-btn">
+              <Icon icon={Quote} size="xs" />
+              <span>{t6.annQuoteOnly}</span>
+            </button>
+          </div>
         </div>,
         document.body
       )
@@ -288,39 +189,48 @@ export function SelectionFloatingBar({
 }
 
 /* ============================================================================
- * 2. 消息轮次下方的 Codex 式多处标记批注钉（支持原地编辑与删除）
+ * 2. 消息下方的编号钉：引用与批注同一序列，编号 = 全会话草稿顺序；悬停高亮对应原文
  * ========================================================================== */
 
 export function TurnNotationPins({
   items,
-  allNotations,
+  allItems,
   locale,
   onUpdate,
   onRemove,
 }: {
-  items: TextNotationItem[];
-  allNotations: TextNotationItem[];
+  items: AnnotationDraftItem[];
+  allItems: AnnotationDraftItem[];
   locale: ClientLocale;
   onUpdate: (id: string, nextComment: string) => void;
   onRemove: (id: string) => void;
 }): React.ReactElement | null {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
-
+  const { dict } = useI18n();
+  const copy = getComponentCopy(locale);
   if (items.length === 0) return null;
-
+  const commit = (id: string) => {
+    onUpdate(id, editValue.trim());
+    setEditingId(null);
+  };
   return (
-    <div className="turn-notation-pins" data-testid="turn-notation-pins">
+    <div className="turn-notation-pins" data-testid="turn-notation-pins" data-annotation-skip="">
       {items.map((item) => {
-        // 消息旁只显示该消息的批注，编号仍按整个会话的批注顺序计算，与最后发送的提示相对应。
-        const globalIndex = Math.max(1, allNotations.findIndex((n) => n.id === item.id) + 1);
+        const n = Math.max(1, allItems.findIndex((x) => x.id === item.id) + 1);
         const isEditing = editingId === item.id;
         return (
-          <div key={item.id} className="turn-notation-card" data-testid={`turn-notation-${item.id}`}>
-            <span className="turn-notation-num">#{globalIndex}</span>
+          <div
+            key={item.id}
+            className="turn-notation-card"
+            data-testid={`turn-notation-${item.id}`}
+            onMouseEnter={() => setActiveAnnotation(item.id)}
+            onMouseLeave={() => setActiveAnnotation(null)}
+          >
+            <span className="turn-notation-num" aria-label={dict.ui.v036.annPin(n)}>#{n}</span>
             <div className="turn-notation-main">
-              <div className="turn-notation-quote truncate" title={item.selectedText}>
-                「{item.selectedText.replace(/\s+/g, ' ')}」
+              <div className="turn-notation-quote truncate" title={item.excerpt}>
+                {item.excerpt.replace(/\s+/g, ' ')}
               </div>
               {isEditing ? (
                 <div className="turn-notation-edit-row">
@@ -328,12 +238,13 @@ export function TurnNotationPins({
                     className="input"
                     value={editValue}
                     autoFocus
+                    placeholder={dict.ui.v036.annEditOptional}
                     onChange={(e) => setEditValue(e.target.value)}
                     onKeyDown={(e) => {
                       if (isImeComposing(e)) return;
-                      if (e.key === 'Enter' && editValue.trim()) {
-                        onUpdate(item.id, editValue.trim());
-                        setEditingId(null);
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commit(item.id);
                       } else if (e.key === 'Escape') {
                         // 只取消本条批注编辑：阻止冒泡到窗格级 Esc，避免误中止运行中的 AI 回合。
                         e.preventDefault();
@@ -342,29 +253,22 @@ export function TurnNotationPins({
                       }
                     }}
                   />
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={() => {
-                      if (editValue.trim()) {
-                        onUpdate(item.id, editValue.trim());
-                        setEditingId(null);
-                      }
-                    }}
-                  >
-                    {getComponentCopy(locale).save2}
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => commit(item.id)}>
+                    {copy.save2}
                   </button>
                 </div>
-              ) : (
+              ) : item.comment.trim() ? (
                 <div className="turn-notation-comment">{item.comment}</div>
+              ) : (
+                <div className="turn-notation-comment is-quote-only">{dict.ui.v036.annQuoteOnlyTag}</div>
               )}
             </div>
             <div className="turn-notation-actions">
               <button
                 type="button"
                 className="icon-btn icon-btn-sm"
-                title={getComponentCopy(locale).editNotation}
-                aria-label={getComponentCopy(locale).editNotation}
+                title={copy.editNotation}
+                aria-label={copy.editNotation}
                 onClick={() => {
                   setEditingId(item.id);
                   setEditValue(item.comment);
@@ -375,8 +279,8 @@ export function TurnNotationPins({
               <button
                 type="button"
                 className="icon-btn icon-btn-sm"
-                title={getComponentCopy(locale).removeNotation2}
-                aria-label={getComponentCopy(locale).removeNotation2}
+                title={copy.removeNotation2}
+                aria-label={copy.removeNotation2}
                 onClick={() => onRemove(item.id)}
                 data-testid={`remove-notation-${item.id}`}
               >
