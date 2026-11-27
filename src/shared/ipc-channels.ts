@@ -36,9 +36,13 @@ import type {
 import type {
   ChatMessageItem,
   ConversationMessagePage,
+  GetSessionPlanArtifactInput,
   ManagedSessionSummary,
   MessageAnnotation,
   MessagePagePosition,
+  PlanArtifactChangedEvent,
+  PlanArtifactOwner,
+  PlanArtifactSnapshot,
   SessionAction,
   SessionInspectorData,
   TitleOrganizeRequest,
@@ -68,7 +72,7 @@ import type {
 } from './translation-contract';
 import type { DiagnosticCode } from './diagnostic-contract';
 import type { InspectLocalTargetsInput, InspectLocalTargetsResult } from './media-contract';
-import type { QuestionSubmission } from './user-question';
+import type { QuestionSubmission, QuestionSubmissionReceipt } from './user-question';
 
 export const IPC_CHANNELS = {
   // 系统、品牌与偏好（含主题、自定义配色导入导出、图标切换）
@@ -113,6 +117,7 @@ export const IPC_CHANNELS = {
   SESSION_SET_MODEL: 'gravity:session:set-model',
   SESSION_GET_MESSAGE_PAGE: 'gravity:session:get-message-page',
   SESSION_GET_INSPECTOR: 'gravity:session:get-inspector',
+  SESSION_GET_PLAN_ARTIFACT: 'gravity:session:get-plan-artifact',
   SESSION_LIST_WORKSPACE_FILES: 'gravity:session:list-workspace-files',
   SESSION_SAVE_LAYOUT: 'gravity:session:save-layout',
 
@@ -156,6 +161,7 @@ export const IPC_CHANNELS = {
   EVENT_SESSION_UPDATED: 'gravity:event:session-updated',
   EVENT_MESSAGE_UPSERTED: 'gravity:event:message-upserted',
   EVENT_INSPECTOR_UPDATED: 'gravity:event:inspector-updated',
+  EVENT_PLAN_ARTIFACT_CHANGED: 'gravity:event:plan-artifact-changed',
   EVENT_APPROVAL_REQUESTED: 'gravity:event:approval-requested',
   EVENT_APPROVAL_REVIEWING: 'gravity:event:approval-reviewing',
   EVENT_APPROVAL_GUARD_ACTIVITY: 'gravity:event:approval-guard-activity',
@@ -175,6 +181,7 @@ export interface AcpConnectionStatus {
   connected: boolean;
   agyBinaryPath: string;
   agyVersion: string;
+  /** @deprecated 与 agyVersion 同源，保留一个版本向后兼容 */
   agentServerVersion?: string;
   activeSessionCount: number;
   maxParallelSessions: number;
@@ -281,6 +288,7 @@ export interface OpenLinkOrFileInput {
   action: 'browser' | 'default-app' | 'reveal-in-folder' | 'copy' | 'copy-image';
   cwd?: string;
   sessionId?: string;
+  planArtifactOwner?: PlanArtifactOwner;
 }
 
 export interface OpenLinkOrFileResult {
@@ -333,7 +341,7 @@ export interface GravityDesktopBridge {
   resumeSession(sessionId: string, cwd: string): Promise<ManagedSessionSummary>;
   closeSession(sessionId: string): Promise<void>;
   manageSession(id: string, action: SessionAction): Promise<{ sessions: ManagedSessionSummary[]; layout: WorkspaceLayoutState }>;
-  answerQuestion(input: QuestionSubmission): Promise<void>;
+  answerQuestion(input: QuestionSubmission): Promise<QuestionSubmissionReceipt | void>;
   setSessionMode(sessionId: string, mode: AgentExecutionMode): Promise<ManagedSessionSummary>;
   setSessionEffort(
     sessionId: string,
@@ -342,6 +350,7 @@ export interface GravityDesktopBridge {
   setSessionModel(sessionId: string, modelId: string): Promise<ManagedSessionSummary>;
   getSessionMessagePage(sessionId: string, before?: number): Promise<ConversationMessagePage>;
   getSessionInspector(sessionId: string): Promise<SessionInspectorData>;
+  getSessionPlanArtifact?(input: GetSessionPlanArtifactInput): Promise<PlanArtifactSnapshot>;
   listWorkspaceFiles(cwd: string, query?: string): Promise<string[]>;
   reviseMessage(input: ReviseMessageInput): Promise<ManagedSessionSummary>;
   getConversationTree(sessionId: string): Promise<ConversationTreeState>;
@@ -402,6 +411,7 @@ export interface GravityDesktopBridge {
     listener: (payload: { sessionId: string; message: ChatMessageItem }) => void
   ): () => void;
   onInspectorUpdated(listener: (data: SessionInspectorData) => void): () => void;
+  onPlanArtifactChanged?(listener: (event: PlanArtifactChangedEvent) => void): () => void;
   onApprovalRequested(listener: (request: PendingApprovalRequest) => void): () => void;
   onApprovalReviewing(listener: (event: ApprovalReviewingEvent) => void): () => void;
   onApprovalGuardActivity(listener: (event: ApprovalGuardActivityEvent) => void): () => void;

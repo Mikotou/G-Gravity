@@ -14,6 +14,7 @@ import {
   type ThemePreference,
   type ThemePreset,
 } from '@shared';
+import { usePrefsFeedback } from './usePrefsFeedback';
 import { useI18n } from '../../i18n/I18nContext';
 import { formatActionError } from '../../i18n/locales';
 import { DARK_THEME_PRESETS, LIGHT_THEME_PRESETS, resolveGravityIconVariant } from '../../styles/theme';
@@ -91,9 +92,11 @@ export function ThemesPanel({
   onUpdatePreferences: (patch: Partial<ClientPreferences>) => Promise<void>;
 }): React.ReactElement {
   const { dict } = useI18n();
-  const select = (id: ThemePreference) => void onUpdatePreferences({ theme: id });
+  const { save, feedback } = usePrefsFeedback(onUpdatePreferences);
+  const select = (id: ThemePreference) => void save({ theme: id });
   return (
     <div className="settings-section">
+      {feedback}
       <div className="settings-group">
         <button
           type="button"
@@ -442,19 +445,23 @@ export function IconsPanel({
 }): React.ReactElement {
   const { locale, dict } = useI18n();
   const v034 = dict.ui.v034;
+  const { save, feedback } = usePrefsFeedback(async (patch) => {
+    if (patch.appIcon) await onSetAppIcon(patch.appIcon);
+  });
   const nameOf = (v: GravityIconVariant): string => (locale === 'zh-CN' ? v.nameZh : v.nameEn);
   // D2：'auto' 跟随当前主题（含 system 明暗与自定义主题基准预设）解析出的推荐图标。
   const autoVariant = resolveGravityIconVariant('auto', preferences.theme, preferences.customTheme);
   const isAuto = preferences.appIcon === 'auto';
   return (
     <div className="settings-section">
+      {feedback}
       <div className="icon-grid" role="radiogroup" aria-label={dict.settingsNav.icons} data-testid="app-icons-grid">
         <button
           type="button"
           role="radio"
           aria-checked={isAuto}
           className={`icon-card icon-card-auto ${isAuto ? 'is-selected' : ''}`}
-          onClick={() => void onSetAppIcon('auto')}
+          onClick={() => void save({ appIcon: 'auto' })}
           data-testid="icon-variant-auto"
         >
           <img src={autoVariant.publicSvgUrl} alt="" />
@@ -470,7 +477,7 @@ export function IconsPanel({
               role="radio"
               aria-checked={selected}
               className={`icon-card ${selected ? 'is-selected' : ''}`}
-              onClick={() => void onSetAppIcon(v.id)}
+              onClick={() => void save({ appIcon: v.id })}
               data-testid={`icon-variant-${v.id}`}
             >
               <img src={v.publicSvgUrl} alt="" />

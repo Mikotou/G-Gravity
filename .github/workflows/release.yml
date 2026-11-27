@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish (defaults to current ref, e.g. v0.3.4)'
+        description: 'Release tag to publish (defaults to current ref, e.g. v0.3.5)'
         required: false
         type: string
 
@@ -133,11 +133,12 @@ jobs:
           > - **macOS**：首次打开若提示“已损坏”或“无法验证开发者”，拖入「应用程序」后在终端执行一次：\`xattr -cr /Applications/Gravity.app\` 即可正常打开。
           > - **前置条件**：请先在本机安装并登录官方原版 \`agy\` CLI（终端运行 \`agy --version\` 正常可用）。
 
-          ### 本版亮点（v0.3.4）
-          - **用户专项体验修复与看板焕新（U-01 ~ U-04）**：修复正文 \`text\` / 代码块复制按钮（主进程 \`copyText\` 桥接 + 降级回退）；支持新建对话弹窗与欢迎页快捷框直接选择模型与推理深度；全站图标收敛至 \`ui/Icon\` 四档矢量规范并根除 Composer 原始 Unicode 模式符号、统一编辑按钮图标；全面重设计 Context 看板 \`7d\`（00/06/12/18/24 小时刻度标尺 + 星期日期 + 日均/峰值 KPI + 每日用量药丸）与 \`30d\`（Mon–Sun 真实日历网格 + 格内日期 + 月初标牌 + 今日描边，移除误导纵轴），覆盖主 Context、外部复核与外部翻译三视图。
-          - **后端并发与稳定性深度加固**：修复 \`CAP-01\` / \`RATE-01\` / \`RATE-02\` 三项防封号 P0 阻断项（缺 \`close\` 能力零泄漏、迟到 429/403 建冷却、冷却期禁重启与周期额度探测）；Swarm SQLite 迁入独立 Worker 线程（真实写锁下主线程事件循环 P99 < 16ms）；流式输出与检视器 50ms 合批（流式 IPC 正文字符降幅 89.71%）；Windows 三代子进程退出回收屏障（0 孤儿进程）；外部第三方 API Key 零明文投影（\`D4\`）；更新包 SHA-256 完整性校验与跨平台安全回滚（\`UPD-01/02\`）；\`src/main\` 98 文件与 \`src/shared\` 均保持 0 循环依赖。
-          - **前端架构、无障碍与性能全面重塑**：三层旧 CSS（301.7 KB / 12,672 行）收敛为单入口 \`index.css\` + 18 模块（源码 221.0 KB / 构建产物 202.88 KB / gzip 36.02 KB，0 跨文件重复选择器、0 死类、0 硬编码色、0 非合成动画）；6 套主题及自定义主题达成 100% WCAG 2.1 AA（≥ 4.5:1）零违规；默认应用图标设为 \`跟随主题（自动）\`（\`D2\`）；右侧检视器精简为 5 个一级页签（分支树归入 Context 二级切换，\`D1\`）；新建入口与全屏设置防误触收敛（\`D3\`）；流式增量 Markdown 分块与 \`React.memo\` 零跨窗格重渲染。
-          - **全量质量门禁与真机验收**：通过四端 \`typecheck\` 与严格 \`noUnusedLocals/Parameters\` 0 错误、1,084 项单元测试 100% 通过、Playwright 布局回归 0px 跳变、Windows 目录版/便携版双包冒烟、17 张离线 E2E + 四主题 \`U-04\` + macOS \`mac-inset\` 2x DPI 视觉走查，以及严格限流低频真实在线官方 \`agy\` 实机冒烟（0 孤儿进程）。
+          ### 本版亮点（v0.3.5）
+          - **OKLCH 双轴热力图与 7d 按日柱状图重构**：统一 24h / 7d / 30d 三视图的「绝对用量 × 窗口占比」双轴强度模型与 6 套预设 / 自定义主题 OKLCH 5 阶色阶（100% WCAG AA 对比度达标）；`7d` 全面升级为按日柱状图，复用与 `24h` 一致的左侧 Token 用量 Y 轴刻度（峰值 / 半值 / 0）与虚线网格并在下方对齐 7 日横轴（窄栏自动切单字星期 0 溢出）；`30d` 升级为 Mon–Sun Codex 周行方格，全面覆盖主 Context、外部复核与外部翻译三账本。
+          - **Plan 多题提问卡 v2 与只读 Plan 检视器**：支持多题编号解析、题号步进器、每项右上角小铅笔就地编辑、卡片内「自定义回答」扩展框与多题统一提交（交互过程 0 IPC，原生表单支持幂等回执与安全普通消息跟进）；右侧 `Plan` 页签支持 6 态权威待办、历史重放不丢计划、以及受控只读 128 KiB `implementation_plan.md` 预览（0 外链图片、0 写入 `~/.gemini`），无待办但计划文档就绪时不再显示矛盾空态。
+          - **审批体验与界面全面降噪**：移除“突发保护已开启/解除”等无用或冗余瞬态提示及胶囊闪烁点；命中账号安全底线（`tier_a_immutable`）且附带外部 AI 复核时，红框明确说明具体命中项及“不受 AI 评分与意图放行”，下方 AI 横幅清晰标示为「AI 风险参考（仅辅助人工）」并去除重复前缀，消除低分仍需审批的困惑。
+          - **工作台精简、分支稳定性与跨端加固**：修复历史 `layout.json` 遗留字段导致的分支修订/切换报错，补全回滚同步与分支树自愈；完成 TopBar / 设置 8 导航 / 外观 3 子页 / 检视器折叠与零非合成属性动效收口；强化 `AP-1`（API Key 显式点击发现）、`PL-1`（插件零被动 CLI 刷新与隔离 Profile 提示）、`AQ-1`（429/403 冷却窗暂停探测倒计时）、`B01`（标题会话迟到关闭释槽）与 macOS APFS `realpathSync.native` / 大小写 / NFC-NFD / 2x Retina 原生 SF 字体适配。
+          - **Windows + macOS 双端全量验收**：通过四端 `typecheck` 0 错、`src/main`（107 文件）与 `src/shared` 0 循环依赖、81/81 IPC 1:1 守卫、0 死 CSS 类守卫、Windows x64（1,240 项）与 macOS Apple Silicon ARM64（1,237 项）全量 Vitest 0 failed、Playwright 布局回归 0px 跳变、6 主题 × 4 宽度 2x Retina 视觉 E2E、以及双端打包实机冒烟（`~/.gemini` 严格零写入）。
           EOF
 
           if gh release view "${TAG_NAME}" >/dev/null 2>&1; then

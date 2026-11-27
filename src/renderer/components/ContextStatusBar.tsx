@@ -102,7 +102,7 @@ export function ContextStatusBar({
             <span style={{ '--fill': Math.max(2, pct) / 100 } as React.CSSProperties} />
           </span>
           <span>
-            {formatTokenShort(used)}/{formatTokenShort(max)}
+            {formatTokenShort(used)}/{max > 0 ? formatTokenShort(max) : '—'}
           </span>
         </span>
         {/* 空闲（实时速率为 0）时隐藏，避免常驻「0.0 tok/s」噪音 */}

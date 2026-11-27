@@ -318,7 +318,7 @@ async function checkRecordedSession(page, firstLaunch) {
   const thread = page.getByRole('group', { name: '记录交互测试', exact: true });
   await thread.focus();
   await thread.press('Enter');
-  const thought = page.getByTestId('thinking-block-qa-thought').locator('.cc-thinking-head');
+  const thought = page.getByTestId('thinking-block-qa-thought').locator('.cc-thinking-toggle');
   await thought.waitFor({ timeout: 10000 }).catch(async error => {
     const info = await page.evaluate(async id => {
       const boot = await window.gravityDesktop.getBootstrap();

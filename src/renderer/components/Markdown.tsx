@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo } from 'react';
+import React, { createContext, useContext, useMemo, useState } from 'react';
 import { AlertCircle, AlertTriangle, Check, Copy, Info, Lightbulb, ShieldAlert, type LucideIcon } from 'lucide-react';
 import { ImageSessionContext, ImageWorkspace, MessageImage, resolveImage } from './MessageImage';
 import {
@@ -1486,19 +1486,27 @@ function DetailsDefaultSummary(): React.ReactElement {
   return <>{dict.ui.detailsAction}</>;
 }
 
+const CODE_FOLD_LINE_THRESHOLD = 40;
+
 function CodeBlock({ lang, text }: { lang: string; text: string }): React.ReactElement {
-  const { dict, locale } = useI18n();
+  const { dict } = useI18n();
   const { state, copy } = useCopyFeedback();
+  const lines = useMemo(() => text.split('\n'), [text]);
+  const collapsible = lines.length > CODE_FOLD_LINE_THRESHOLD;
+  const [expanded, setExpanded] = useState(false);
+  const visibleText = collapsible && !expanded ? lines.slice(0, CODE_FOLD_LINE_THRESHOLD).join('\n') : text;
   const copied = state === 'copied';
   const failed = state === 'failed';
   const statusText = copied ? dict.copiedAction : failed ? dict.ui.v034.copyFailed : '';
   return (
-    <div className="code-block">
+    <div className={`code-block${collapsible && !expanded ? ' is-collapsed' : ''}`}>
       <div className="code-block-head">
-        <span lang={locale}>{lang || 'text'}</span>
-        <span className="code-copy-status" role="status" aria-live="polite">
-          {statusText}
-        </span>
+        <span>{lang || 'text'}</span>
+        {statusText && (
+          <span className="code-copy-status" role="status">
+            {statusText}
+          </span>
+        )}
         <button
           type="button"
           className="icon-btn icon-btn-sm"
@@ -1513,20 +1521,61 @@ function CodeBlock({ lang, text }: { lang: string; text: string }): React.ReactE
           {copied ? <UiIcon icon={Check} size="xs" /> : <UiIcon icon={Copy} size="xs" />}
         </button>
       </div>
-      <pre>
-        <code>{text.length > 24000 ? text : highlight(text, lang)}</code>
+      <pre
+        tabIndex={0}
+        role="region"
+        aria-label={dict.ui.v035.codeScrollRegion(lang)}
+      >
+        <code>{visibleText.length > 24000 ? visibleText : highlight(visibleText, lang)}</code>
       </pre>
+      {collapsible && (
+        <button
+          type="button"
+          className="code-block-fold"
+          aria-expanded={expanded}
+          data-testid="code-fold-btn"
+          onClick={() => setExpanded((prev) => !prev)}
+        >
+          {expanded ? dict.ui.v035.codeCollapse : dict.ui.v035.codeExpand(lines.length)}
+        </button>
+      )}
     </div>
   );
 }
 
-const ALERT_META: Record<AlertKind, { label: string; Icon: LucideIcon }> = {
-  note: { label: 'Note', Icon: Info },
-  tip: { label: 'Tip', Icon: Lightbulb },
-  important: { label: 'Important', Icon: AlertCircle },
-  warning: { label: 'Warning', Icon: AlertTriangle },
-  caution: { label: 'Caution', Icon: ShieldAlert },
+const ALERT_ICON: Record<AlertKind, LucideIcon> = {
+  note: Info,
+  tip: Lightbulb,
+  important: AlertCircle,
+  warning: AlertTriangle,
+  caution: ShieldAlert,
 };
+
+function MarkdownAlertHeading({ kind }: { kind: AlertKind }): React.ReactElement {
+  const { dict } = useI18n();
+  const Icon = ALERT_ICON[kind];
+  return (
+    <div className="md-alert-title">
+      <UiIcon icon={Icon} size="sm" />
+      <span>{dict.ui.v035.calloutTitle[kind]}</span>
+    </div>
+  );
+}
+
+function MarkdownTableRegion({
+  className,
+  children,
+}: {
+  className: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  const { dict } = useI18n();
+  return (
+    <div className={className} tabIndex={0} role="region" aria-label={dict.ui.v035.tableScrollRegion}>
+      {children}
+    </div>
+  );
+}
 
 function renderBlockList(
   blocks: Block[],
@@ -1562,7 +1611,7 @@ function renderBlockList(
       }
       case 'table':
         return (
-          <div key={key} className={`md-table-wrap ${glideClass || ''}`.trim()}>
+          <MarkdownTableRegion key={key} className={`md-table-wrap ${glideClass || ''}`.trim()}>
             <table className="md-table">
               <thead>
                 <tr>
@@ -1591,7 +1640,7 @@ function renderBlockList(
                 ))}
               </tbody>
             </table>
-          </div>
+          </MarkdownTableRegion>
         );
       case 'list': {
         const items = block.items.map((item, j) => {
@@ -1635,14 +1684,9 @@ function renderBlockList(
         );
       }
       case 'alert': {
-        const meta = ALERT_META[block.alertKind];
-        const Icon = meta.Icon;
         return (
           <div key={key} className={`md-alert is-${block.alertKind} ${glideClass || ''}`.trim()} role="note">
-            <div className="md-alert-title">
-              <UiIcon icon={Icon} size="sm" />
-              <span>{meta.label}</span>
-            </div>
+            <MarkdownAlertHeading kind={block.alertKind} />
             <div className="md-alert-body">{renderBlockList(block.children, `${key}-al`, refs)}</div>
           </div>
         );

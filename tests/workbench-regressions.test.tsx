@@ -198,7 +198,7 @@ describe('工作台交互回归', () => {
     const failedTurn: ChatMessageItem = { id: 'failed', sessionId: primary, role: 'user', content: '上次未发出', createdAt: '', sendFailed: true };
     const sendPrompt = vi.fn().mockRejectedValueOnce(new Error('模拟断线')).mockResolvedValue(undefined);
     await mount({ sendPrompt, getSessionMessagePage: async (id, before) => pageMessages(id === primary ? [question, failedTurn] : [], before) });
-    await screen.findByRole('button', { name: '方案甲' });
+    await screen.findByRole('radio', { name: '方案甲' });
     const answer = async () => {
       if (source === 'composer') {
         const input = screen.getByTestId('composer-input-' + primary) as HTMLTextAreaElement;
@@ -208,7 +208,7 @@ describe('工作台交互回归', () => {
         await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }); });
       } else {
         const form = within(screen.getByTestId('question-bar'));
-        fireEvent.click(form.getByRole('button', { name: '方案甲' }));
+        fireEvent.click(form.getByRole('radio', { name: '方案甲' }));
         await act(async () => { fireEvent.click(form.getByRole('button', { name: '发送回答' })); });
       }
     };
@@ -237,7 +237,7 @@ describe('工作台交互回归', () => {
       },
     });
     const form = within(screen.getByTestId('question-bar'));
-    fireEvent.click(form.getByRole('button', { name: '方案乙' }));
+    fireEvent.click(form.getByRole('radio', { name: '方案乙' }));
     fireEvent.click(form.getByRole('button', { name: '发送回答' }));
     expect(screen.queryByTestId('question-bar')).toBeNull();
     await act(async () => {
@@ -245,7 +245,7 @@ describe('工作台交互回归', () => {
       fail(new Error('未能送达'));
     });
     const restored = within(screen.getByTestId('question-bar'));
-    expect(restored.getByRole('button', { name: '方案乙' }).getAttribute('aria-pressed')).toBe('true');
+    expect(restored.getByRole('radio', { name: '方案乙' }).getAttribute('aria-checked')).toBe('true');
     expect(restored.getByRole('alert').textContent).toContain('未能送达');
   });
 
@@ -264,5 +264,40 @@ describe('工作台交互回归', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     await act(async () => { fireEvent.keyDown(window, { key: '=', ctrlKey: true }); });
     expect(screen.getByTestId('app-toast').textContent).toContain('测试写入失败');
+  });
+
+  it('不展示突发保护/复核中止/审批取消/整理进行中等无用轻提示与守卫徽标', async () => {
+    const guardListeners: Array<Parameters<GravityDesktopBridge['onApprovalGuardActivity']>[0]> = [];
+    let resolveOrganize!: () => void;
+    const organizePending = new Promise<never>(() => { resolveOrganize = () => {}; });
+    void resolveOrganize;
+    await mount({
+      onApprovalGuardActivity: (listener) => {
+        guardListeners.push(listener);
+        return () => {};
+      },
+      submitApprovalDecision: vi.fn(async () => ({ outcome: 'cancelled' as const })),
+      organizeTitles: vi.fn(() => organizePending),
+    });
+
+    // 1. 即使主进程推送 burst-guard-enabled / cleared / review-cancelled，也不弹 toast 且不显示突发保护徽标
+    for (const listener of guardListeners) {
+      await act(async () => {
+        listener({ sessionId: primary, kind: 'burst-guard-enabled', activeCount: 3, message: 'burst', timestamp: new Date().toISOString() });
+        listener({ sessionId: primary, kind: 'burst-guard-cleared', activeCount: 0, message: 'cleared', timestamp: new Date().toISOString() });
+        listener({ sessionId: primary, kind: 'review-cancelled', activeCount: 0, message: 'cancelled', timestamp: new Date().toISOString() });
+      });
+    }
+    expect(screen.queryByTestId('app-toast')).toBeNull();
+    expect(screen.queryByTestId(`approval-guard-dot-${primary}`)).toBeNull();
+
+    // 2. 审批结果返回 cancelled 时不弹出冗余的「本次审批已取消」提示
+    const allowBtn = await screen.findByTestId('btn-allow-once-req-init-001');
+    await act(async () => { fireEvent.click(allowBtn); });
+    expect(screen.queryByTestId('app-toast')).toBeNull();
+
+    // 3. 点击整理标题时侧边栏已有内联加载态，不弹出「正在使用内置模型…整理标题」中间态 toast
+    await act(async () => { fireEvent.click(screen.getByTestId('btn-organize-titles')); });
+    expect(screen.queryByTestId('app-toast')).toBeNull();
   });
 });

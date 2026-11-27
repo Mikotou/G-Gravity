@@ -126,33 +126,34 @@ export function ThinkingBlock({
     >
       <div
         className="cc-thinking-head"
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onClick={toggleExpansion}
-        onKeyDown={(e) => {
-          if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
-            e.preventDefault();
-            toggleExpansion();
-          }
+        onClick={(e) => {
+          if (e.target === e.currentTarget) toggleExpansion();
         }}
       >
-        <span className={`cc-thinking-glyph ${thought.isStreaming ? 'is-streaming' : ''}`}>✻</span>
-        <span className={`cc-thinking-title ${thought.isStreaming ? 'is-streaming' : ''}`}>
-          {thought.isStreaming ? dict.thinkingStreamingTitle : dict.thinkingCompletedTitle}
-        </span>
-        {isTranslating && <span className="badge badge-accent">{dict.thoughtTranslatingBadge}</span>}
-        {collapsedPreview && <span className="cc-thinking-preview truncate">{collapsedPreview}</span>}
-        <span className="spacer" />
+        <button
+          type="button"
+          className="cc-thinking-toggle"
+          aria-expanded={expanded}
+          title={dict.ui.v035.thinkingToggle}
+          onClick={toggleExpansion}
+          data-testid={`thought-toggle-${thought.id}`}
+        >
+          <span className={`cc-thinking-glyph ${thought.isStreaming ? 'is-streaming' : ''}`} aria-hidden="true">✻</span>
+          <span className={`cc-thinking-title ${thought.isStreaming ? 'is-streaming' : ''}`}>
+            {thought.isStreaming ? dict.thinkingStreamingTitle : dict.thinkingCompletedTitle}
+          </span>
+          {isTranslating && <span className="badge badge-accent">{dict.thoughtTranslatingBadge}</span>}
+          {collapsedPreview && <span className="cc-thinking-preview truncate">{collapsedPreview}</span>}
+        </button>
         <div
           className="segmented segmented-sm cc-thinking-switch"
-          onClick={(e) => e.stopPropagation()}
           title={hasTranslation ? sourceLabel : undefined}
           data-testid={`thought-track-switch-${thought.id}`}
         >
           <button
             type="button"
             className={`segmented-btn ${track === 'zh' ? 'is-active' : ''}`}
+            aria-pressed={track === 'zh'}
             onClick={() => {
               setTrack('zh');
             }}
@@ -163,6 +164,7 @@ export function ThinkingBlock({
           <button
             type="button"
             className={`segmented-btn ${track === 'raw' ? 'is-active' : ''}`}
+            aria-pressed={track === 'raw'}
             onClick={() => {
               setTrack('raw');
             }}

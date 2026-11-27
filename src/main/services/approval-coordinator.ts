@@ -1,9 +1,10 @@
+import { ownedExternalUsage } from '../telemetry/external-usage-owner';
 import { ServiceVerifier } from '../llm/service-verifier';
 import { maskKnownSecret, redactSecretsForReviewer } from '../security/redaction';
 import { reviewerCircuit } from '../llm/external-llm-transport';
 import { discoverExternalModels } from '../approval/external-reviewer';
 import type { ExternalReviewerModelsDiscoveryInput } from '../../shared/approval-contract';
-import type { ApprovalHost, CoreServiceOptions } from '../core-contracts';
+import type { ExternalUsageHost, CoreServiceOptions } from '../core-contracts';
 import { ApprovalEngine } from '../approval/approval-engine';
 import { IndependentModelCallError, reviewWithIndependentModel } from '../approval/external-reviewer';
 import type { ManagedSessionSummary, ChatMessageItem } from '../../shared/session-contract';
@@ -37,7 +38,7 @@ export class ApprovalCoordinator {
     return discoverExternalModels(candidate, this.options.modelDiscoveryFetcher);
   }
 
-  constructor(private app: ApprovalHost, private vault: SecretVault,
+  constructor(private app: ExternalUsageHost, private vault: SecretVault,
     private options: Pick<CoreServiceOptions, 'reviewer' | 'modelDiscoveryFetcher'>,
     private enrichSession: (session: ManagedSessionSummary) => ManagedSessionSummary,
     private isDisposed: () => boolean) {
@@ -49,10 +50,7 @@ export class ApprovalCoordinator {
     this.approval.on('guard-activity', event => app.emit('approval-guard-activity', event));
     this.approval.on('external-review-usage', (ev: ExternalReviewerUsageRecordInput, profileId: string) => {
       if (this.isDisposed()) return;
-      const owned = profileId === this.app.sessions.profileId
-        ? this.app.sessions.sessions.has(ev.sessionId)
-        : Object.hasOwn(this.app.store.read(`owned-sessions-${profileId}.json`, {}), ev.sessionId);
-      this.app.telemetry.recordExternalReviewUsage(owned ? ev : { ...ev, sessionId: '' }, profileId);
+      this.app.telemetry.recordExternalReviewUsage(ownedExternalUsage(this.app, profileId, ev), profileId);
     });
   }
 

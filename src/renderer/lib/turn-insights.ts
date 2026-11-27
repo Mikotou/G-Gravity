@@ -111,9 +111,11 @@ export function summarizeTurn(message: ChatMessageItem, turnStartedAt?: string):
   }
 
   const changedFiles = Array.from(fileMap.values()).sort((a, b) => b.added + b.removed - (a.added + a.removed));
-  // 完成时间与回合起点需同时有效且顺序正确，旧消息缺少结束时间时保留空值供界面省略耗时。
-  const start = Date.parse(turnStartedAt || message.createdAt);
-  const end = message.completedAt ? Date.parse(message.completedAt) : NaN;
+  // TA-1：优先使用主进程记录的整回合起点 turnStartedAt 与收口时间 turnSettledAt；
+  // 提问中间分段（存在 question 且尚无 turnSettledAt）不用分段 completedAt 误报整回合耗时。
+  const start = Date.parse(message.turnStartedAt || turnStartedAt || message.createdAt);
+  const endIso = message.turnSettledAt || (message.question ? undefined : message.completedAt);
+  const end = endIso ? Date.parse(endIso) : NaN;
   const durationMs = Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start : undefined;
 
   return {
@@ -128,6 +130,29 @@ export function summarizeTurn(message: ChatMessageItem, turnStartedAt?: string):
     totalTools: tools.length,
     durationMs,
   };
+}
+
+/**
+ * TA-4：对缺少 turnSettledAt 的旧历史消息执行三条件未确认展示判定：
+ * 1) 消息本身非流式、无 turnSettledAt、无明确 turnStop；
+ * 2) 当前并非进行中回合（不是最新助手消息，或会话状态已处于 idle/closed/error）；
+ * 3) 存在未终态证据（仍有 pending/running 工具，或缺少 completedAt）。
+ */
+export function isTurnUnconfirmed(
+  message: ChatMessageItem,
+  options?: { isLatestAssistant?: boolean; sessionStatus?: string }
+): boolean {
+  if (message.isStreaming || message.turnSettledAt || message.turnStop) return false;
+  const isLatest = options?.isLatestAssistant;
+  const status = options?.sessionStatus;
+  const knownNotLive =
+    isLatest === false ||
+    status === 'idle' ||
+    status === 'closed' ||
+    status === 'error';
+  if (!knownNotLive) return false;
+  const hasActiveTools = (message.toolCalls ?? []).some(isToolActive);
+  return hasActiveTools || !message.completedAt;
 }
 
 export function toolDurationMs(tool: SemanticToolCallCard): number | undefined {

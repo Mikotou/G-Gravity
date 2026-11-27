@@ -13,6 +13,7 @@ import { publicTranslationConfig, type SecretVault } from './secret-vault';
 
 const DEFAULT_PREFERENCES: ClientPreferences = { locale: 'zh-CN', theme: 'claude-code-dark', appIcon: 'auto', defaultThoughtTrack: 'zh', translationEngine: 'local', processPerSession: false, activeProfileId: 'default', defaultWorkspaceCwd: '', projects: [], autoCheckUpdates: true };
 export const DEFAULT_LAYOUT: WorkspaceLayoutState = { openTabSessionIds: [], activePrimarySessionId: null, splitSecondarySessionId: null, layoutMode: 'single', hideLegacyPollutionSessions: true, leftSidebarCollapsed: false, leftSidebarWidth: 260, rightInspectorCollapsed: false, rightInspectorWidth: 360, activeInspectorTab: 'context', splitRatio: 0.5 };
+const ALLOWED_LAYOUT_KEYS = new Set<string>([...Object.keys(DEFAULT_LAYOUT), 'composerMinHeight', 'inspectorFloating']);
 
 
 export class WorkspaceSettings {
@@ -63,7 +64,12 @@ export class WorkspaceSettings {
     const stored = this.app.store.read<Partial<Omit<WorkspaceLayoutState, 'layoutMode'>> & {
       layoutMode?: WorkspaceLayoutState['layoutMode'] | 'grid-4'; tertiarySessionId?: string; quaternarySessionId?: string;
     }>('layout.json', {});
-    const { tertiarySessionId, quaternarySessionId, layoutMode, ...saved } = stored;
+    const { tertiarySessionId, quaternarySessionId, layoutMode, ...rawSaved } = stored;
+    // Strip legacy layout.json keys (e.g. paneColumnRatio, paneRowRatio, composerHeight) so subsequent layout saves never reject them.
+    const saved: Partial<WorkspaceLayoutState> = {};
+    for (const [key, value] of Object.entries(rawSaved)) {
+      if (ALLOWED_LAYOUT_KEYS.has(key)) (saved as Record<string, unknown>)[key] = value;
+    }
     this.layout = { ...DEFAULT_LAYOUT, ...saved, layoutMode: layoutMode === 'grid-4' || layoutMode === 'split-2' ? 'split-2' : 'single' };
     if (layoutMode === 'grid-4') {
       this.layout.openTabSessionIds = [...new Set([...this.layout.openTabSessionIds, tertiarySessionId, quaternarySessionId].filter((id): id is string => Boolean(id)))];
@@ -240,8 +246,7 @@ export class WorkspaceSettings {
   }
 
   saveWorkspaceLayout(patch: Partial<WorkspaceLayoutState>): WorkspaceLayoutState {
-    const allowed = new Set([...Object.keys(DEFAULT_LAYOUT), 'composerMinHeight', 'inspectorFloating']);
-    if (!patch || typeof patch !== 'object' || Object.keys(patch).some(key => !allowed.has(key))) throw new Error('工作台布局无效');
+    if (!patch || typeof patch !== 'object' || Object.keys(patch).some(key => !ALLOWED_LAYOUT_KEYS.has(key))) throw new Error('工作台布局无效');
     const next = { ...this.layout, ...patch };
     for (const id of [next.activePrimarySessionId, next.splitSecondarySessionId]) {
       if (id !== null && (typeof id !== 'string' || id.includes('\0'))) throw new Error('工作台会话标识无效');

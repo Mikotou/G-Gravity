@@ -6,7 +6,10 @@ import {
   ChevronRight,
   Square,
   SquareCheck,
+  SquareDashed,
   SquareDot,
+  SquareMinus,
+  SquareX,
   FileCode2,
   FileDiff,
   GitBranch,
@@ -38,6 +41,8 @@ import { UnifiedDiffBlock } from './UnifiedDiffBlock';
 
 import { terminalCommand } from '../../shared/session-contract';
 import { Icon as UiIcon } from './ui/Icon';
+import { handleTablistKeyDown } from '../hooks/useRovingTabs';
+import { PlanArtifactPanel } from './PlanArtifactPanel';
 
 export interface RightInspectorProps {
   collapsed: boolean;
@@ -52,6 +57,7 @@ export interface RightInspectorProps {
   onOpenExternalTranslatorSettings?: () => void;
   focusedDiffFile: string | null;
   sessionId: string | null;
+  sessionCwd?: string;
   profileId?: string;
   inspectorData?: SessionInspectorData;
   sessionMessages: ChatMessageItem[];
@@ -117,6 +123,7 @@ function RightInspectorImpl({
   onOpenExternalTranslatorSettings,
   focusedDiffFile,
   sessionId,
+  sessionCwd,
   profileId = 'default',
   inspectorData,
   sessionMessages,
@@ -137,6 +144,7 @@ function RightInspectorImpl({
   onOpenRateCardsSettings,
 }: RightInspectorProps): React.ReactElement {
   const { dict } = useI18n();
+  const panelBase = `insp-${React.useId().replace(/:/g, '')}`;
   const localSwarmDrafts = useMemo(() => new SwarmDrafts(), [profileId]);
   const ui = dict.ui;
   const [liveWidth, setLiveWidth] = useState<number>(width || DEFAULT_WIDTH);
@@ -247,15 +255,18 @@ function RightInspectorImpl({
     return Array.from(map.values());
   }, [inspectorData?.diffs, sessionMessages]);
 
-  // 计划优先使用检视快照。早期记录缺少该快照时，从最近的消息向前找已有的待办列表。
+  // v0.3.5：`inspectorData.plan` 是权威 Plan 摘要。存在时只认快照（`empty` 绝不复活旧消息待办）；
+  // 仅当旧快照缺省 `plan` 时，才按历史兼容从最近的消息向前回溯已有的待办列表。
+  const planMeta = inspectorData?.plan;
   const todos = useMemo<SessionTodoItem[]>(() => {
+    if (planMeta) return planMeta.state === 'present' ? (inspectorData?.todos ?? []) : [];
     if (inspectorData?.todos?.length) return inspectorData.todos;
     for (let i = sessionMessages.length - 1; i >= 0; i -= 1) {
       const list = sessionMessages[i].todos;
       if (list?.length) return list;
     }
     return [];
-  }, [inspectorData?.todos, sessionMessages]);
+  }, [inspectorData?.todos, planMeta, sessionMessages]);
 
   const terminals = useMemo<SessionTerminalEntry[]>(() => {
     // 用现有终端快照中的工具调用号识别已收录条目，再从消息中的 Bash 输出补齐缺项。
@@ -322,10 +333,13 @@ function RightInspectorImpl({
   const totalAdded = diffs.reduce((s, d) => s + d.addedLines, 0);
   const totalRemoved = diffs.reduce((s, d) => s + d.removedLines, 0);
 
+  const doneTodos = planMeta?.state === 'present' ? planMeta.completedCount : todos.filter((t) => t.status === 'completed').length;
+  const totalTodos = planMeta?.state === 'present' ? Math.max(planMeta.totalCount, todos.length) : todos.length;
+  const failedTodos = planMeta?.state === 'present' ? planMeta.failedCount : todos.filter((t) => t.status === 'failed').length;
   // 标签徽标各自表示不同数量。终端有失败时优先显示失败数，协作面板显示正在工作的成员数，分支树在存在分叉时显示分支总数。
   const counts: Partial<Record<RightInspectorTab, number>> = {
     diff: diffs.length,
-    plan: todos.length,
+    plan: totalTodos,
     terminal: unread.length,
     swarm: swarmTopology?.isActive ? swarmTopology.stats.working : 0,
   };
@@ -335,13 +349,18 @@ function RightInspectorImpl({
     terminal: failedTerminals ? 'danger' : 'muted',
     swarm: 'accent',
   };
-  const doneTodos = todos.filter((t) => t.status === 'completed').length;
   // “变更”是一级页签，差异与文件清单是它的二级视图，共用同一份统计与焦点文件。
   const changesView = activeTab === 'files' ? 'files' : 'diff';
   const isChanges = activeTab === 'diff' || activeTab === 'files';
   // D1：分支树是 Context 的二级视图；外部以 'tree' 打开时自动选中 Context 一级页签。
   const isContextGroup = activeTab === 'context' || activeTab === 'tree';
   const treeBranchCount = conversationTree && conversationTree.totalBranches > 1 ? conversationTree.totalBranches : 0;
+  const [planArtifactStatus, setPlanArtifactStatus] = useState<'loading' | 'ready' | 'missing' | 'unavailable' | 'unchanged'>('loading');
+  useEffect(() => {
+    setPlanArtifactStatus('loading');
+  }, [profileId, sessionId]);
+  const planHasReadyArtifact = Boolean(sessionId && planArtifactStatus === 'ready');
+
   const bodyViewKey = `${sessionId ?? ''}:${activeTab}`;
   useLayoutEffect(() => {
     const el = bodyRef.current;
@@ -369,13 +388,16 @@ function RightInspectorImpl({
   );
 
   const changesSwitch = (
-    <div className="segmented segmented-sm inspector-subnav" role="tablist" aria-label={ui.changesTab}>
+    <div className="segmented segmented-sm inspector-subnav" role="tablist" aria-label={ui.changesTab} onKeyDown={(e) => handleTablistKeyDown(e)}>
       {(['diff', 'files'] as const).map((view) => (
         <button
           key={view}
           type="button"
           role="tab"
+          id={`${panelBase}-sub-${view}`}
           aria-selected={changesView === view}
+          aria-controls={`${panelBase}-panel`}
+          tabIndex={changesView === view ? 0 : -1}
           className={`segmented-btn ${changesView === view ? 'is-active' : ''}`}
           onClick={() => onSelectTab(view)}
           data-testid={view === 'files' ? 'inspector-tab-files' : 'inspector-subtab-diff'}
@@ -388,11 +410,14 @@ function RightInspectorImpl({
   );
 
   const contextSwitch = (
-    <div className="segmented segmented-sm inspector-subnav" role="tablist" aria-label={ui.v034.contextViewSwitch}>
+    <div className="segmented segmented-sm inspector-subnav" role="tablist" aria-label={ui.v034.contextViewSwitch} onKeyDown={(e) => handleTablistKeyDown(e)}>
       <button
         type="button"
         role="tab"
+        id={`${panelBase}-sub-context`}
         aria-selected={activeTab === 'context'}
+        aria-controls={`${panelBase}-panel`}
+        tabIndex={activeTab === 'context' ? 0 : -1}
         className={`segmented-btn ${activeTab === 'context' ? 'is-active' : ''}`}
         onClick={() => onSelectTab('context')}
         data-testid="inspector-subtab-context"
@@ -403,7 +428,10 @@ function RightInspectorImpl({
       <button
         type="button"
         role="tab"
+        id={`${panelBase}-sub-tree`}
         aria-selected={activeTab === 'tree'}
+        aria-controls={`${panelBase}-panel`}
+        tabIndex={activeTab === 'tree' ? 0 : -1}
         className={`segmented-btn ${activeTab === 'tree' ? 'is-active' : ''}`}
         onClick={() => onSelectTab('tree')}
         data-testid="inspector-tab-tree"
@@ -462,7 +490,9 @@ function RightInspectorImpl({
               ref={tabsRef}
               className="inspector-head"
               role="tablist"
+              aria-label={ui.v035.inspectorTabsLabel}
               onScroll={syncTabScroll}
+              onKeyDown={(e) => handleTablistKeyDown(e)}
             >
               {TABS.map(({ id, Icon }) => {
                 const selected = id === 'diff' ? isChanges : id === 'context' ? isContextGroup : activeTab === id;
@@ -472,7 +502,10 @@ function RightInspectorImpl({
                     key={id}
                     type="button"
                     role="tab"
+                    id={`${panelBase}-tab-${id}`}
                     aria-selected={selected}
+                    aria-controls={`${panelBase}-panel`}
+                    tabIndex={selected ? 0 : -1}
                     className={`inspector-tab ${selected ? 'is-active' : ''}`}
                     onClick={() =>
                       // Changes 记住二级视图；Context 一级页签始终回到「用量与费用」主视图，分支树经二级切换进入。
@@ -533,12 +566,16 @@ function RightInspectorImpl({
 
         <div
           className="inspector-body"
+          id={`${panelBase}-panel`}
+          role="tabpanel"
+          aria-labelledby={`${panelBase}-tab-${isChanges ? 'diff' : isContextGroup ? 'context' : activeTab}`}
           ref={bodyRef}
           onScroll={(e) => { bodyScrollRef.current[bodyViewKey] = e.currentTarget.scrollTop; }}
         >
+          {isChanges && <div className="inspector-toolbar">{changesSwitch}</div>}
+
           {activeTab === 'diff' && (
             <div className="inspector-stack" data-testid="inspector-view-diff">
-              <div className="inspector-toolbar">{changesSwitch}</div>
               {diffs.length === 0 ? (
                 <div className="empty-state">{dict.diffEmpty}</div>
               ) : (
@@ -553,8 +590,7 @@ function RightInspectorImpl({
           )}
 
           {activeTab === 'files' && (
-            <div className="inspector-stack" style={{ gap: 2 }} data-testid="inspector-view-files">
-              <div className="inspector-toolbar">{changesSwitch}</div>
+            <div className="inspector-stack is-tight" data-testid="inspector-view-files">
               {diffs.length === 0 ? (
                 <div className="empty-state">{dict.filesChangedEmpty}</div>
               ) : (
@@ -586,30 +622,46 @@ function RightInspectorImpl({
           )}
 
           {activeTab === 'plan' && (
-            <div className="inspector-stack" style={{ gap: 2 }} data-testid="inspector-view-plan">
+            <div className="inspector-stack plan-stack" data-testid="inspector-view-plan">
               {todos.length === 0 ? (
-                <div className="empty-state">{dict.planEmpty}</div>
+                !planHasReadyArtifact && <div className="empty-state">{dict.planEmpty}</div>
               ) : (
                 <>
                   <div className="plan-progress">
-                    <span>{dict.planProgress(doneTodos, todos.length)}</span>
-                    <span className="gauge" role="progressbar" aria-valuemin={0} aria-valuemax={todos.length} aria-valuenow={doneTodos}>
-                      <span style={{ '--fill': doneTodos / todos.length } as React.CSSProperties} />
+                    <span>{dict.planProgress(doneTodos, totalTodos)}</span>
+                    {failedTodos > 0 && (
+                      <span className="badge badge-danger plan-failed-count">{ui.v035.planFailedCount(failedTodos)}</span>
+                    )}
+                    <span
+                      className="gauge"
+                      role="progressbar"
+                      aria-label={ui.v035.planProgressAria(doneTodos, totalTodos)}
+                      aria-valuemin={0}
+                      aria-valuemax={totalTodos}
+                      aria-valuenow={doneTodos}
+                      data-testid="plan-progressbar"
+                    >
+                      <span style={{ '--fill': totalTodos ? doneTodos / totalTodos : 0 } as React.CSSProperties} />
                     </span>
                   </div>
                   {todos.map((td) => (
-                    <div key={td.id} className={`plan-item ${td.status === 'completed' ? 'is-completed' : ''}`}>
-                      {td.status === 'completed' ? (
-                        <UiIcon icon={SquareCheck} size="sm" className="plan-item-icon is-completed" label={ui.v034.todoCompleted} />
-                      ) : td.status === 'in_progress' ? (
-                        <UiIcon icon={SquareDot} size="sm" className="plan-item-icon is-in-progress" label={ui.v034.todoInProgress} />
-                      ) : (
-                        <UiIcon icon={Square} size="sm" className="plan-item-icon is-pending" label={ui.v034.todoPending} />
-                      )}
-                      <span>{td.content}</span>
-                    </div>
+                    <PlanTodoRow key={td.id} item={td} />
                   ))}
+                  {planMeta?.truncated && (
+                    <div className="plan-truncated" role="note" data-testid="plan-truncated-hint">
+                      {ui.v035.planTruncated}
+                    </div>
+                  )}
                 </>
+              )}
+              {sessionId && (
+                <PlanArtifactPanel
+                  key={`${profileId}:${sessionId}`}
+                  profileId={profileId}
+                  sessionId={sessionId}
+                  cwd={sessionCwd}
+                  onStatusChange={setPlanArtifactStatus}
+                />
               )}
             </div>
           )}
@@ -624,12 +676,14 @@ function RightInspectorImpl({
             </div>
           )}
 
+          {isContextGroup && <div className="inspector-toolbar">{contextSwitch}</div>}
+
           {activeTab === 'context' && (
             <>
-              <div className="inspector-toolbar">{contextSwitch}</div>
               {conversationTree && conversationTree.totalBranches > 1 && sessionId && (
                 <div className="ctx-branch-banner" data-testid="context-branch-banner">
                   <UiIcon icon={GitBranch} size="xs" />
+                  {/* I1：上方二级页签已有「分支树」入口，横幅只保留分支定位信息，不再重复按钮 */}
                   <span className="truncate">
                     {(() => {
                       const activeNode = conversationTree.nodesById[sessionId];
@@ -639,14 +693,6 @@ function RightInspectorImpl({
                       return ui.v034.activeBranchTurn(activeNode.forkUserTurnIndex + 1, activeNode.siblingIndex, activeNode.siblingCount);
                     })()}
                   </span>
-                  <button
-                    type="button"
-                    className="ctx-branch-banner-btn"
-                    onClick={() => onSelectTab('tree')}
-                    data-testid="context-banner-open-tree"
-                  >
-                    {ui.v034.treeShort}
-                  </button>
                 </div>
               )}
               <ContextCostInspectorView
@@ -665,8 +711,6 @@ function RightInspectorImpl({
           )}
 
           {activeTab === 'tree' && (
-            <>
-            <div className="inspector-toolbar">{contextSwitch}</div>
             <ConversationTreePanel
               sessionId={sessionId}
               tree={conversationTree}
@@ -676,7 +720,6 @@ function RightInspectorImpl({
               onSwitchBranch={onSwitchBranch}
               onOpenContextTab={() => onSelectTab('context')}
             />
-            </>
           )}
 
           {activeTab === 'swarm' && (
@@ -699,6 +742,34 @@ function RightInspectorImpl({
 
 /** F-08：浅比较 props，未改动检视数据与当前会话消息引用时跳过提交。 */
 export const RightInspector = React.memo(RightInspectorImpl);
+
+const PLAN_STATUS_ICON = {
+  pending: Square,
+  in_progress: SquareDot,
+  completed: SquareCheck,
+  skipped: SquareMinus,
+  failed: SquareX,
+  unknown: SquareDashed,
+} as const;
+
+/** v0.3.5：6 态 SessionTodoStatus + 原始状态标签；长路径在行内断行（min-width: 0 + overflow-wrap: anywhere）。 */
+function PlanTodoRow({ item }: { item: SessionTodoItem }): React.ReactElement {
+  const { dict } = useI18n();
+  const v035 = dict.ui.v035;
+  const status = (item.status in PLAN_STATUS_ICON ? item.status : 'unknown') as keyof typeof PLAN_STATUS_ICON;
+  const label = v035.planStatus[status];
+  return (
+    <div className={`plan-item is-${status.replace('_', '-')}`} data-status={status} data-testid={`plan-item-${item.id}`}>
+      <UiIcon icon={PLAN_STATUS_ICON[status]} size="sm" className={`plan-item-icon is-${status.replace('_', '-')}`} label={label} />
+      <span className="plan-item-text">{item.content}</span>
+      {item.rawStatus && (status === 'unknown' || item.rawStatus !== item.status) && (
+        <span className="badge badge-mono plan-item-raw" title={v035.planRawStatus(item.rawStatus)}>
+          {item.rawStatus}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function TerminalRow({ term }: { term: SessionTerminalEntry }): React.ReactElement {
   const { dict } = useI18n();

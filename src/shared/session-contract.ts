@@ -272,11 +272,62 @@ export function isToolCallFailure(card: Pick<SemanticToolCallCard, 'status' | 'e
   );
 }
 
+export type SessionTodoStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'completed'
+  | 'skipped'
+  | 'failed'
+  | 'unknown';
+
 export interface SessionTodoItem {
   id: string;
   content: string;
-  status: 'pending' | 'in_progress' | 'completed';
+  status: SessionTodoStatus;
+  /** 遇到非标准状态值时保留的原始状态文案（截断至 ≤64 码点） */
+  rawStatus?: string;
   priority?: 'high' | 'medium' | 'low';
+}
+
+export type SessionPlanState = 'unreceived' | 'empty' | 'present';
+
+export interface SessionPlanSummary {
+  state: SessionPlanState;
+  revision: number;
+  truncated: boolean;
+  totalCount: number;
+  completedCount: number;
+  failedCount: number;
+}
+
+export interface PlanArtifactOwner {
+  profileId: string;
+  sessionId: string;
+  revision?: number;
+}
+
+export interface GetSessionPlanArtifactInput {
+  profileId: string;
+  sessionId: string;
+  knownRevision?: number;
+}
+
+export interface PlanArtifactSnapshot {
+  status: 'missing' | 'unavailable' | 'ready' | 'unchanged';
+  owner: { profileId: string; sessionId: string };
+  revision: number;
+  source?: 'brain-artifact' | 'workspace-reference';
+  filePath?: string;
+  content?: string;
+  truncated?: boolean;
+  reason?: string;
+  updatedAt?: string;
+}
+
+export interface PlanArtifactChangedEvent {
+  profileId: string;
+  sessionId: string;
+  revision: number;
 }
 
 export function terminalCommand(tool: SemanticToolCallCard): string {
@@ -308,6 +359,8 @@ export interface SessionInspectorData {
   diffs: FileDiffEntry[];
   todos: SessionTodoItem[];
   terminals: SessionTerminalEntry[];
+  /** 权威 Plan 摘要元数据；旧快照缺省时前端按历史兼容回溯，存在时以本字段为准 */
+  plan?: SessionPlanSummary;
 }
 
 export interface MessageAttachmentPreview {
@@ -330,6 +383,8 @@ export interface MessageAnnotation {
 
 export interface ChatMessageItem {
   question?: import('./user-question').UserQuestion;
+  /** 原生提问走显式普通消息跟进时的投递状态投影 */
+  questionFollowup?: import('./user-question').QuestionFollowupMetadata;
   annotations?: MessageAnnotation[];
   id: string;
   /** 跨分支稳定的原始消息标识；继承自父分支前缀时保留原消息的 originMessageId || id，用于精确匹配同分叉点 */
@@ -353,6 +408,10 @@ export interface ChatMessageItem {
   createdAt: string;
   /** 助手回合真正结束（流式收口）的时间，用于计算本轮耗时 */
   completedAt?: string;
+  /** 整回合开始时间（跨提问分段保持一致，供 TurnActivity 准确统计耗时） */
+  turnStartedAt?: string;
+  /** 整回合真正结算时间（区分中间提问分段与最终收口） */
+  turnSettledAt?: string;
 }
 
 export type ManagedSessionStatus =

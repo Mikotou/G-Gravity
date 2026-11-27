@@ -3,7 +3,7 @@ import type { ManagedSessionSummary } from '../../shared/session-contract';
 import type { ClientStore } from '../storage/client-store';
 import { EXECUTION_MODE_ORDER, REASONING_EFFORT_ORDER } from '../../shared/acp-protocol';
 import type {
-  AcpModelOption, AcpSessionNewResult, AgentExecutionMode, AgentReasoningEffort,
+  AcpConfigOption, AcpModelOption, AcpSessionNewResult, AgentExecutionMode, AgentReasoningEffort,
 } from '../../shared/acp-protocol';
 
 export function isSessionExecutionMode(value: unknown): value is AgentExecutionMode {
@@ -21,11 +21,24 @@ function cleanModels(value: unknown): AcpModelOption[] | undefined {
   return byId.size || !value.length ? [...byId.values()] : undefined;
 }
 
+/** ACP select options are either leaves or groups containing a list of leaves. */
+export function selectValues(options: unknown): Array<{ value: string; name: string; description?: string }> {
+  if (!Array.isArray(options)) return [];
+  return options.flatMap(item => Array.isArray(item?.options) ? item.options : [item])
+    .filter(item => typeof item?.value === 'string' && item.value);
+}
+
+export function modelConfig(options?: AcpConfigOption[]): AcpConfigOption | undefined {
+  return options?.find(option => option.id === 'model') ?? options?.find(option => option.category === 'model');
+}
+
 export function declaredModels(result?: AcpSessionNewResult): AcpModelOption[] | undefined {
-  const option = result?.configOptions?.find(item => item.id === 'model');
+  const option = modelConfig(result?.configOptions);
   if (option) {
     if (!Array.isArray(option.options)) return undefined;
-    return cleanModels(option.options.map(item => ({ modelId: item?.value, name: item?.name, description: item?.description })));
+    const leaves = selectValues(option.options);
+    if (!leaves.length && option.options.some(item => !Array.isArray((item as { options?: unknown } | null)?.options))) return undefined;
+    return cleanModels(leaves.map(item => ({ modelId: item?.value, name: item?.name, description: item?.description })));
   }
   return cleanModels(result?.models?.availableModels);
 }
@@ -89,12 +102,12 @@ export class SessionOptionsStore {
 
   supportsMode(id: string, mode: AgentExecutionMode): boolean {
     const options = this.optionsBySession.get(id);
-    return Boolean(options?.configOptions?.find(c => c.id === 'mode')?.options?.some(o => o.value === mode) ||
+    return Boolean(selectValues(options?.configOptions?.find(c => c.id === 'mode')?.options).some(o => o.value === mode) ||
       options?.modes?.availableModes?.some(o => o.id === mode));
   }
 
   supportsEffort(id: string, effort: AgentReasoningEffort): boolean {
-    return Boolean(this.optionsBySession.get(id)?.configOptions?.find(c => c.id === 'thought_level')?.options?.some(o => o.value === effort));
+    return selectValues(this.optionsBySession.get(id)?.configOptions?.find(c => c.id === 'thought_level')?.options).some(o => o.value === effort);
   }
 
   applyReportedMode(session: ManagedSessionSummary, mode: unknown): boolean {
@@ -109,7 +122,7 @@ export class SessionOptionsStore {
   syncSessionFromOptions(session: ManagedSessionSummary, result?: AcpSessionNewResult, reported = true): void {
     if (!result) return;
     const cfg = result.configOptions;
-    const modelOpt = cfg?.find((opt) => opt.id === 'model');
+    const modelOpt = modelConfig(cfg);
     const models = declaredModels(result);
     session.availableModels = models;
     if (models && reported) this.saveModelCatalog({ models, cliVersion: this.client.initializeResult?.agentInfo?.version });
@@ -121,7 +134,7 @@ export class SessionOptionsStore {
     if (Array.isArray(cfg)) {
       const effortOpt = cfg.find((opt) => opt.id === 'thought_level');
       if (effortOpt?.options?.length) {
-        session.availableEfforts = effortOpt.options
+        session.availableEfforts = selectValues(effortOpt.options)
           .filter((opt) => (REASONING_EFFORT_ORDER as readonly string[]).includes(opt.value))
           .map((opt) => ({ value: opt.value as AgentReasoningEffort, name: opt.name }));
         if (

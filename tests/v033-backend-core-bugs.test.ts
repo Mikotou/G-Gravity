@@ -552,7 +552,7 @@ describe('v0.3.3 后端核心与生命周期 Bug 回归（CORE-01 ~ CORE-18）',
     const reloaded = new InspectorStore(disk);
     reloaded.setProfile('default');
     expect(reloaded.get('s-hot').todos[0]?.content).toBe('updated hot task');
-    expect(reloaded.get('s-cold-1').todos).toEqual([]);
+    expect(reloaded.get('s-cold-1').todos[0]?.content).toBe('cold 1');
   });
 
   it('CORE-04: openExternalTarget 与 inspectLocalTargets 拦截 .js/.mjs/.cjs/.jar/.msc/.chm/.appref-ms/.scf/.inf/.dmg/.mpkg 并强制降级为 reveal-in-folder', async () => {

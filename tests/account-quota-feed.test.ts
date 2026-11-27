@@ -66,20 +66,31 @@ describe('account quota refresh', () => {
     expect(feed.snapshot().error).toContain('账户已切换');
   });
 
-  it('stops the timer and all refresh triggers once the active profile cannot supply a quota', async () => {
-    const read = vi.fn(async () => ({ profileId: 'isolated', unavailable: 'profile' as const }));
+  it('stops automatic polling after unavailable while keeping explicit manual refresh recoverable', async () => {
+    const read = vi
+      .fn<(manual: boolean) => Promise<AccountQuota | { profileId: string; unavailable: 'profile' }>>()
+      .mockResolvedValueOnce({ profileId: 'isolated', unavailable: 'profile' })
+      .mockResolvedValueOnce(snapshot('isolated'));
     const feed = new AccountQuotaFeed('isolated', read);
     const off = feed.subscribe(vi.fn());
     await Promise.resolve();
     expect(feed.snapshot()).toEqual({ loading: false, unavailable: 'profile' });
     expect(vi.getTimerCount()).toBe(0);
-    await feed.manual(); await feed.attend(); feed.afterTurn();
+    // 自动触发全部暂停
+    await feed.attend();
+    feed.afterTurn();
     off();
     const again = feed.subscribe(vi.fn());
     await vi.advanceTimersByTimeAsync(600_000);
     window.dispatchEvent(new Event('focus'));
     expect(read).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+    // AQ-1：绝不因单次 unavailable 永久禁用手动刷新，显式 manual() 可重试并恢复
+    await feed.manual();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenLastCalledWith(true);
+    expect(feed.snapshot().unavailable).toBeUndefined();
+    expect(feed.snapshot().quota?.profileId).toBe('isolated');
     again();
   });
 });

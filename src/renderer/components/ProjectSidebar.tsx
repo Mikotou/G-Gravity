@@ -301,6 +301,7 @@ function ProjectSidebarImpl({
     }
   }
 
+  const hasPollutionSessions = sessions.some((x) => x.isLegacyApprovalPollution);
   return (
     <aside
       className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}
@@ -358,8 +359,8 @@ function ProjectSidebarImpl({
           </dialog>
         )}
 
+        {/* v0.3.5 S1：品牌名已在活动栏呈现，抽屉头只保留会话计数与必要操作；无旧污染会话时不显示可见性开关 */}
         <header className="sidebar-head">
-          <span className="brand-name">Gravity</span>
           {totalThreads > 0 && <span className="drawer-count">{totalThreads}</span>}
           <span className="spacer" />
           <button
@@ -373,7 +374,7 @@ function ProjectSidebarImpl({
           >
             <Icon icon={Sparkles} size="sm" className={organizingTarget === 'all' ? 'spin' : undefined} />
           </button>
-          <button
+          {hasPollutionSessions && <button
             type="button"
             className="icon-btn icon-btn-sm"
             onClick={() => void onTogglePollutionVisibility()}
@@ -382,7 +383,7 @@ function ProjectSidebarImpl({
             data-testid="btn-toggle-pollution"
           >
             {hideLegacyPollutionSessions ? <Icon icon={EyeOff} size="sm" /> : <Icon icon={Eye} size="sm" />}
-          </button>
+          </button>}
         </header>
 
         <div className="sidebar-actions">
@@ -527,7 +528,7 @@ function ProjectSidebarImpl({
                             onSelectSession(activeTarget);
                           }
                         }}
-                        title={s.title}
+                        title={s.isLegacyApprovalPollution ? `${s.title} · ${dict.pollutionBadge}` : s.title}
                         data-testid={`sidebar-session-${s.sessionId}`}
                       >
                         {liveStatus === 'streaming' || liveStatus === 'waiting_approval' || liveStatus === 'waiting_question' || liveStatus === 'error' ? (
@@ -566,11 +567,7 @@ function ProjectSidebarImpl({
                               {s.title}
                             </span>
                           )}
-                          {s.isLegacyApprovalPollution && !editing && (
-                            <span className="thread-meta">
-                              <span className="badge badge-warning">{dict.pollutionBadge}</span>
-                            </span>
-                          )}
+                          {/* S2：旧污染会话以降权样式 + 标题提示区分，不再在每行挂醒目徽章 */}
                         </div>
                         {branchCount > 1 && !editing && (
                           <span

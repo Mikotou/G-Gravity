@@ -1084,4 +1084,64 @@ describe('v0.2.2 Approve for me 完整逻辑修复（无外部复核 + 有外部
     expect(onSelectTab).toHaveBeenCalledWith('context');
     expect(onSelectTab).toHaveBeenCalledWith('swarm');
   });
+
+  it('18) Tier A 底线附带外部 AI 复核时，明确标注不受 AI 评分与意图放行并将 AI 横幅标为风险参考、去除重复底线前缀', () => {
+    const tierAReq: PendingApprovalRequest = {
+      requestId: 'req-tier-a-ref',
+      sessionId: 'sess-tier-a',
+      toolCallId: 'tc-tier-a',
+      toolName: 'run_command',
+      commandOrSummary: 'echo "reject(169.254.169.254)" > /etc/hysteria/config.yaml',
+      cwd: 'C:\\Users\\Admin',
+      createdAt: new Date().toISOString(),
+      riskLevel: 'high',
+      floorTier: 'tier_a_immutable',
+      screeningSource: 'ai-reviewer-fallback',
+      explanation: {
+        meaning: '写入 Hysteria 2 ACL 配置',
+        target: '工作目录：C:\\Users\\Admin',
+        risk: '网络请求指向云元数据或受限 Google 内部服务，必须人工确认',
+      },
+      aiSuggestion: {
+        recommended: 'ask',
+        riskScore: 70,
+        intentAlignment: 'aligned',
+        model: 'gemini-4-hydrogen',
+        latencyMs: 5850,
+        isError: false,
+        reason: '网络请求指向云元数据或受限 Google 内部服务，必须人工确认。外部 AI 评估：脚本中的元数据 IP 为拒绝访问的 ACL 规则，符合用户意图且风险可控。',
+      },
+    };
+
+    const { rerender } = render(
+      <I18nProvider locale="zh-CN" onChangeLocale={() => {}}>
+        <InlineRequestView request={tierAReq} onSubmitDecision={vi.fn(async () => {})} />
+      </I18nProvider>
+    );
+
+    const floorBanner = screen.getByTestId('request-floor-tier-req-tier-a-ref');
+    expect(floorBanner.textContent).toContain('已由安全底线强制转人工（不受 AI 评分与意图放行）');
+    expect(floorBanner.textContent).toContain('网络请求指向云元数据或受限 Google 内部服务，必须人工确认');
+    expect(floorBanner.textContent).toContain('下方 AI 解释仅作人工审查参考');
+
+    const aiBanner = screen.getByTestId('request-ai-reason-req-tier-a-ref');
+    expect(aiBanner.textContent).toContain('AI 风险参考（仅辅助人工）：');
+    expect(aiBanner.textContent).toContain('脚本中的元数据 IP 为拒绝访问的 ACL 规则');
+    expect(aiBanner.textContent).not.toContain('外部 AI 评估：');
+    expect(screen.getByTestId('risk-score-req-tier-a-ref').getAttribute('title')).toContain('仅作人工参考');
+    expect(screen.getByTestId('intent-alignment-req-tier-a-ref').getAttribute('title')).toContain('仅作人工参考');
+
+    // 英文界面同样清晰区分底线强转与 AI 辅助参考
+    rerender(
+      <I18nProvider locale="en-US" onChangeLocale={() => {}}>
+        <InlineRequestView request={tierAReq} onSubmitDecision={vi.fn(async () => {})} />
+      </I18nProvider>
+    );
+    expect(screen.getByTestId('request-floor-tier-req-tier-a-ref').textContent).toContain(
+      'Mandatory manual check — overrides AI score & intent'
+    );
+    expect(screen.getByTestId('request-ai-reason-req-tier-a-ref').textContent).toContain(
+      'AI Reference (advisory only):'
+    );
+  });
 });

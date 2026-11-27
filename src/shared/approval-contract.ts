@@ -18,6 +18,53 @@ export type InlineApprovalDecisionType =
   | 'approve_for_me_ai'
   | 'reject_with_feedback';
 
+export const MAX_APPROVAL_PATTERNS_PER_KIND = 50;
+
+export type ApprovalPatternErrorCode =
+  | 'not_string'
+  | 'empty'
+  | 'whitespace_only'
+  | 'too_long'
+  | 'unsafe_syntax'
+  | 'invalid_regex';
+
+export interface ApprovalPatternValidationResult {
+  valid: boolean;
+  code?: ApprovalPatternErrorCode;
+  /** 提示是否为会大范围放行的宽泛匹配（如 ^.* / ^.+ / ^） */
+  broadMatchWarning?: boolean;
+}
+
+/**
+ * 共享审批正则校验（与主进程 compileSafePattern 同源）：
+ * 拒绝非字符串、空串、纯空白新增、超 200 字符、分组/花括号/数字反向引用/前瞻以及未锚定的 +/* 量词。
+ */
+export function validateApprovalPattern(pattern: unknown): ApprovalPatternValidationResult {
+  if (typeof pattern !== 'string') return { valid: false, code: 'not_string' };
+  if (pattern.length === 0) return { valid: false, code: 'empty' };
+  if (pattern.trim().length === 0) return { valid: false, code: 'whitespace_only' };
+  if (pattern.length > 200) return { valid: false, code: 'too_long' };
+  if (
+    /[(){}]|\\[1-9]|\(\?/.test(pattern) ||
+    (pattern.match(/[+*]/g)?.length || 0) > 1 ||
+    (pattern.match(/\?/g)?.length || 0) > 4 ||
+    (/[+*]/.test(pattern) && !pattern.startsWith('^'))
+  ) {
+    return { valid: false, code: 'unsafe_syntax' };
+  }
+  try {
+    new RegExp(pattern, 'i');
+  } catch {
+    return { valid: false, code: 'invalid_regex' };
+  }
+  const broadMatchWarning =
+    /^\^(?:\.[*+]?\$?)?$/.test(pattern.trim()) ||
+    /^\^\[\^[^\]]+\][*+]\$?$/.test(pattern.trim()) ||
+    pattern.trim() === '.' ||
+    pattern.trim() === '$';
+  return { valid: true, ...(broadMatchWarning ? { broadMatchWarning: true } : {}) };
+}
+
 export interface ApprovalRiskExplanation {
   /** 【命令含义】 */
   meaning: string;

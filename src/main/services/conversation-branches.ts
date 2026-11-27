@@ -131,7 +131,6 @@ export class ConversationBranches {
         const replaceId = (val: string | null) => (val === origin.sessionId ? id : val);
         originalLayout = this.settings.layout;
         this.settings.saveWorkspaceLayout({
-          ...this.settings.layout,
           openTabSessionIds: [...new Set(this.settings.layout.openTabSessionIds.map(t => (t === origin.sessionId ? id : t)))],
           activePrimarySessionId: replaceId(this.settings.layout.activePrimarySessionId),
           splitSecondarySessionId: replaceId(this.settings.layout.splitSecondarySessionId),
@@ -164,7 +163,11 @@ export class ConversationBranches {
             if (originalLayout && replacedLayout) {
               const current = this.settings.layout;
               const undo = (value: string | null) => value === id ? origin.sessionId : value;
-              this.settings.saveWorkspaceLayout(current === replacedLayout ? originalLayout : {
+              this.settings.saveWorkspaceLayout(current === replacedLayout ? {
+                openTabSessionIds: originalLayout.openTabSessionIds,
+                activePrimarySessionId: originalLayout.activePrimarySessionId,
+                splitSecondarySessionId: originalLayout.splitSecondarySessionId,
+              } : {
                 openTabSessionIds: [...new Set(current.openTabSessionIds.map(tab => undo(tab)!))],
                 activePrimarySessionId: undo(current.activePrimarySessionId),
                 splitSecondarySessionId: undo(current.splitSecondarySessionId),
@@ -178,6 +181,11 @@ export class ConversationBranches {
           }
         }
         if (!this.app.sessions.isActive(origin.sessionId)) await this.app.resumeSession(origin.sessionId, origin.cwd).catch(() => {});
+        const restoredRoot = this.app.sessions.sessions.get(rootId);
+        if (restoredRoot) this.app.emit('session-updated', this.context.enrich(restoredRoot));
+        const restoredOrigin = origin.sessionId !== rootId ? this.app.sessions.sessions.get(origin.sessionId) : undefined;
+        if (restoredOrigin) this.app.emit('session-updated', this.context.enrich(restoredOrigin));
+        this.emitTreeUpdate(rootId);
       }
       throw error;
     } finally { this.revising.delete(origin.sessionId); }
@@ -247,7 +255,6 @@ export class ConversationBranches {
         const rawSecondary = replaceId(this.settings.layout.splitSecondarySessionId);
         const nextSecondary = rawSecondary && rawSecondary !== nextPrimary ? rawSecondary : null;
         this.settings.saveWorkspaceLayout({
-          ...this.settings.layout,
           openTabSessionIds: nextTabs,
           activePrimarySessionId: nextPrimary,
           splitSecondarySessionId: nextSecondary,
@@ -280,7 +287,13 @@ export class ConversationBranches {
       if (profile !== this.app.accounts.activeProfileId) throw error;
       const rollbackErrors: unknown[] = [];
       if (previousLayout && previousLayout !== this.settings.layout) {
-        try { this.settings.saveWorkspaceLayout(previousLayout); } catch (err) { rollbackErrors.push(err); }
+        try {
+          this.settings.saveWorkspaceLayout({
+            openTabSessionIds: previousLayout.openTabSessionIds,
+            activePrimarySessionId: previousLayout.activePrimarySessionId,
+            splitSecondarySessionId: previousLayout.splitSecondarySessionId,
+          });
+        } catch (err) { rollbackErrors.push(err); }
       }
       if (changedSelection && previousSelection) {
         try { this.app.trees.setActiveBranch(rootId, previousSelection); } catch (err) { rollbackErrors.push(err); }

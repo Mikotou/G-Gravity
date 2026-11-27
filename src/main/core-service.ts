@@ -10,7 +10,7 @@ import type {
   OpenLinkOrFileResult, ReviseMessageInput, SendPromptInput,
 } from '../shared/ipc-channels';
 import type {
-  ManagedSessionSummary, SessionAction, TitleOrganizeRequest, WorkspaceLayoutState,
+  GetSessionPlanArtifactInput, ManagedSessionSummary, PlanArtifactSnapshot, SessionAction, TitleOrganizeRequest, WorkspaceLayoutState,
 } from '../shared/session-contract';
 import { MAX_PARALLEL_ACTIVE_SESSIONS } from '../shared/session-contract';
 import type { ClientPreferences, GravityIconPreference } from '../shared/theme-i18n-contract';
@@ -35,6 +35,7 @@ import { AccountQuotaUnavailable, MacQuotaNotReported, readAccountQuota } from '
 import { AccountManager } from './accounts/account-manager';
 import { PluginsManager } from './plugins/plugins-manager';
 import { WorkspaceFiles } from './workspace/workspace-files';
+import { PlanArtifactReader } from './session/plan-artifact-reader';
 import { InspectorStore } from './session/inspector-store';
 import { ConversationTreeStore } from './session/conversation-tree-store';
 import { GitHubUpdater } from './updater/github-updater';
@@ -67,6 +68,14 @@ export class CoreService extends EventEmitter {
   get inspector(): InspectorStore { return this.lifecycle.profileData.inspector; }
   get trees(): ConversationTreeStore { return this.lifecycle.profileData.trees; }
   disposed = false;
+  private readonly planArtifacts = new PlanArtifactReader(owner => {
+    if (this.disposed || this.accounts.busy || owner.profileId !== this.accounts.activeProfileId ||
+        owner.profileId !== this.sessions.profileId || !this.sessions.ownsSession(owner.sessionId)) return;
+    const session = this.sessions.sessions.get(owner.sessionId);
+    if (!session || session.profileId !== owner.profileId) return;
+    const messages = this.messages;
+    return { ...this.mediaContext(), cwd: session.cwd, generation: messages, references: readArchives => messages.planReferences(owner.sessionId, readArchives) };
+  }, changed => this.emit('plan-artifact-changed', changed));
   private readonly turns = new TurnOrchestrator(this);
   private readonly monitor: TelemetryCoordinator;
   private readonly lifecycle: SessionLifecycleService;
@@ -102,7 +111,8 @@ export class CoreService extends EventEmitter {
       new ThoughtTranslator((originalText, thoughtId, signal) =>
         this.translation.translateThoughtSegment(originalText, thoughtId, signal)
       );
-    this.plugins = new PluginsManager({ store: this.store, binaryPath: options.acpOptions?.binaryPath, executor: options.pluginsExecutor, homeDir: options.homeDir });
+    this.plugins = new PluginsManager({ store: this.store, binaryPath: options.acpOptions?.binaryPath, executor: options.pluginsExecutor, homeDir: options.homeDir,
+      activeProfile: () => { this.accounts.assertReady(); return this.accounts.activeProfileId; } });
     this.updater = new GitHubUpdater({
       currentVersion: options.appVersion || APP_BRAND.version,
       updatesDir: join(options.dataDir, 'updates'),
@@ -121,6 +131,7 @@ export class CoreService extends EventEmitter {
     // 切换账号要跨越两套会话状态。旧消息在切换前保存，新账号的消息在窗格和内存索引清空后载入。
     this.accounts = new AccountManager({ store: this.store, client: this.client, sessions: this.sessions,
       beforeSwitch: async () => {
+        if (this.plugins.changingCli) throw new Error('官方 CLI 管理操作正在执行，请稍后切换账号');
         if (this.lifecycle.managing.size || this.branches.revising.size || this.sessions.isOpeningSession || this.titleOrganizer.organizingTitles) throw new Error('正在创建、恢复或整理会话，请稍后切换账号');
         await this.lifecycle.completePendingDeletions();
         await this.flushSwarm();
@@ -131,6 +142,7 @@ export class CoreService extends EventEmitter {
         this.messages.save();
       },
       afterDisconnect: async () => {
+        this.planArtifacts.clear();
         this.turns.releaseProfile();
         this.inspector.flush();
         await this.flushSwarm();
@@ -156,6 +168,9 @@ export class CoreService extends EventEmitter {
     });
     this.client.on('connected', () => this.publishConnection());
     this.client.on('connection-changed', () => this.publishConnection());
+    this.on('message-upserted', ({ sessionId, message }) => {
+      this.planArtifacts.messageChanged({ profileId: this.accounts.activeProfileId, sessionId }, message);
+    });
     this.turns.bindEvents();
   }
   getPreferences(): ClientPreferences { return structuredClone(this.settings.preferences); }
@@ -194,7 +209,7 @@ export class CoreService extends EventEmitter {
     await Promise.allSettled(requests.map(request => request.result));
   }
 
-  async getAccountQuota(manual = true): Promise<AccountQuotaReadResult> {
+  async getAccountQuota(manual = false): Promise<AccountQuotaReadResult> {
     this.accounts.assertReady();
     if (this.disposed) throw new Error('客户端正在退出。');
     if (typeof manual !== 'boolean') throw new Error('额度刷新参数无效');
@@ -206,7 +221,6 @@ export class CoreService extends EventEmitter {
       }
     };
     assertAllowed();
-    if (manual) this.quotaResumedAfter = deadline;
     const state = this.accounts.getState();
     const profile = state.profiles.find(p => p.profileId === state.activeProfileId)!;
     const existing = this.quotaRequests.get(profile.profileId);
@@ -219,6 +233,10 @@ export class CoreService extends EventEmitter {
           throw new Error(officialLoginRequiredMessage);
         }
         throw error;
+      }).then(value => {
+        if (manual && !('unavailable' in value) && !controller.signal.aborted && !this.disposed &&
+            this.accounts.activeProfileId === profile.profileId && this.client.cooldownUntilMs === deadline) this.quotaResumedAfter = deadline;
+        return value;
       }).finally(() => this.quotaRequests.delete(profile.profileId));
     this.quotaRequests.set(profile.profileId, { controller, result });
     return result;
@@ -283,14 +301,20 @@ export class CoreService extends EventEmitter {
     return inspectLocalTargets(input, this.mediaContext());
   }
   async openLinkOrFileTarget(input: OpenLinkOrFileInput): Promise<OpenLinkOrFileResult> {
-    return openExternalTarget(input, this.options, this.accounts);
+    return openExternalTarget(input, this.options, this.accounts, owner => this.planArtifacts.get(owner));
   }
   async getAccountsState() { return this.accounts.getState(); }
   async createAccountProfile(input: CreateAccountProfileInput) { return this.accounts.createProfile(input); }
   async deleteAccountProfile(profileId: string) { return this.accounts.deleteProfile(profileId); }
   async switchAccountProfile(profileId: string) { return this.accounts.switchProfile(profileId); }
   async officialLogout() { return this.accounts.logout(); }
-  async getSessionInspector(sessionId: string) { return this.inspector.get(sessionId); }
+  async getSessionInspector(sessionId: string) {
+    this.planArtifacts.observe({ profileId: this.accounts.activeProfileId, sessionId });
+    return this.inspector.get(sessionId);
+  }
+  async getSessionPlanArtifact(input: GetSessionPlanArtifactInput): Promise<PlanArtifactSnapshot> {
+    return this.planArtifacts.get(input);
+  }
   async listWorkspaceFiles(cwd: string, query?: string) { return this.workspaceFiles.list(cwd, query); }
   async getPluginsSnapshot(workspaceCwd?: string) { return this.plugins.getSnapshot(workspaceCwd); }
   async runPluginAction(input: PluginActionInput) { return this.plugins.runPluginAction(input); }
@@ -309,6 +333,7 @@ export class CoreService extends EventEmitter {
   /** 退出时先终止定时器与事件来源，再刷新用量账本。即便写盘抛错，finally 也会关闭 ACP 连接。 */
   async dispose(): Promise<void> {
     this.disposed = true;
+    this.planArtifacts.clear();
     const quotaStopped = this.cancelQuotaRequests();
     this.monitor.dispose();
     if (this.autoUpdateTimer) { clearTimeout(this.autoUpdateTimer); this.autoUpdateTimer = undefined; }

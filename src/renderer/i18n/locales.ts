@@ -1,4 +1,5 @@
 import { V034_EN, V034_ZH, type V034Strings } from './domains/v034';
+import { V035_EN, V035_ZH, type V035Strings } from './domains/v035';
 import { COPY_EN, COPY_ZH, type ComponentCopyStrings } from './domains/copy';
 import type {
   AgentExecutionMode,
@@ -501,6 +502,7 @@ export interface WorkbenchStrings {
   requestWhyManual: string;
   screeningAiRequestedReview: string;
   aiReviewNoteLabel: string;
+  aiReviewReferenceLabel: string;
   aiReviewDenyLabel: string;
   aiReviewErrorLabel: string;
   commandExpand: string;
@@ -530,10 +532,6 @@ export interface WorkbenchStrings {
   trustLoading: string;
   trustRevokePrefix: (prefix: string) => string;
   trustUnavailable: string;
-  guardBurstEnabled: (count: number) => string;
-  guardBurstCleared: string;
-  guardReviewCancelled: string;
-  guardBurstPill: string;
   welcomeQuickPlaceholder: string;
   welcomeQuickChooseDir: string;
   welcomeQuickBrowse: string;
@@ -567,6 +565,8 @@ export interface WorkbenchStrings {
   v033: V033Strings;
   /* ---- v0.3.4 五维重塑（按域拆分，见 i18n/domains/v034.ts & copy.ts） ---- */
   v034: V034Strings;
+  /* ---- v0.3.5 热力图 / Plan 提问与检视器 / UI 精简（见 i18n/domains/v035.ts） ---- */
+  v035: V035Strings;
   copy: ComponentCopyStrings;
 }
 
@@ -603,6 +603,10 @@ export interface V032Strings {
   /** 审批卡片规则地板层级 */
   floorTierALabel: string;
   floorTierADesc: string;
+  floorTierAWithAiLabel: string;
+  floorTierAWithAiDesc: (reason?: string) => string;
+  floorTierAReferenceHint: string;
+  screeningFloorForcedManual: string;
   floorTierBLabel: string;
   floorTierBDesc: (alignment: 'aligned' | 'uncertain' | 'misaligned' | undefined) => string;
   /** 回合结算状态条 */
@@ -723,6 +727,7 @@ const WORKBENCH_ZH: WorkbenchStrings = {
   requestWhyManual: '转交原因',
   screeningAiRequestedReview: '外部 AI 复核转人工',
   aiReviewNoteLabel: 'AI 代审说明',
+  aiReviewReferenceLabel: 'AI 风险参考（仅辅助人工）',
   aiReviewDenyLabel: 'AI 代审建议拒绝',
   aiReviewErrorLabel: 'AI 代审异常',
   commandExpand: '展开完整内容',
@@ -752,10 +757,6 @@ const WORKBENCH_ZH: WorkbenchStrings = {
   trustLoading: '正在读取本会话授权…',
   trustRevokePrefix: (p) => `撤销前缀 ${p}`,
   trustUnavailable: '当前连接不支持查看授权明细',
-  guardBurstEnabled: (n) => `突发保护已开启：短时间内出现 ${n} 项操作，后续操作需人工确认`,
-  guardBurstCleared: '突发保护已解除',
-  guardReviewCancelled: '已中止 AI 复核，转为人工审批',
-  guardBurstPill: '突发保护中',
   welcomeQuickPlaceholder: '描述你要完成的任务，按 Enter 在所选目录新建会话并发送…',
   welcomeQuickChooseDir: '选择工作目录',
   welcomeQuickBrowse: '浏览其他目录…',
@@ -869,6 +870,13 @@ const WORKBENCH_ZH: WorkbenchStrings = {
     policySaved: '放行策略已保存。',
     floorTierALabel: '触及账号安全底线，需人工确认',
     floorTierADesc: '此类操作涉及账号安全/防封号红线（凭据、.gemini 受保护目录、云元数据、受限 Google 内部地址、截断载荷或你设定的询问规则），不允许 AI 代为放行。',
+    floorTierAWithAiLabel: '已由安全底线强制转人工（不受 AI 评分与意图放行）',
+    floorTierAWithAiDesc: (reason) =>
+      reason
+        ? `${reason}。此红线优先级高于 AI 风险分与意图判定，即使评分低于自动放行上限也不会自动放行；下方 AI 解释仅作人工审查参考。`
+        : '此类操作触及账号安全/防封号红线，优先级高于 AI 风险分与意图判定，即使评分低于自动放行上限也不会自动放行；下方 AI 解释仅作人工审查参考。',
+    floorTierAReferenceHint: '已命中安全底线，此评估仅作人工参考，不会触发自动放行',
+    screeningFloorForcedManual: '安全底线强制转人工（附 AI 参考）',
     floorTierBLabel: '高风险操作，需确认是否符合你的意图',
     floorTierBDesc: (a) =>
       a === 'misaligned'
@@ -895,6 +903,7 @@ const WORKBENCH_ZH: WorkbenchStrings = {
     terminalRejected: '已拦截',
   },
   v034: V034_ZH,
+  v035: V035_ZH,
   copy: COPY_ZH,
 };
 
@@ -949,6 +958,7 @@ const WORKBENCH_EN: WorkbenchStrings = {
   requestWhyManual: 'Why manual',
   screeningAiRequestedReview: 'External AI requested review',
   aiReviewNoteLabel: 'AI Review Note',
+  aiReviewReferenceLabel: 'AI Reference (advisory only)',
   aiReviewDenyLabel: 'AI Review Deny',
   aiReviewErrorLabel: 'AI Review Error',
   commandExpand: 'Show all',
@@ -978,10 +988,6 @@ const WORKBENCH_EN: WorkbenchStrings = {
   trustLoading: 'Loading session approvals…',
   trustRevokePrefix: (p) => `Revoke prefix ${p}`,
   trustUnavailable: 'Approval details are unavailable on this connection',
-  guardBurstEnabled: (n) => `Burst guard on: ${n} rapid actions detected, the next ones need your approval`,
-  guardBurstCleared: 'Burst guard cleared',
-  guardReviewCancelled: 'AI review stopped. Waiting for your approval.',
-  guardBurstPill: 'Burst guard',
   welcomeQuickPlaceholder: 'Describe a task — press Enter to start a thread in the selected folder…',
   welcomeQuickChooseDir: 'Choose working folder',
   welcomeQuickBrowse: 'Browse for another folder…',
@@ -1095,6 +1101,13 @@ const WORKBENCH_EN: WorkbenchStrings = {
     policySaved: 'Pass policy saved.',
     floorTierALabel: 'Hits an account-safety floor — needs you',
     floorTierADesc: 'This touches an account-safety / anti-ban floor (credentials, protected .gemini paths, cloud metadata, internal Google hosts, truncated payload, or your Ask rules) and cannot be auto-approved by AI.',
+    floorTierAWithAiLabel: 'Mandatory manual check — overrides AI score & intent',
+    floorTierAWithAiDesc: (reason) =>
+      reason
+        ? `${reason}. This safety floor overrides AI risk score and intent alignment — even scores below the auto-pass cap require your approval; AI notes below are for your reference only.`
+        : 'This touches an account-safety / anti-ban floor that overrides AI risk score and intent alignment — even scores below the auto-pass cap require your approval; AI notes below are for your reference only.',
+    floorTierAReferenceHint: 'A safety floor applies — this AI assessment is advisory only and will not auto-approve',
+    screeningFloorForcedManual: 'Safety floor required manual check (with AI notes)',
     floorTierBLabel: 'High-risk — confirm it matches your intent',
     floorTierBDesc: (a) =>
       a === 'misaligned'
@@ -1121,6 +1134,7 @@ const WORKBENCH_EN: WorkbenchStrings = {
     terminalRejected: 'Blocked',
   },
   v034: V034_EN,
+  v035: V035_EN,
   copy: COPY_EN,
 };
 

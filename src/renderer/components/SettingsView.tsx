@@ -64,8 +64,10 @@ import {
 } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { formatActionError, type SettingsSection } from '../i18n/locales';
+import { usePrefsFeedback } from './settings/usePrefsFeedback';
+import { handleTablistKeyDown } from '../hooks/useRovingTabs';
 import { getDesktopBridge } from '../services/desktop-bridge';
-import { isImeComposing } from '../lib/platform-keys';
+import { isImeComposing, isPrimaryModifier } from '../lib/platform-keys';
 import { DraftNumberInput } from './settings/DraftNumberInput';
 import { resolveGravityIconVariant } from '../styles/theme';
 import { formatTokenShort, formatUsd } from './ContextStatusBar';
@@ -76,6 +78,7 @@ import { Icon as UiIcon } from './ui/Icon';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { scrollBehavior } from '../lib/motion';
 import { projectApiKeyForSubmit } from '../lib/api-key-projection';
+import { canAutoDiscoverExternalModels, resolveExternalTargetOrigin } from '../lib/external-endpoint';
 import { SettingsDirtyContext, useSettingsDirty } from './settings/settings-dirty';
 
 export type { SettingsSection };
@@ -121,11 +124,12 @@ export interface SettingsViewProps {
   onQuickCreateInProject?: (cwd: string, mode?: AgentExecutionMode) => Promise<void>;
 }
 
+const APPEARANCE_SECTIONS: ReadonlyArray<SettingsSection> = ['themes', 'tokens', 'icons'];
+
 const NAV: ReadonlyArray<{ group: 'app' | 'workspace' | 'info'; id: SettingsSection; Icon: typeof Palette }> = [
   { group: 'app', id: 'general', Icon: SlidersHorizontal },
+  // SV1：主题 / 自定义配色 / 应用图标合并为「外观」一级导航 + 二级页签（旧 section id 'tokens' / 'icons' 深链仍然有效）
   { group: 'app', id: 'themes', Icon: Palette },
-  { group: 'app', id: 'tokens', Icon: Paintbrush },
-  { group: 'app', id: 'icons', Icon: Sparkles },
   { group: 'workspace', id: 'projects', Icon: FolderKanban },
   { group: 'workspace', id: 'accounts', Icon: UserRound },
   { group: 'workspace', id: 'approvals', Icon: ShieldCheck },
@@ -179,6 +183,7 @@ function GeneralPanel({
   onOpenProjectsTab: () => void;
 }): React.ReactElement {
   const { locale, dict, setLocale, shortcut } = useI18n();
+  const { save: savePref, feedback: prefsFeedback } = usePrefsFeedback(onUpdatePreferences);
   const isZh = locale === 'zh-CN';
   const [scale, setScale] = useState(clampUiScale(preferences.uiScale));
   const scaleControl = useRef<{ confirmed: number; draft?: number; save: number }>({ confirmed: scale, save: 0 });
@@ -188,8 +193,8 @@ function GeneralPanel({
     const control = scaleControl.current;
     control.draft = undefined;
     const save = ++control.save;
-    void onUpdatePreferences({ uiScale: value }).catch(() => {
-      if (save === control.save && control.draft === undefined) setScale(control.confirmed);
+    void savePref({ uiScale: value }).then((ok) => {
+      if (!ok && save === control.save && control.draft === undefined) setScale(control.confirmed);
     });
   }
 
@@ -328,26 +333,23 @@ function GeneralPanel({
     [dict]
   );
 
-  // 填写翻译 API Key（或本机 Ollama）后自动防抖拉取可用模型列表
+  const translatorOrigin = resolveExternalTargetOrigin(draftExt.endpoint);
+
+  // AP-1：仅无鉴权本机 Ollama（http://127.0.0.1）保留自动防抖模型发现；凡携带 API Key 或已存密钥的外部服务必须由用户显式点击按钮触发。
   useEffect(() => {
     if (!externalExpanded) return;
     const ep = draftExt.endpoint.trim();
     const key = draftExt.apiKey?.trim() || '';
-    const readyToProbe =
-      Boolean(ep) &&
-      (draftExt.provider === 'local-ollama'
-        ? /^http:\/\/127\.0\.0\.1(?::\d+)?/i.test(ep)
-        : key.length >= 16 || (!key && Boolean(draftExt.hasApiKey)));
-    if (!readyToProbe) return;
-    const probeKey = `${draftExt.provider}\0${ep}\0${key}`;
+    if (!canAutoDiscoverExternalModels({ provider: draftExt.provider, endpoint: ep, apiKey: key, hasApiKey: savedExtKey })) return;
+    const probeKey = `${draftExt.provider}\0${ep}`;
     if (probeKey === lastAutoDiscoveryKeyRef.current) return;
     const timer = window.setTimeout(() => {
       if (lastAutoDiscoveryKeyRef.current === probeKey) return;
       lastAutoDiscoveryKeyRef.current = probeKey;
-      void fetchTranslatorModels(draftExt.provider, ep, key);
+      void fetchTranslatorModels(draftExt.provider, ep);
     }, 650);
     return () => window.clearTimeout(timer);
-  }, [externalExpanded, draftExt.provider, draftExt.endpoint, draftExt.apiKey, fetchTranslatorModels]);
+  }, [externalExpanded, draftExt.provider, draftExt.endpoint, draftExt.apiKey, savedExtKey, fetchTranslatorModels]);
 
   const selectedModelMeta = useMemo<ExternalReviewerModelOption>(() => {
     const found = discoveredModels.find((m) => m.id === draftExt.model);
@@ -519,6 +521,7 @@ function GeneralPanel({
 
   return (
     <div className="settings-section">
+      {prefsFeedback}
       <div className="settings-group">
         <div className="setting-row">
           <span className="setting-label">{dict.languageLabel}</span>
@@ -549,7 +552,7 @@ function GeneralPanel({
                 key={track}
                 type="button"
                 className={`segmented-btn ${preferences.defaultThoughtTrack === track ? 'is-active' : ''}`}
-                onClick={() => void onUpdatePreferences({ defaultThoughtTrack: track })}
+                onClick={() => void savePref({ defaultThoughtTrack: track })}
               >
                 {track === 'zh' ? dict.thoughtTrackZh : dict.thoughtTrackRaw}
               </button>
@@ -602,7 +605,7 @@ function GeneralPanel({
               type="checkbox"
               checked={preferences.processPerSession}
               aria-label={dict.processPerSessionLabel}
-              onChange={(e) => void onUpdatePreferences({ processPerSession: e.target.checked })}
+              onChange={(e) => void savePref({ processPerSession: e.target.checked })}
             />
             <span className="switch-track" />
           </label>
@@ -769,6 +772,12 @@ function GeneralPanel({
             <div className="setting-row">
               <span className="setting-text">
                 <span className="setting-label">{dict.reviewerEndpointLabel}</span>
+                <span className="setting-desc mono" data-testid="translator-target-origin">
+                  {translatorOrigin ? dict.ui.v035.targetOrigin(translatorOrigin) : dict.ui.v035.targetOriginInvalid}
+                </span>
+                <span className="setting-desc" data-testid="translator-auto-discover-hint">
+                  {dict.ui.v035.autoDiscoverLocalOnly}
+                </span>
               </span>
               <input
                 className="input input-mono w-280"
@@ -1141,6 +1150,7 @@ function ProjectsPanel({
   onClose: () => void;
 }): React.ReactElement {
   const { dict, mac } = useI18n();
+  const { save: savePref, feedback: prefsFeedback } = usePrefsFeedback(onUpdatePreferences);
   const projects = preferences.projects ?? [];
 
   const [defaultCwd, setDefaultCwd] = useState(preferences.defaultWorkspaceCwd || '');
@@ -1248,6 +1258,7 @@ function ProjectsPanel({
 
   return (
     <div className="settings-section" data-testid="projects-settings-panel">
+      {prefsFeedback}
       {error && (
         <div role="alert" className="alert">
           {error}
@@ -1407,7 +1418,7 @@ function ProjectsPanel({
                     className="icon-btn icon-btn-sm"
                     title={dict.ui.copy.setAsDefaultFolder}
                     aria-label={dict.ui.copy.setAsDefaultFolder}
-                    onClick={() => void onUpdatePreferences({ defaultWorkspaceCwd: proj.path })}
+                    onClick={() => void savePref({ defaultWorkspaceCwd: proj.path })}
                     data-testid={`set-default-project-${proj.id}`}
                   >
                     <UiIcon icon={Star} size="sm" style={{ color: isDef ? 'var(--accent-primary)' : undefined }} />
@@ -1418,7 +1429,7 @@ function ProjectsPanel({
                     title={proj.pinned ? dict.unpinSession : dict.pinSession}
                     aria-label={proj.pinned ? dict.unpinSession : dict.pinSession}
                     onClick={() =>
-                      void onUpdatePreferences({
+                      void savePref({
                         projects: projects.map((p) => (p.id === proj.id ? { ...p, pinned: !p.pinned } : p)),
                       })
                     }
@@ -1449,7 +1460,7 @@ function ProjectsPanel({
                     onClick={() => {
                       // 删除正在编辑的项目时同步退出编辑态，否则随后的保存会因找不到原条目而静默失效。
                       if (editingId === proj.id) resetForm();
-                      void onUpdatePreferences({
+                      void savePref({
                         projects: projects.filter((p) => p.id !== proj.id),
                       }).catch((err) => setError(formatActionError(err, dict)));
                     }}
@@ -1492,6 +1503,7 @@ function AboutPanel({
   onInstallUpdate: () => Promise<void>;
 }): React.ReactElement {
   const { dict, shortcut, keys } = useI18n();
+  const { save: savePref, feedback: prefsFeedback } = usePrefsFeedback(onUpdatePreferences);
   const icon = resolveGravityIconVariant(preferences.appIcon, preferences.theme, preferences.customTheme);
   const autoCheckEnabled = preferences.autoCheckUpdates !== false;
   const repoUrl = updateState.repoUrl || APP_BRAND.repoUrl;
@@ -1515,14 +1527,20 @@ function AboutPanel({
     void getDesktopBridge().openLinkOrFileTarget({ target, action: 'browser' }).catch(() => {});
   };
 
+  const currentVer = (updateState.currentVersion || APP_BRAND.version || '').trim();
+  const latestVer = (updateState.latestVersion || '').trim();
+
   return (
     <div className="settings-section" data-testid="about-gravity-modal">
+      {prefsFeedback}
       <div className="about-hero">
         <img src={icon.publicSvgUrl} alt={APP_BRAND.name} />
         <div>
           <div className="inline-cluster">
             <h3>{APP_BRAND.name}</h3>
-            <span className="badge badge-accent badge-mono">v{updateState.currentVersion || APP_BRAND.version}</span>
+            <span className="badge badge-accent badge-mono" data-testid="about-current-version">
+              {currentVer ? `v${currentVer}` : dict.ui.v035.updateVersionUnknown}
+            </span>
           </div>
           <div className="muted mt-4">{dict.appTagline}</div>
         </div>
@@ -1556,7 +1574,7 @@ function AboutPanel({
               type="checkbox"
               checked={autoCheckEnabled}
               aria-label={dict.updatesAutoCheckLabel}
-              onChange={(e) => void onUpdatePreferences({ autoCheckUpdates: e.target.checked })}
+              onChange={(e) => void savePref({ autoCheckUpdates: e.target.checked })}
               data-testid="auto-check-updates-toggle"
             />
             <span className="switch-track" />
@@ -1576,14 +1594,14 @@ function AboutPanel({
                 <UiIcon icon={Check} size="sm" />
                 <span>
                   {dict.updatesUpToDate}
-                  {updateState.latestVersion ? ` (v${updateState.latestVersion})` : ''}
+                  {latestVer ? ` (v${latestVer})` : ''}
                 </span>
               </span>
             )}
             {updateState.status === 'available' && (
               <div className="update-available-meta">
-                <span className="badge badge-accent badge-mono">
-                  {dict.updatesAvailableBadge(updateState.latestVersion || '')}
+                <span className="badge badge-accent badge-mono" data-testid="update-available-version">
+                  {latestVer ? dict.updatesAvailableBadge(latestVer) : dict.ui.v035.updateVersionUnknown}
                 </span>
                 {updateState.asset ? (
                   <span className="muted mono truncate">
@@ -1606,15 +1624,23 @@ function AboutPanel({
                       : ''}
                   </span>
                 </div>
-                <div className="update-progress-track">
+                <div
+                  className="update-progress-track"
+                  role="progressbar"
+                  aria-label={dict.ui.v035.updateProgressLabel}
+                  aria-valuenow={progressPct}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  data-testid="update-download-progress"
+                >
                   <div className="update-progress-fill" style={{ '--fill': progressPct / 100 } as React.CSSProperties} />
                 </div>
               </div>
             )}
             {updateState.status === 'downloaded' && (
               <div className="update-available-meta">
-                <span className="badge badge-success badge-mono">
-                  v{updateState.latestVersion}
+                <span className="badge badge-success badge-mono" data-testid="update-downloaded-version">
+                  {latestVer ? `v${latestVer}` : dict.ui.v035.updateVersionUnknown}
                 </span>
                 <span className="muted truncate">{updateState.asset?.name}</span>
               </div>
@@ -1739,7 +1765,7 @@ function readNavWidth(): number {
 }
 
 export function SettingsView(props: SettingsViewProps): React.ReactElement {
-  const { dict, keys } = useI18n();
+  const { dict, keys, mac } = useI18n();
   const { section, onSectionChange, onClose } = props;
   const [navWidth, setNavWidth] = useState(readNavWidth);
   const dialogRef = useFocusTrap<HTMLDivElement>(true);
@@ -1786,7 +1812,7 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
         return;
       }
       // Ctrl/⌘+, 由工作台切换设置；存在草稿时在捕获阶段截住，改为确认。
-      if ((e.ctrlKey || e.metaKey) && e.key === ',' && dirtyRef.current) {
+      if (isPrimaryModifier(e, mac) && e.key === ',' && dirtyRef.current) {
         e.preventDefault();
         e.stopPropagation();
         setConfirmClose(true);
@@ -1794,7 +1820,7 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
     }
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [requestClose]);
+  }, [requestClose, mac]);
 
   // 设置导航只挂载当前栏目。保存偏好、执行管理操作等能力从 App 传入，各栏目保留自己的表单草稿。
   let content: React.ReactNode;
@@ -1867,6 +1893,7 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
       content = (
         <PluginsPanel
           snapshot={props.plugins}
+          activeProfile={props.accounts.profiles.find((p) => p.profileId === props.accounts.activeProfileId)}
           onRefresh={props.onRefreshPlugins}
           onRunPluginAction={props.onRunPluginAction}
           onRunMcpAction={props.onRunMcpAction}
@@ -1891,6 +1918,9 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
       );
   }
 
+  const isAppearance = APPEARANCE_SECTIONS.includes(section);
+  const navActive = (id: SettingsSection) => (id === 'themes' ? isAppearance : section === id);
+
   const hasPendingUpdate =
     props.updateState.status === 'available' || props.updateState.status === 'downloaded';
 
@@ -1908,7 +1938,8 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
                 <button
                   key={id}
                   type="button"
-                  className={`settings-nav-item ${section === id ? 'is-active' : ''}`}
+                  className={`settings-nav-item ${navActive(id) ? 'is-active' : ''}`}
+                  aria-current={navActive(id) ? 'page' : undefined}
                   onClick={() => onSectionChange(id)}
                   data-testid={`settings-tab-${id}`}
                 >
@@ -1943,7 +1974,7 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
         </nav>
         <section className="settings-main">
           <header className="settings-head">
-            <h2>{dict.settingsNav[section]}</h2>
+            <h2>{dict.settingsNav[isAppearance ? 'themes' : section]}</h2>
             <button type="button" className="icon-btn" onClick={requestClose} aria-label={dict.closeAction} title="Esc"
               data-testid="settings-close-btn">
               <UiIcon icon={X} size="md" />
@@ -1963,7 +1994,48 @@ export function SettingsView(props: SettingsViewProps): React.ReactElement {
             </div>
           )}
           <SettingsDirtyContext.Provider value={reportDirty}>
-            <div className="settings-body" key={section}>{content}</div>
+            <div className="settings-body">
+              {isAppearance && (
+                <div
+                  className="segmented segmented-sm settings-subnav"
+                  role="tablist"
+                  aria-label={dict.ui.v035.appearanceSubnavLabel}
+                  onKeyDown={(e) => handleTablistKeyDown(e)}
+                  data-testid="settings-appearance-subnav"
+                >
+                  {APPEARANCE_SECTIONS.map((id) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      id={`settings-subtab-${id}`}
+                      aria-selected={section === id}
+                      aria-controls="settings-appearance-panel"
+                      tabIndex={section === id ? 0 : -1}
+                      className={`segmented-btn ${section === id ? 'is-active' : ''}`}
+                      onClick={() => onSectionChange(id)}
+                      data-testid={id === 'themes' ? 'settings-subtab-themes' : `settings-tab-${id}`}
+                    >
+                      <UiIcon icon={id === 'themes' ? Palette : id === 'tokens' ? Paintbrush : Sparkles} size="sm" />
+                      <span>
+                        {id === 'themes'
+                          ? dict.ui.v035.appearanceSubTheme
+                          : id === 'tokens'
+                            ? dict.ui.v035.appearanceSubColors
+                            : dict.ui.v035.appearanceSubIcon}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {isAppearance ? (
+                <div key={section} role="tabpanel" id="settings-appearance-panel" aria-labelledby={`settings-subtab-${section}`}>
+                  {content}
+                </div>
+              ) : (
+                <React.Fragment key={section}>{content}</React.Fragment>
+              )}
+            </div>
           </SettingsDirtyContext.Provider>
         </section>
       </div>

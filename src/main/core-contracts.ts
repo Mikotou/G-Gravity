@@ -67,8 +67,7 @@ interface CoreResources extends ProfileDataBundle {
 }
 export type SettingsHost = Pick<CoreResources, 'store' | 'accounts' | 'client' | 'emit'>;
 export type OrganizerHost = Pick<CoreResources, 'accounts' | 'client' | 'sessions' | 'trees' | 'titles' | 'emit'>;
-export type ApprovalHost = Pick<CoreResources, 'store' | 'sessions' | 'telemetry' | 'emit'>;
-export type TranslationHost = Pick<CoreResources, 'store' | 'telemetry' | 'sessions' | 'emit'>;
+export type ExternalUsageHost = Pick<CoreResources, 'store' | 'sessions' | 'telemetry' | 'emit'>;
 export type BranchHost = Pick<CoreResources, 'accounts' | 'sessions' | 'trees' | 'titles' | 'telemetry' | 'inspector' | 'swarm' | 'emit'>
   & Pick<GravityDesktopBridge, 'createSession' | 'resumeSession' | 'sendPrompt' | 'closeSession'>;
 export interface TelemetryHost extends Pick<CoreResources, 'store' | 'accounts' | 'client' | 'sessions' | 'telemetry' | 'emit'> {
@@ -87,7 +86,7 @@ export interface TurnHost extends Omit<CoreResources, 'titles' | 'store'> {
   mediaContext(): LocalTargetContext;
 }
 
-export interface LifecycleHost extends Pick<TurnHost, 'accounts' | 'client' | 'sessions' | 'telemetry' | 'thoughts' | 'inspector' | 'trees' | 'swarm' | 'messages' | 'approval' | 'emit' | 'mediaContext' | 'isChangingSession'> {
+export interface LifecycleHost extends Pick<TurnHost, 'disposed' | 'accounts' | 'client' | 'sessions' | 'telemetry' | 'thoughts' | 'inspector' | 'trees' | 'swarm' | 'messages' | 'approval' | 'emit' | 'mediaContext' | 'isChangingSession'> {
   store: ClientStore;
   titles: TitleOrganizer;
 }

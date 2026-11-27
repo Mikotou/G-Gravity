@@ -35,9 +35,12 @@ export class SessionSlots {
     let result: AcpSessionNewResult;
     try {
       result = await this.client.request<AcpSessionNewResult>(method, params, undefined, reply => {
-        if (!this.slots.has(slot)) return;
+        if (!this.slots.has(slot) || slot.state !== 'unknown') return;
         if (reply.error) this.slots.delete(slot);
-        else this.identify(slot, reply.result as AcpSessionNewResult);
+        else if (this.identify(slot, reply.result as AcpSessionNewResult) && slot.hidden) {
+          // Only the transport owning this reservation can close a late hidden session.
+          void this.close(slot).catch(() => this.client.emit('diagnostic', '延迟创建的标题会话尚未确认关闭'));
+        }
       });
     } catch (error) {
       if (error instanceof AcpRequestNotSentError) {

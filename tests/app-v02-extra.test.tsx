@@ -50,7 +50,10 @@ describe('v0.2 三栏、Composer与Inspector组件交互', () => {
     const markdown = '![流程](<./图 片/a#b.png>)\n\n[截图](result.png)\n\n![样本][图]\n\n[图]: https://example.test/a.webp\n\n![内嵌](data:image/png;base64,AQID)';
     render(wrap(<ImageWorkspace.Provider value={'F:\\项目'}><Markdown text={markdown} /></ImageWorkspace.Provider>));
     expect(screen.getByAltText('流程').getAttribute('src')).toBe('file:///F:/%E9%A1%B9%E7%9B%AE/%E5%9B%BE%20%E7%89%87/a%23b.png');
-    expect(screen.getByAltText('样本').getAttribute('src')).toBe('https://example.test/a.webp');
+    // v0.3.5 P2：被 CSP 拦截的远程图片渲染为安全外链胶囊而非破图 <img>
+    const remoteCapsule = screen.getByTestId('md-img-blocked-capsule');
+    expect(remoteCapsule.textContent).toContain('样本');
+    expect(remoteCapsule.getAttribute('data-remote-src')).toBe('https://example.test/a.webp');
     expect(screen.getByAltText('截图').getAttribute('src')).toContain('/result.png');
     expect(screen.getByAltText('内嵌').getAttribute('src')).toBe('data:image/png;base64,AQID');
     const extra = render(wrap(<ImageWorkspace.Provider value="F:/test"><Markdown text={'F:/test/裸路径.jpg\n\n<img src="s.png" alt="图像标签" width="200" />'} /></ImageWorkspace.Provider>));
@@ -189,7 +192,7 @@ describe('v0.2 自定义主题、图标、价格与管理面板UI', () => {
     const OriginalURL = URL;
     vi.stubGlobal('URL', class extends OriginalURL { static createObjectURL(blob: Blob) { exportedBlob = blob; return 'blob:qa-theme'; } static revokeObjectURL() {} });
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    await mount(); fireEvent.click(screen.getByTestId('open-theme-modal-btn')); fireEvent.click(screen.getByTestId('settings-tab-tokens'));
+    await mount(); fireEvent.click(screen.getByTestId('open-theme-modal-btn')); fireEvent.click(screen.getByTestId('settings-tab-themes')); fireEvent.click(screen.getByTestId('settings-tab-tokens'));
     expect(screen.getByTestId('custom-tokens-editor').querySelectorAll('input[type="color"]')).toHaveLength(23);
     fireEvent.change(screen.getByTestId('color-picker-accentPrimary'), { target: { value: '#123456' } });
     fireEvent.click(screen.getByTestId('apply-custom-theme-btn'));
@@ -204,6 +207,8 @@ describe('v0.2 自定义主题、图标、价格与管理面板UI', () => {
   });
   it('图标选项与单价表编辑传递到桥接', async () => {
     await mount(); fireEvent.click(screen.getByTestId('open-theme-modal-btn'));
+    // v0.3.5 SV1：应用图标是「外观」的二级页签
+    fireEvent.click(screen.getByTestId('settings-tab-themes'));
     fireEvent.click(screen.getByTestId('settings-tab-icons')); fireEvent.click(screen.getByTestId('icon-variant-gravity-ubuntu'));
     await waitFor(() => expect(screen.getByTestId('topbar-app-icon').getAttribute('src')).toContain('gravity-ubuntu'));
     fireEvent.click(screen.getByTestId('settings-tab-rates'));
@@ -214,8 +219,9 @@ describe('v0.2 自定义主题、图标、价格与管理面板UI', () => {
     const refresh = vi.spyOn(getFallbackDesktopBridge(), 'getPluginsSnapshot')
       .mockRejectedValueOnce(new Error('项目插件读取失败'));
     await mount();
-    fireEvent.click(screen.getByTestId('account-menu-btn'));
-    fireEvent.click(screen.getByTestId('open-plugins-modal-btn'));
+    // v0.3.5 A1：插件入口从账户浮层移到设置中心
+    fireEvent.click(screen.getByTestId('open-theme-modal-btn'));
+    fireEvent.click(screen.getByTestId('settings-tab-plugins'));
     const error = await screen.findByRole('alert');
     expect(error.textContent).toContain('项目插件读取失败');
     fireEvent.click(within(error).getByRole('button', { name: '重新加载' }));
@@ -227,8 +233,9 @@ describe('v0.2 自定义主题、图标、价格与管理面板UI', () => {
     const refresh = vi.spyOn(bridge, 'getPluginsSnapshot');
     const add = vi.spyOn(bridge, 'runMcpAction');
     await mount();
-    fireEvent.click(screen.getByTestId('account-menu-btn'));
-    fireEvent.click(screen.getByTestId('open-plugins-modal-btn'));
+    // v0.3.5 A1：插件入口从账户浮层移到设置中心
+    fireEvent.click(screen.getByTestId('open-theme-modal-btn'));
+    fireEvent.click(screen.getByTestId('settings-tab-plugins'));
     await screen.findByTestId('plugins-manager-modal');
     const boot = await bridge.getBootstrap();
     const active = boot.sessions.find(s => s.sessionId === boot.layout.activePrimarySessionId);

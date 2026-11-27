@@ -137,14 +137,19 @@ export class SessionLifecycleService {
     const hadLocalMessages = this.app.messages.recent(sessionId).length > 0;
     const replay = this.app.messages.needsRecovery(sessionId) ? new HistoryReplay(sessionId, this.app.mediaContext) : undefined;
     if (replay) this.turns.recoveringHistory.set(sessionId, replay);
+    const planReplay = this.turns.beginPlanReplay(sessionId);
+    const profileId = this.app.accounts.activeProfileId;
     const swarm = this.app.swarm;
+    const sameOwner = () => !this.app.disposed && swarm === this.app.swarm && this.app.accounts.activeProfileId === profileId;
     this.managing.add(sessionId);
     swarm.beginReplay(sessionId);
     if (hadLocalMessages) this.turns.skipReplayedMessages.add(sessionId);
     let session: ManagedSessionSummary;
     try {
-      session = await this.app.sessions.resumeSession(sessionId, cwd, replay ? true : () => swarm.needsReplay(sessionId));
+      const needPlan = hadLocalMessages && !this.app.messages.hasCheckedPlanHistory(sessionId) && this.app.inspector.needsPlanReplay(sessionId);
+      session = await this.app.sessions.resumeSession(sessionId, cwd, replay || needPlan ? true : () => swarm.needsReplay(sessionId));
       await swarm.finishReplay(sessionId);
+      if (!planReplay.current()) throw new Error('恢复期间会话归属已改变');
       this.turns.finishReplayedUser(sessionId);
       if (replay) {
         const local = this.app.messages.get(sessionId) || [];
@@ -154,7 +159,12 @@ export class SessionLifecycleService {
           this.app.messages.markRecovered(sessionId);
         }
       }
+      planReplay.commit();
+      const capabilities = this.app.client.initializeResult?.agentCapabilities;
+      if ((replay || needPlan) && (capabilities?.loadSession || capabilities?.load_session)) this.app.messages.markPlanHistoryChecked(sessionId);
     } catch (error) {
+      // 仅在切号/退出导致归属变更时直接中止；同 Profile 下 ACP 启动失败或断连仍须走下方离线只读回退，同时 planReplay.current() 已失效确保不提交脏 Plan。
+      if (!sameOwner()) throw error;
       if (!hadLocalMessages) {
         this.app.messages.discardUnsavedReplay(sessionId);
         this.turns.assistantMessages.delete(sessionId);
@@ -174,7 +184,16 @@ export class SessionLifecycleService {
         this.app.sessions.setStatus(sessionId, 'error', diagnostic);
         throw error;
       }
-    } finally { this.managing.delete(sessionId); swarm.discardReplay(sessionId); this.turns.skipReplayedMessages.delete(sessionId); this.turns.replayedUsers.delete(sessionId); this.turns.recoveringHistory.delete(sessionId); }
+    } finally {
+      this.managing.delete(sessionId);
+      if (sameOwner()) {
+        swarm.discardReplay(sessionId);
+        this.turns.skipReplayedMessages.delete(sessionId);
+        this.turns.replayedUsers.delete(sessionId);
+        this.turns.recoveringHistory.delete(sessionId);
+      }
+      planReplay.discard();
+    }
     this.app.approval.setSessionExecutionMode(session.sessionId, session.executionMode);
     this.app.telemetry.hydrateFromMessages(sessionId, session.modelId, () => this.app.messages.forStatistics(sessionId));
     this.monitor.syncSessionCheckpointWindow(sessionId);
@@ -210,8 +229,8 @@ export class SessionLifecycleService {
     const journal = 'pending-session-deletes-' + this.app.accounts.activeProfileId + '.json';
     const pending = this.app.store.read<string[]>(journal, []);
     this.app.store.write(journal, [...new Set([...pending, id])]);
-    await this.closeSession(id);
     this.app.trees.removeBranchOrTree(id);
+    await this.closeSession(id);
     await this.finishDeletion(id);
     const remaining = this.app.store.read<string[]>(journal, []).filter(item => item !== id);
     this.app.store.write(journal, remaining);

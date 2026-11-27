@@ -1,6 +1,6 @@
 import { constants, lstatSync, realpathSync, type Stats } from 'node:fs';
 import { open, type FileHandle } from 'node:fs/promises';
-import { relative, isAbsolute } from 'node:path';
+import { relative, isAbsolute, join, parse, resolve, sep } from 'node:path';
 import { isForbiddenCredentialOrStatePath } from '../../shared/accounts-history-contract';
 
 /** Keep private OS stores out of file inspection, Finder actions and workspace references. */
@@ -21,6 +21,61 @@ export function isUnsafeLocalPath(path: string): boolean {
   return isUnsafeLocalFile(path) || isPrivateStatePath(path);
 }
 
+/** Map macOS root system aliases (/tmp, /var, /etc) to their canonical /private targets when SIP-verified. */
+export function normalizeDarwinSystemAlias(path: string): string {
+  if (process.platform !== 'darwin') return path;
+  const match = /^\/(tmp|var|etc)(?=\/|$)/i.exec(path);
+  if (!match) return path;
+  const alias = '/' + match[1];
+  const canonical = '/private/' + match[1].toLowerCase();
+  try {
+    if (lstatSync(alias).isSymbolicLink() && realpathSync.native(alias) === canonical) {
+      return canonical + path.slice(alias.length);
+    }
+  } catch { /* Fall back to literal path. */ }
+  return path;
+}
+
+/** Accept alternate case, Unicode normalization or DOS short names only when both spellings identify the same filesystem object. */
+export function sameLocalPath(left: string, right: string): boolean {
+  const leftPath = normalizeDarwinSystemAlias(resolve(left));
+  const rightPath = normalizeDarwinSystemAlias(resolve(right));
+  if (leftPath === rightPath) return true;
+  if (process.platform !== 'darwin' && process.platform !== 'win32') return false;
+  let leftPrefix = parse(leftPath).root, rightPrefix = parse(rightPath).root;
+  if (leftPrefix.toLowerCase() !== rightPrefix.toLowerCase()) return false;
+  const leftParts = leftPath.slice(leftPrefix.length).split(sep).filter(Boolean);
+  const rightParts = rightPath.slice(rightPrefix.length).split(sep).filter(Boolean);
+  if (leftParts.length !== rightParts.length) return false;
+  try {
+    for (let i = 0; i < leftParts.length; i++) {
+      const leftName = leftParts[i], rightName = rightParts[i];
+      leftPrefix = join(leftPrefix, leftName); rightPrefix = join(rightPrefix, rightName);
+      if (leftName === rightName) continue;
+      const dosAlias = process.platform === 'win32' && [leftName, rightName].some(name => /~\d+(?:\.|$)/.test(name));
+      const sameFolded = process.platform === 'darwin'
+        ? leftName.normalize('NFC').toLowerCase() === rightName.normalize('NFC').toLowerCase()
+        : leftName.toLowerCase() === rightName.toLowerCase();
+      if (!dosAlias && !sameFolded) return false;
+      const leftStat = lstatSync(leftPrefix, { bigint: true }), rightStat = lstatSync(rightPrefix, { bigint: true });
+      if (leftStat.isSymbolicLink() || rightStat.isSymbolicLink() || !leftStat.ino ||
+          leftStat.dev !== rightStat.dev || leftStat.ino !== rightStat.ino) return false;
+    }
+    return true;
+  } catch { return false; }
+}
+
+export function localPathMember(root: string, target: string): string | undefined {
+  const base = normalizeDarwinSystemAlias(resolve(root));
+  const path = normalizeDarwinSystemAlias(resolve(target));
+  const prefix = base.endsWith(sep) ? base : base + sep;
+  if (path === base || path.startsWith(prefix)) return relative(base, path);
+  const volume = parse(path).root;
+  const depth = base.slice(parse(base).root.length).split(sep).filter(Boolean).length;
+  const parts = path.slice(volume.length).split(sep).filter(Boolean);
+  if (parts.length >= depth && sameLocalPath(base, join(volume, ...parts.slice(0, depth)))) return parts.slice(depth).join(sep);
+}
+
 export class LocalFileChangedError extends Error {
   constructor() { super('读取期间文件路径已更改'); }
 }
@@ -34,7 +89,7 @@ export async function openLocalFile(real: string, before = lstatSync(real)): Pro
     const stat = await handle.stat();
     // Electron 35/libuv on Windows can report dev=0 from path stat and the volume serial from fstat.
     const devMismatch = stat.dev !== before.dev && (process.platform !== 'win32' || (before.dev !== 0 && stat.dev !== 0));
-    if (!stat.isFile() || stat.ino !== before.ino || devMismatch || relative(real, realpathSync(real)) !== '') {
+    if (!stat.isFile() || stat.ino !== before.ino || devMismatch || relative(real, realpathSync.native(real)) !== '') {
       throw new LocalFileChangedError();
     }
     return { handle, stat };
@@ -66,7 +121,7 @@ export async function readBoundedLocalFile(real: string, limit: number): Promise
     const data = await readPrefix(handle, stat.size);
     const after = await handle.stat();
     if (data.length !== stat.size || after.size !== stat.size || after.ctimeMs !== stat.ctimeMs ||
-        relative(real, realpathSync(real)) !== '' || lstatSync(real).ino !== stat.ino) throw new LocalFileChangedError();
+        relative(real, realpathSync.native(real)) !== '' || lstatSync(real).ino !== stat.ino) throw new LocalFileChangedError();
     return data;
   } finally { await handle.close(); }
 }

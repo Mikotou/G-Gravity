@@ -39,7 +39,7 @@ function safeCliError(value: unknown, args: readonly string[] = []): string {
   return redactCliDiagnostic(detail);
 }
 
-interface PluginsManagerOptions { store: ClientStore; binaryPath?: string; executor?: CliExecutor; homeDir?: string }
+interface PluginsManagerOptions { store: ClientStore; binaryPath?: string; executor?: CliExecutor; homeDir?: string; activeProfile?: () => string }
 export class PluginsManager {
   private snapshot: PluginsManagerSnapshot = { builtins: GRAVITY_BUILTIN_CAPABILITIES, plugins: [], mcpServers: [], skills: [], refreshedAt: new Date().toISOString() };
   private skillPrefs: Record<string, boolean>;
@@ -47,8 +47,15 @@ export class PluginsManager {
   private workspaceCwd?: string;
   private loading?: { cwd?: string; result: Promise<PluginsManagerSnapshot> };
   constructor(private options: PluginsManagerOptions) { this.skillPrefs = options.store.read('skill-preferences.json', {}); }
+  private mutationActive = false;
+  get changingCli(): boolean { return this.mutationActive; }
+  private isIsolated(): boolean { return (this.options.activeProfile?.() ?? 'default') !== 'default'; }
   /** 启动快照只复制现有内存数据。设置页请求刷新时才会运行官方列表命令。 */
-  getCachedSnapshot(): PluginsManagerSnapshot { return structuredClone(this.snapshot); }
+  getCachedSnapshot(): PluginsManagerSnapshot {
+    const result = structuredClone(this.snapshot);
+    if (this.isIsolated()) result.lastCommandOutput = '官方 CLI 列表属于默认 Profile，隔离 Profile 仅可查看。\n' + (result.lastCommandOutput ?? '');
+    return result;
+  }
   private async run(args: string[]): Promise<string> {
     const binary = this.options.executor ? this.options.binaryPath || 'agy' : discoverAgyBinary(this.options.binaryPath);
     try {
@@ -116,12 +123,26 @@ export class PluginsManager {
   }
   /** 兼容 MCP 列表的结构化和文本两种输出。解析后的条目共享同一种界面模型。 */
   parseMcpList(output: string): ConfiguredMcpServerItem[] {
-    try {
-      const data = JSON.parse(output, redactCliValue); const servers = data.mcpServers || data.servers || data;
-      const list = Array.isArray(servers) ? servers : Object.entries(servers).map(([name, value]) => ({ name, ...(value as object) }));
-      return list.filter(item => isSafeMcpServerName(item?.name)).map(item => ({ name: item.name, type: item.type === 'http' || item.url ? 'http' : 'stdio', commandOrUrl: item.url || item.command || item.commandOrUrl || '', args: Array.isArray(item.args) ? item.args : [], enabled: item.enabled !== false && item.disabled !== true, status: item.status }));
-    } catch {
-      return sanitizeOutput(output).split(/\r?\n/).flatMap(line => {
+    const invalid = () => new Error('无法识别官方 MCP 列表格式');
+    const value = output.trim();
+    if (/^[{[\x22]|^(?:null|true|false|-?\d+(?:\.\d+)?)$/.test(value)) {
+      let data;
+      try { data = JSON.parse(value, redactCliValue); } catch { throw invalid(); }
+      if (!data || typeof data !== 'object') throw invalid();
+      const servers = Object.hasOwn(data, 'mcpServers') ? data.mcpServers : Object.hasOwn(data, 'servers') ? data.servers : data;
+      if (!servers || typeof servers !== 'object') throw invalid();
+      const list = Array.isArray(servers) ? servers : Object.entries(servers).map(([name, entry]) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw invalid();
+        return { ...entry, name };
+      });
+      return list.map(item => {
+        if (!isSafeMcpServerName(item?.name) || ![item.url, item.command, item.commandOrUrl].some(v => typeof v === 'string' && v.trim())) throw invalid();
+        return { name: item.name, type: item.type === 'http' || item.url ? 'http' : 'stdio', commandOrUrl: item.url || item.command || item.commandOrUrl,
+          args: Array.isArray(item.args) ? item.args : [], enabled: item.enabled !== false && item.disabled !== true, status: item.status };
+      });
+    }
+    const lines = sanitizeOutput(output).split(/\r?\n/);
+    const rows = lines.flatMap(line => {
         const row = /^\s*([\w.-]+)\s+(stdio|http|sse)\s+(enabled|disabled)\s+(.+?)\s*$/i.exec(line);
         if (row && isSafeMcpServerName(row[1])) {
           return [{ name: row[1], type: row[2].toLowerCase() === 'stdio' ? 'stdio' as const : 'http' as const, commandOrUrl: row[4], args: [], enabled: row[3].toLowerCase() === 'enabled', status: row[3] }];
@@ -135,15 +156,34 @@ export class PluginsManager {
         const command = /^(?:(?:"[^"]+"|[^\s]+)\.(?:exe|cmd|bat|sh|js|py)|\.{0,2}[\\/]\S+|[A-Za-z]:[\\/]\S+|(?:node|npx|npm|bunx?|deno|python[\d.]*|uvx?|docker|java|go|ruby|dotnet))(?:\s|$)/i.test(destination);
         if (!url && !command) return [];
         return [{ name: match[1], type: url ? 'http' as const : 'stdio' as const, commandOrUrl: destination, args: [], enabled: marker?.[1].toLowerCase() !== 'disabled', status: marker?.[1] || '官方 CLI 列表（文本）' }];
-      });
-    }
+    });
+    if (rows.length) return rows;
+    const empty = /^(?:note:\s*)?no (?:configured )?(?:mcp )?servers?(?: (?:are|configured|found|registered|installed|available|yet))*[.!]?$|^total:\s*0$/i;
+    const nonblank = lines.map(line => line.trim()).filter(Boolean);
+    if (nonblank.some(line => empty.test(line)) ||
+        (/^name\s+type\s+status\s+command\/url$/i.test(nonblank[0] ?? '') && nonblank.slice(1).every(line => /^-{3,}(?:\s+-{3,})*$/.test(line)))) return [];
+    throw invalid();
+  }
+  private mutate(args: string[]): Promise<PluginsManagerSnapshot> {
+    const assertDefault = () => { if (this.isIsolated()) throw new Error('隔离 Profile 不可修改默认 Profile 的官方 CLI 配置'); };
+    assertDefault();
+    return this.exclusive(async () => {
+      assertDefault();
+      this.mutationActive = true;
+      try {
+        const output = await this.run(args);
+        await this.refresh();
+        this.snapshot.lastCommandOutput = sanitizeOutput(output).slice(0, 50000);
+        return this.getCachedSnapshot();
+      } finally { this.mutationActive = false; }
+    });
   }
   async runPluginAction(input: PluginActionInput): Promise<PluginsManagerSnapshot> {
     if (!input || typeof input.target !== 'string' || !['install', 'uninstall', 'enable', 'disable'].includes(input.action)) throw new Error('插件名称或操作无效');
     const target = input.target.trim();
     const local = /^(?:[a-z]:[\\/]|[\\/])/i.test(target);
     if (local ? input.action !== 'install' || !isSafeLocalPluginDirectory(target) : !isSafePluginTarget(target)) throw new Error('插件名称或操作无效');
-    return this.exclusive(async () => { const output = await this.run(['plugin', input.action, target]); await this.refresh(); this.snapshot.lastCommandOutput = sanitizeOutput(output).slice(0, 50000); return this.getCachedSnapshot(); });
+    return this.mutate(['plugin', input.action, target]);
   }
   async runMcpAction(input: McpActionInput): Promise<PluginsManagerSnapshot> {
     if (!input || !['add', 'remove', 'enable', 'disable'].includes(input.action) || !isSafeMcpServerName(input.name)) throw new Error('MCP 名称或操作无效');
@@ -159,7 +199,7 @@ export class PluginsManager {
       // 名称和管理选项位于分隔符前，服务程序及其参数位于分隔符后，从而保留传给服务本身的选项。
       args.push(input.name.trim(), '--', input.commandOrUrl, ...(input.args || []));
     } else args.push(input.name.trim());
-    return this.exclusive(async () => { const output = await this.run(args); await this.refresh(); this.snapshot.lastCommandOutput = sanitizeOutput(output).slice(0, 50000); return this.getCachedSnapshot(); });
+    return this.mutate(args);
   }
   private async scanSkills(workspaceCwd?: string): Promise<DiscoveredSkillItem[]> {
     const home = this.options.homeDir || homedir();

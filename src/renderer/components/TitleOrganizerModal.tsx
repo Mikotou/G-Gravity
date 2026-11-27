@@ -81,7 +81,7 @@ export function TitleOrganizerModal({
       <div className="modal modal-wide" ref={trapRef} role="dialog" aria-modal="true" aria-labelledby="organize-titles-heading"
         onMouseDown={(e) => e.stopPropagation()} data-testid="title-organizer-modal">
         <div className="modal-head">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="title-org-row">
             <h2 id="organize-titles-heading">{dict.organizeModalTitle}</h2>
             {modelLabel && <span className="badge badge-accent badge-mono" data-testid="organize-model-badge">
               <Icon icon={Sparkles} size="xs" />
@@ -113,7 +113,7 @@ export function TitleOrganizerModal({
                 <Icon icon={ArrowRight} size="sm" />
                 <div>
                   <div className="token-key">{dict.organizeAfterCol}</div>
-                  <div style={{ fontWeight: 600 }}>{item.organizedTitle}</div>
+                  <div className="title-org-new">{item.organizedTitle}</div>
                 </div>
               </div>
             ))
@@ -125,7 +125,7 @@ export function TitleOrganizerModal({
           )}
         </div>
         <div className="modal-foot">
-          <span className="muted mono" style={{ fontSize: 11.5, marginRight: 'auto' }} data-testid="organize-quota-status">
+          <span className="muted mono title-org-quota" data-testid="organize-quota-status">
             {cooldownSec > 0
               ? dict.ui.organizeCooldownBanner(cooldownSec)
               : dict.ui.organizeWindowQuota(remaining, TITLE_ORGANIZE_RATE_LIMIT.maxCalls)}

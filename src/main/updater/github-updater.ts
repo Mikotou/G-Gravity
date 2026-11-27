@@ -113,15 +113,19 @@ export function selectReleaseAsset(
 ): AppUpdateAssetInfo | undefined {
   const valid = assets.filter((a) => a?.name && a.downloadUrl && isAllowedGitHubUpdateUrl(a.downloadUrl));
   if (platform === 'win32') {
-    return (
-      valid.find((a) => /^gravity\.exe$/i.test(a.name)) ||
-      valid.find((a) => /win.*\.exe$/i.test(a.name)) ||
-      valid.find((a) => /\.exe$/i.test(a.name))
-    );
+    if (arch !== 'x64' && arch !== 'arm64') return;
+    const label = arch === 'x64' ? /^(?:x64|amd64|x86_64)$/i : /^(?:arm64|aarch64)$/i;
+    const tagged = valid.find(asset => {
+      if (!/\.exe$/i.test(asset.name)) return false;
+      const tags = asset.name.match(/(?<![a-z0-9])(?:x86_64|x64|amd64|arm64|aarch64|ia32|x86|armv7l)(?![a-z0-9])/gi);
+      return tags?.length === 1 && label.test(tags[0]);
+    });
+    // The historical untagged portable Gravity.exe is built for Windows x64.
+    return tagged ?? (arch === 'x64' ? valid.find(asset => /^Gravity\.exe$/i.test(asset.name)) : undefined);
   }
   if (platform === 'darwin') {
     if (arch !== 'arm64' && arch !== 'x64') return;
-    const match = new RegExp('^Gravity-(?:v?[0-9]+\\.[0-9]+\\.[0-9]+(?:-[a-z0-9.]+)?-)?mac-' + arch + '\\.(zip|dmg)$', 'i');
+    const match = new RegExp('^Gravity-(?:v?[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9a-z-]+(?:\\.[0-9a-z-]+)*)?-)?mac-' + arch + '\\.(zip|dmg)$', 'i');
     const compatible = valid.filter(asset => match.test(asset.name));
     return compatible.find(asset => /\.zip$/i.test(asset.name)) ?? compatible[0];
   }
@@ -345,6 +349,9 @@ export class GitHubUpdater extends EventEmitter {
 
         this.receipt = undefined;
         this.expectedDigest = undefined;
+        if (newer && !asset && (this.platform === 'win32' || this.platform === 'darwin')) {
+          throw new Error(`没有匹配 ${this.platform === 'win32' ? 'Windows' : 'macOS'} ${this.arch} 架构的更新包`);
+        }
         let existingPath: string | undefined;
         if (newer && asset) {
           const digest = release.assets.find(item => item === asset)?.digest;

@@ -8,6 +8,7 @@ import { APP_BRAND, clampUiScale, UI_SCALE_LIMITS, type GravityIconPreference } 
 import { prepareRevision } from '../../shared/message-revision';
 import {
   calculateTokenCost,
+  computeHeatLevel,
   computeUnifiedLineDiff,
   DEFAULT_MODEL_RATE_CARDS,
   DEFAULT_TRANSLATION_CONFIG,
@@ -92,6 +93,9 @@ import {
   type UiScaleCommand,
   type WorkspaceLayoutState,
   type InspectLocalTargetsInput,
+  type GetSessionPlanArtifactInput,
+  type PlanArtifactChangedEvent,
+  type PlanArtifactSnapshot,
   type InspectLocalTargetsResult,
   type InspectedLocalTarget,
   extractTargetBaseName,
@@ -208,6 +212,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
   const sessionEvents = createEventChannel<ManagedSessionSummary>();
   const messageEvents = createEventChannel<{ sessionId: string; message: ChatMessageItem }>();
   const inspectorEvents = createEventChannel<SessionInspectorData>();
+  const planArtifactEvents = createEventChannel<PlanArtifactChangedEvent>();
   const approvalReqEvents = createEventChannel<PendingApprovalRequest>();
   const approvalConfigEvents = createEventChannel<ApproveForMeConfig>();
   const approvalResEvents = createEventChannel<{ requestId: string; sessionId: string }>();
@@ -490,6 +495,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
           priority: 'high',
         },
       ],
+      plan: { state: 'present', revision: 3, truncated: false, totalCount: 3, completedCount: 2, failedCount: 0 },
       terminals: [
         {
           id: 'term-1',
@@ -514,6 +520,27 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
         },
       ],
       terminals: [],
+    },
+  };
+
+  /** v0.3.5 演示：只读 implementation_plan.md（仅主演示会话有文档，其余会话为 missing） */
+  const planArtifactsBySession: Record<string, { revision: number; content: string; updatedAt: string }> = {
+    'sess-primary': {
+      revision: 1,
+      updatedAt: '2026-11-17T07:56:00.000Z',
+      content: [
+        '# Implementation Plan',
+        '',
+        '## 目标',
+        '重构 Gravity 三栏工作台，并验证 **typecheck** 与 **build** 零错误。',
+        '',
+        '## 步骤',
+        '- [x] 三栏可拖拽布局（`src/renderer/components/ResizeHandle.tsx`）',
+        '- [x] 内联权限确认卡片',
+        '- [ ] 运行 `npm run typecheck:renderer` 与 `npm run build:renderer`',
+        '',
+        '> 参考：[设计说明](docs/design.md)',
+      ].join('\n'),
     },
   };
 
@@ -984,6 +1011,15 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       });
     }
 
+    // 4) v0.3.5 7d 按自然日序列：取 30d 末 7 天，并以 7 日窗口独立计算强度
+    const daily7dFrom = (calendar: DailyCalendarHeatmapCell[]): DailyCalendarHeatmapCell[] => {
+      const last7 = calendar.slice(-7);
+      const total = last7.reduce((acc, d) => acc + d.totalTokens, 0);
+      const peak = last7.reduce((acc, d) => Math.max(acc, d.totalTokens), 0);
+      return last7.map((d) => ({ ...d, intensity: computeHeatLevel(d.totalTokens, total, peak, 7) }));
+    };
+    const daily7d = daily7dFrom(calendar30d);
+
     const todayModels = buildModelBreakdown([
       {
         modelId: 'gemini-2.5-pro',
@@ -1347,9 +1383,13 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
       updatedAt: new Date().toISOString(),
     };
 
+    externalReviewer.daily7d = daily7dFrom(externalReviewer.calendar30d);
+    externalTranslator.daily7d = daily7dFrom(externalTranslator.calendar30d);
+
     return {
       activeSessions,
       hourly24h,
+      daily7d,
       matrix7d,
       calendar30d,
       costByRange: {
@@ -1700,7 +1740,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
         accounts: structuredClone(accounts),
         approvalConfig: structuredClone(approvalConfig),
         translationConfig: structuredClone(translationConfig),
-        sessions: getVisibleSessions(!layout.hideLegacyPollutionSessions),
+        sessions: getVisibleSessions(true),
         layout: { ...layout, openTabSessionIds: [...layout.openTabSessionIds] },
         pendingApprovals: pendingApprovals.map((p) => structuredClone(p)),
         telemetry: buildTelemetrySnapshot(),
@@ -2011,6 +2051,25 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
 
     async getSessionMessagePage(sessionId, before) {
       return pageMessages((messagesBySession[sessionId] ?? []).map((m) => structuredClone(m)), before);
+    },
+
+    async getSessionPlanArtifact(input: GetSessionPlanArtifactInput): Promise<PlanArtifactSnapshot> {
+      const owner = { profileId: input.profileId || 'default', sessionId: input.sessionId };
+      const doc = planArtifactsBySession[input.sessionId];
+      if (!doc) return { status: 'missing', owner, revision: 0 };
+      if (input.knownRevision !== undefined && input.knownRevision === doc.revision) {
+        return { status: 'unchanged', owner, revision: doc.revision };
+      }
+      return {
+        status: 'ready',
+        owner,
+        revision: doc.revision,
+        source: 'brain-artifact',
+        filePath: 'implementation_plan.md',
+        content: doc.content,
+        truncated: false,
+        updatedAt: doc.updatedAt,
+      };
     },
 
     async getSessionInspector(sessionId: string): Promise<SessionInspectorData> {
@@ -2817,6 +2876,7 @@ export function createFallbackDesktopBridge(): FallbackDesktopBridge {
     onSessionUpdated: sessionEvents.subscribe,
     onMessageUpserted: messageEvents.subscribe,
     onInspectorUpdated: inspectorEvents.subscribe,
+    onPlanArtifactChanged: planArtifactEvents.subscribe,
     onApprovalRequested: approvalReqEvents.subscribe,
     onApprovalConfigUpdated: approvalConfigEvents.subscribe,
     onApprovalResolved: approvalResEvents.subscribe,

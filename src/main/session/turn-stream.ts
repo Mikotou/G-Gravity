@@ -6,6 +6,9 @@ import {
   isToolCallFailure, inspectStreamInterruption, isTransientStreamInterruptionLine,
   stripTransientStreamInterruptions,
 } from '../../shared/session-contract';
+import { QuestionFollowups } from './question-followups';
+import { TurnActivity } from './turn-activity';
+import { normalizePlan } from './session-plan';
 import { HistoryReplay } from './history-replay';
 import { AgentQuestions } from './agent-questions';
 import { restoreAnnotatedMessage } from './annotation-prompt';
@@ -24,16 +27,30 @@ export abstract class TurnStream {
   // Elicitation splits the visible reply. Retain earlier segments until the enclosing turn settles.
   readonly questionSegments = new Map<string, ChatMessageItem[]>();
   readonly thoughtOwners = new Map<string, { sessionId: string; message: ChatMessageItem }>();
-  readonly customAnswers = new Map<string, string[]>();
-  readonly questions = new AgentQuestions((m, previous) => {
+  readonly followups = new QuestionFollowups(() => this.app.messages, m => this.publishCommitted(m));
+  readonly activity = new TurnActivity();
+  private replayPlans = new Map<string, { profile: string; generation: number; latest?: ReturnType<typeof normalizePlan> }>();
+  beginPlanReplay(id: string) {
+    const replay = { profile: this.app.accounts.activeProfileId, generation: this.profileGeneration, latest: undefined as ReturnType<typeof normalizePlan> };
+    this.replayPlans.set(id, replay);
+    const current = () => this.replayPlans.get(id) === replay && replay.generation === this.profileGeneration && replay.profile === this.app.accounts.activeProfileId;
+    return { current, commit: () => { if (current() && replay.latest) this.app.inspector.applyPlan(id, replay.latest); },
+      discard: () => { if (this.replayPlans.get(id) === replay) this.replayPlans.delete(id); } };
+  }
+  private queueAnswer(message: ChatMessageItem): void {
+    const profile = this.app.accounts.activeProfileId, id = message.sessionId;
+    this.followups.add(message);
+    if (!this.app.sessions.isBusy(id) && !this.promptOwners.has(id) && !this.reactiveWakeupActive.has(id)) {
+      setImmediate(() => { if (profile === this.app.accounts.activeProfileId) this.sendQueuedReply(id); });
+    }
+  }
+  readonly questions = new AgentQuestions((m, previous, followup) => {
     this.flushText(m.sessionId);
     if (previous) {
-      this.app.messages.upsert(m);
-      try { this.app.messages.save(); }
-      catch (error) { this.app.messages.upsert(previous); throw error; }
-      this.app.emit('message-upserted', { sessionId: m.sessionId, message: structuredClone(m) });
+      this.app.messages.commitInteraction(m.sessionId, followup ? [m, followup] : [m], followup?.id);
     } else {
       if (m.question?.state === 'open') {
+        this.activity.stamp(m);
         const beforeQuestion = this.assistantMessages.get(m.sessionId);
         if (beforeQuestion) {
           const segments = this.questionSegments.get(m.sessionId) || [];
@@ -45,12 +62,10 @@ export abstract class TurnStream {
       this.upsert(m);
       if (m.question?.state !== 'open') this.app.messages.save();
     }
-  }, id => this.app.sessions.isActive(id), (id, text) => {
-    this.customAnswers.set(id, [...this.customAnswers.get(id) || [], text]);
-    if (!this.app.sessions.isBusy(id) && !this.promptOwners.has(id) && !this.reactiveWakeupActive.has(id)) {
-      setImmediate(() => this.sendQueuedReply(id));
-    }
-  }, id => this.refreshInteractionStatus(id));
+  }, id => this.app.sessions.isActive(id), (_id, _text, message) => this.queueAnswer(message),
+    id => this.refreshInteractionStatus(id), () => this.app.accounts.activeProfileId,
+    (id, messageId) => this.app.messages.findMessage(id, messageId), question => this.queueAnswer(this.followups.retry(question)),
+    (question, followup) => { this.publishCommitted(question); if (followup) this.publishCommitted(followup); });
   readonly feedback = new Map<string, string[]>();
   readonly reactiveWakeupActive = new Set<string>();
   readonly turnUserCancelled = new Set<string>();
@@ -115,7 +130,7 @@ export abstract class TurnStream {
     });
     this.app.sessions.on('update', (payload: AcpSessionUpdateNotification) => this.consumeUpdate(payload));
     this.app.sessions.on('localPreference', ({ sessionId, text }) => this.upsert({ id: randomUUID(), sessionId, role: 'system', content: text, createdAt: new Date().toISOString() }));
-    this.app.sessions.on('cancelled', (id: string) => { this.questions.cancel(id); this.customAnswers.delete(id); this.app.approval.cancelPending(id); this.feedback.delete(id); });
+    this.app.sessions.on('cancelled', (id: string) => { this.questions.cancel(id); this.followups.failQueued(id); this.app.approval.cancelPending(id); this.feedback.delete(id); });
     this.app.sessions.on('closed', (id: string) => {
       this.app.swarm.markUnconfirmed(id, '会话已关闭', 'Session closed');
       this.releaseSession(id);
@@ -126,7 +141,7 @@ export abstract class TurnStream {
       this.app.emit('approval-requested', request);
     });
     this.app.approval.on('resolved', payload => {
-      if (this.app.sessions.isActive(payload.sessionId) && !this.app.approval.listPending().some(item => item.sessionId === payload.sessionId)) {
+      if (this.app.sessions.isActive(payload.sessionId) && !this.app.approval.hasPendingForSession(payload.sessionId)) {
         this.refreshInteractionStatus(payload.sessionId);
       } else if (payload.grantsChanged && this.app.sessions.isActive(payload.sessionId)) {
         this.app.emit('session-updated', this.app.enrichSession(this.app.sessions.get(payload.sessionId)));
@@ -186,13 +201,17 @@ export abstract class TurnStream {
       this.publishMessage(message);
     }
   }
+  private publishCommitted(message: ChatMessageItem): void {
+    // The RPC and retry state already belong to the durable transcript even if a view disconnects.
+    try { this.publishMessage(message); } catch (error) { this.app.emit('diagnostic', diagnosticDetail(error)); }
+  }
   private publishMessage(message: ChatMessageItem): void {
     if (message.isStreaming && !this.app.sessions.isResuming(message.sessionId)) this.app.messages.saveStreaming(message.sessionId);
     this.app.emit('message-upserted', { sessionId: message.sessionId, message: structuredClone(message) });
   }
   assistant(sessionId: string): ChatMessageItem {
     let message = this.assistantMessages.get(sessionId);
-    if (!message) { const id = randomUUID(); message = { id, originMessageId: id, sessionId, role: 'assistant', content: '', isStreaming: true, createdAt: new Date().toISOString() }; this.assistantMessages.set(sessionId, message); }
+    if (!message) { const id = randomUUID(); message = { id, originMessageId: id, sessionId, role: 'assistant', content: '', isStreaming: true, createdAt: new Date().toISOString() }; this.activity.stamp(message); this.assistantMessages.set(sessionId, message); }
     return message;
   }
   clearTransientStreamWarning(sessionId: string, message: ChatMessageItem): boolean {
@@ -267,24 +286,21 @@ export abstract class TurnStream {
     if (this.app.disposed || this.app.isEphemeral(sessionId)) return;
     const pureText = update.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && typeof update.content.text === 'string';
     if (!pureText) this.flushText(sessionId);
-    const replaying = this.app.sessions.isResuming(sessionId);
+    const replaying = this.app.sessions.isResuming(sessionId) || this.replayPlans.has(sessionId);
     if (replaying) {
       this.app.swarm.consume(sessionId, update, true);
       this.recoveringHistory.get(sessionId)?.consume(update);
+    }
+    if (replaying && update.sessionUpdate === 'plan' && this.skipReplayedMessages.has(sessionId)) {
+      const replay = this.replayPlans.get(sessionId);
+      const latest = normalizePlan(update.entries);
+      if (replay && latest) replay.latest = latest;
+      return;
     }
     if (replaying && this.skipReplayedMessages.has(sessionId) &&
         !['available_commands_update', 'current_mode_update', 'config_option_update'].includes(update.sessionUpdate)) return;
     if (['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'plan'].includes(update.sessionUpdate)) {
       this.finishReplayedUser(sessionId);
-    }
-    if (update.sessionUpdate === 'plan') {
-      this.app.inspector.consume(sessionId, update);
-      const todos = this.app.inspector.get(sessionId).todos;
-      if (!replaying && todos.length >= 2) this.app.approval.enableBurstGuard(sessionId);
-      const message = this.assistant(sessionId);
-      this.clearTransientStreamWarning(sessionId, message);
-      message.todos = todos;
-      this.upsert(message);
     }
     const text = update.content?.text || '';
     if (update.sessionUpdate === 'available_commands_update') {
@@ -298,17 +314,21 @@ export abstract class TurnStream {
       if (typeof update.used === 'number' || typeof update.size === 'number') {
         this.app.telemetry.applyContextWindow(sessionId, update.used, update.size);
       }
-      if (update.usage) this.app.telemetry.applyUsage(sessionId, update.usage);
+      if (!replaying && update.usage) this.app.telemetry.applyUsage(sessionId, update.usage);
       if (!replaying) this.app.maybeSyncSessionCheckpointWindow(sessionId);
       if (this.reactiveWakeupActive.has(sessionId)) {
         this.scheduleReactiveTurnSettle(sessionId, true);
       }
     }
     // 后台子个体完成触发的服务端主动唤醒回合（!isBusy）：同步归档子个体状态并在输出收敛后自动收口流式光标
+    const todos = update.sessionUpdate === 'plan'
+      ? this.app.inspector.consume(sessionId, { ...update, sessionUpdate: 'plan' }) : undefined;
+    if (update.sessionUpdate === 'plan' && !todos) return;
     const isReactiveAgentUpdate =
       !replaying && !this.app.sessions.isBusy(sessionId) &&
       ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan'].includes(update.sessionUpdate);
     if (isReactiveAgentUpdate && !this.reactiveWakeupActive.has(sessionId)) {
+      this.activity.begin(sessionId);
       this.reactiveWakeupActive.add(sessionId);
       this.app.telemetry.ensure(sessionId, this.app.sessions.sessions.get(sessionId)?.modelId);
       this.app.telemetry.beginTurn(sessionId, '');
@@ -317,6 +337,13 @@ export abstract class TurnStream {
       this.refreshInteractionStatus(sessionId);
     }
 
+    if (todos) {
+      if (!replaying && todos.length >= 2) this.app.approval.enableBurstGuard(sessionId);
+      const message = this.assistant(sessionId);
+      this.clearTransientStreamWarning(sessionId, message);
+      message.todos = todos;
+      this.upsert(message);
+    }
     if (update.sessionUpdate === 'user_message_chunk') {
       if (replaying) {
         this.finishAssistantMessage(sessionId);
@@ -393,7 +420,7 @@ export abstract class TurnStream {
     if (this.app.disposed || !this.app.sessions.isActive(id)) return;
     if (this.questions.hasOpen(id)) {
       this.app.sessions.setStatus(id, 'waiting_question', buildDiagnosticBanner('waiting_question'));
-    } else if (this.app.approval.listPending().some(item => item.sessionId === id)) {
+    } else if (this.app.approval.hasPendingForSession(id)) {
       this.app.sessions.setStatus(id, 'waiting_approval', buildDiagnosticBanner('waiting_approval'));
     } else {
       if (this.app.sessions.get(id).status === 'error') return;
@@ -421,7 +448,7 @@ export abstract class TurnStream {
     const hasPendingTool = Boolean(
       activeMsg?.toolCalls?.some((tc) => tc.status === 'pending' || tc.status === 'running')
     );
-    const hasPendingApproval = this.app.approval.listPending().some((item) => item.sessionId === sessionId);
+    const hasPendingApproval = this.app.approval.hasPendingForSession(sessionId);
     if (hasPendingApproval || this.questions.hasOpen(sessionId)) {
       this.reactiveTurnTimers.delete(sessionId);
       return;
@@ -440,7 +467,7 @@ export abstract class TurnStream {
       const stillRunningTool = Boolean(
         currentMsg?.toolCalls?.some((tc) => tc.status === 'pending' || tc.status === 'running')
       );
-      if (stillRunningTool || this.app.approval.listPending().some((item) => item.sessionId === sessionId)) {
+      if (stillRunningTool || this.app.approval.hasPendingForSession(sessionId)) {
         this.scheduleReactiveTurnSettle(sessionId, false);
         return;
       }
@@ -471,44 +498,46 @@ export abstract class TurnStream {
   prepareDisconnect(): void {
     for (const owner of this.promptOwners.values()) owner.abort(new Error('连接正在关闭'));
     this.questions.cancel();
-    this.customAnswers.clear();
+    this.followups.failQueued();
     this.feedback.clear();
     this.app.approval.dispose();
   }
   releaseProfile(stop?: SessionDiagnosticBanner): void {
     const ids = new Set([...this.sessionLifetimes.keys(), ...this.promptOwners.keys(), ...this.assistantMessages.keys(),
       ...this.questionSegments.keys(), ...this.reactiveTurnTimers.keys(), ...this.reactiveWakeupActive,
-      ...this.submitted.keys(), ...this.feedback.keys(), ...this.customAnswers.keys(), ...this.compactAvailable,
+      ...this.submitted.keys(), ...this.feedback.keys(), ...this.followups.sessions(), ...this.replayPlans.keys(), ...this.compactAvailable,
       ...this.turnAutoDenied.keys(), ...this.turnUserCancelled, ...this.recoveringHistory.keys(), ...this.replayedUsers.keys(),
       ...Array.from(this.thoughtOwners.values(), owner => owner.sessionId)]);
     const errors: unknown[] = [];
     for (const id of ids) {
       try { this.releaseSession(id, stop); } catch (error) { errors.push(error); }
     }
+    this.activity.clear();
     this.flushText();
     this.profileGeneration++;
     this.questions.cancel();
     if (errors.length) throw errors[0];
   }
   releaseSession(id: string, stop?: SessionDiagnosticBanner): void {
-    this.promptOwners.get(id)?.abort(new Error('会话已关闭'));
-    this.promptOwners.delete(id);
-    this.sessionLifetimes.delete(id);
-    this.questions.cancel(id);
-    this.app.approval.cancelSession(id);
-    const submitted = this.submitted.get(id);
-    const reactive = this.reactiveWakeupActive.has(id);
-    this.clearReactiveTurnTimer(id);
-    this.app.telemetry.cancelManualCompaction(id);
-    if (!reactive) this.app.telemetry.endTurn(id);
     try {
-      if (stop && submitted && !this.hasPostToolSubstantiveReply(id)) {
+      this.promptOwners.get(id)?.abort(new Error('会话已关闭'));
+      this.promptOwners.delete(id);
+      this.sessionLifetimes.delete(id);
+      this.questions.cancel(id);
+      this.app.approval.cancelSession(id);
+      const submitted = this.submitted.get(id);
+      const reactive = this.reactiveWakeupActive.has(id);
+      this.clearReactiveTurnTimer(id);
+      this.app.telemetry.cancelManualCompaction(id);
+      if (!reactive) this.app.telemetry.endTurn(id);
+      if (stop && submitted && !submitted.questionFollowup && !this.hasPostToolSubstantiveReply(id)) {
         submitted.sendFailed = true;
         this.upsert(submitted);
       }
       this.clearSessionThoughts(id);
       if (submitted || this.assistantMessages.has(id) || this.questionSegments.has(id)) this.finishMessage(id, stop);
     } finally {
+      this.activity.clear(id);
       this.submitted.delete(id);
       this.assistantMessages.delete(id);
       this.questionSegments.delete(id);
@@ -517,7 +546,8 @@ export abstract class TurnStream {
       this.replayedUsers.delete(id);
       this.skipReplayedMessages.delete(id);
       this.feedback.delete(id);
-      this.customAnswers.delete(id);
+      this.followups.end(id);
+      this.replayPlans.delete(id);
       this.resetTurnState(id);
     }
   }
@@ -585,7 +615,10 @@ export abstract class TurnStream {
     if (reason === 'cancelled') return buildDiagnosticBanner('user_cancelled', { stopReason: reason });
     if (reason && reason !== 'end_turn') return buildDiagnosticBanner('unknown_error', { stopReason: diagnosticDetail(reason) });
   }
-  finishMessage(sessionId: string, stop?: SessionDiagnosticBanner): void {
+  protected settleActivity(id: string): void {
+    this.activity.settle(id, this.app.messages, m => this.publishMessage(m));
+  }
+  finishMessage(sessionId: string, stop?: SessionDiagnosticBanner, settle = true): void {
     this.flushText(sessionId);
     const segments = this.questionSegments.get(sessionId) || [];
     this.questionSegments.delete(sessionId);
@@ -605,6 +638,7 @@ export abstract class TurnStream {
     this.finishAssistantMessage(sessionId);
     this.app.approval.resetTurnBurstCounter(sessionId);
     for (const item of this.app.messages.recent(sessionId)) item.isStreaming = false;
+    if (settle) this.settleActivity(sessionId);
     this.app.messages.save();
     this.app.inspector.flush();
     this.app.sessions.flush();

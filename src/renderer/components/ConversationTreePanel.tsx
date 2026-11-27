@@ -41,8 +41,7 @@ export function ConversationTreePanel({
   onSwitchBranch,
   onOpenContextTab,
 }: ConversationTreePanelProps): React.ReactElement {
-  const { locale, dict } = useI18n();
-  const zh = locale === 'zh-CN';
+  const { dict } = useI18n();
 
   const rows = useMemo(() => (tree ? buildConversationTreeRenderRows(tree) : []), [tree]);
 
@@ -59,8 +58,9 @@ export function ConversationTreePanel({
   const activeNode = tree.nodesById[tree.activeBranchId] || tree.nodes[0];
   const activeLiveTele = activeNode ? telemetry.activeSessions[activeNode.branchId] : undefined;
   const activeUsed = activeLiveTele?.usedContextTokens ?? activeNode?.usedContextTokens ?? 0;
-  const activeMax = activeLiveTele?.maxContextTokens ?? activeNode?.maxContextTokens ?? 512_000;
-  const activeRatio = Math.min(1, activeUsed / Math.max(1, activeMax));
+  const rawActiveMax = activeLiveTele?.maxContextTokens ?? activeNode?.maxContextTokens;
+  const activeMax = typeof rawActiveMax === 'number' && Number.isFinite(rawActiveMax) && rawActiveMax > 0 ? rawActiveMax : null;
+  const activeRatio = activeMax ? Math.min(1, activeUsed / activeMax) : 0;
   const switchDisabled = busy || switchingBranch;
 
   return (
@@ -74,7 +74,7 @@ export function ConversationTreePanel({
             </span>
           </div>
           <span className="badge badge-accent" data-testid="conversation-tree-branch-count">
-            {zh ? `${tree.totalBranches} 个分支` : `${tree.totalBranches} ${tree.totalBranches === 1 ? 'branch' : 'branches'}`}
+            {dict.ui.v035.treeBranchCount(tree.totalBranches)}
           </span>
         </div>
 
@@ -84,11 +84,13 @@ export function ConversationTreePanel({
               {dict.ui.copy.activeBranchContext}
             </span>
             <span className="mono" data-testid="conversation-tree-active-context">
-              {formatTokenShort(activeUsed)} / {formatTokenShort(activeMax)} · {(activeRatio * 100).toFixed(1)}%
+              {activeMax
+                ? `${formatTokenShort(activeUsed)} / ${formatTokenShort(activeMax)} · ${(activeRatio * 100).toFixed(1)}%`
+                : `${formatTokenShort(activeUsed)} · ${dict.ui.v035.treeContextLimitUnknown}`}
             </span>
           </div>
           <div className="conv-tree-progress-bar" aria-hidden="true">
-            <span style={{ '--fill': Math.max(activeUsed > 0 ? 3 : 0, Math.min(100, activeRatio * 100)) / 100 } as React.CSSProperties} />
+            <span style={{ '--fill': activeMax ? Math.max(activeUsed > 0 ? 3 : 0, Math.min(100, activeRatio * 100)) / 100 : 0 } as React.CSSProperties} />
           </div>
           {onOpenContextTab && (
             <button
@@ -105,15 +107,17 @@ export function ConversationTreePanel({
         </div>
       </section>
 
-      <div className="conv-tree-list" role="tree" aria-label={dict.ui.copy.conversationBranchTree} data-testid="conversation-tree-nodes">
+      <div className="conv-tree-list" role="tree" aria-label={dict.ui.v035.treeTitle} data-testid="conversation-tree-nodes">
         {rows.map(({ node, ancestorHasMore, isLastChild }) => {
           const liveTele = telemetry.activeSessions[node.branchId];
           const usedTokens = liveTele?.usedContextTokens ?? node.usedContextTokens;
-          const maxTokens = liveTele?.maxContextTokens ?? node.maxContextTokens;
+          const rawMaxTokens = liveTele?.maxContextTokens ?? node.maxContextTokens;
+          const maxTokens = typeof rawMaxTokens === 'number' && Number.isFinite(rawMaxTokens) && rawMaxTokens > 0 ? rawMaxTokens : null;
           const costUsd = liveTele?.costSummary?.totalCostUsd ?? node.totalCostUsd;
-          const ratio = Math.min(1, usedTokens / Math.max(1, maxTokens));
+          const ratio = maxTokens ? Math.min(1, usedTokens / maxTokens) : 0;
           const isRoot = node.parentBranchId === null;
           const isActive = node.isActiveBranch;
+          const hasChildren = node.childrenIds.length > 0;
           const branchTitle = isRoot
             ? (dict.ui.copy.main)
             : dict.ui.copy.fmtTurnFork(node.forkUserTurnIndex + 1, node.siblingIndex, node.siblingCount);
@@ -124,6 +128,10 @@ export function ConversationTreePanel({
               className={`conv-tree-row ${isActive ? 'is-active' : ''} ${node.isOnActivePath ? 'is-on-path' : ''}`}
               role="treeitem"
               aria-selected={isActive}
+              aria-level={node.depth + 1}
+              aria-setsize={node.siblingCount}
+              aria-posinset={node.siblingIndex}
+              aria-expanded={hasChildren ? true : undefined}
               data-depth={node.depth}
             >
               {node.depth > 0 && (
@@ -200,12 +208,23 @@ export function ConversationTreePanel({
                     data-testid={`tree-node-context-${node.branchId}`}
                   >
                     <span className="conv-tree-mini-bar" aria-hidden="true">
-                      <span style={{ '--fill': Math.max(usedTokens > 0 ? 6 : 0, Math.min(100, ratio * 100)) / 100 } as React.CSSProperties} />
+                      <span style={{ '--fill': maxTokens ? Math.max(usedTokens > 0 ? 6 : 0, Math.min(100, ratio * 100)) / 100 : 0 } as React.CSSProperties} />
                     </span>
                     <span>{formatTokenShort(usedTokens)}</span>
                   </span>
+                  {node.modelId && (
+                    <span
+                      className="conv-tree-stat mono truncate"
+                      title={dict.ui.copy.branchModel}
+                      data-testid={`tree-node-model-${node.branchId}`}
+                    >
+                      {node.modelId}
+                    </span>
+                  )}
                   {costUsd > 0 && (
-                    <span className="conv-tree-stat mono">{dict.ui.copy.branchModel} · {formatUsd(costUsd)}</span>
+                    <span className="conv-tree-stat mono" data-testid={`tree-node-cost-${node.branchId}`}>
+                      {formatUsd(costUsd)}
+                    </span>
                   )}
                 </div>
               </button>

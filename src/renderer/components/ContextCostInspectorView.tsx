@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Info, Languages, Minimize2, Paperclip, Settings2, ShieldCheck } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowRight, ChevronDown, Info, Languages, Minimize2, Paperclip, Settings2, ShieldCheck } from 'lucide-react';
 import {
   COST_DISCLAIMER,
   formatExternalReviewerProviderLabel,
@@ -22,6 +22,8 @@ import { useI18n } from '../i18n/I18nContext';
 import { formatTokenShort, formatUsd } from './ContextStatusBar';
 import { Icon } from './ui/Icon';
 import { TokenHeatmapView } from './context/TokenHeatmapView';
+import { handleTablistKeyDown } from '../hooks/useRovingTabs';
+import { scrollBehavior } from '../lib/motion';
 
 export type ContextInspectorViewMode = 'context' | 'reviewer' | 'translator';
 
@@ -75,6 +77,14 @@ const MODEL_COLORS = [
   'var(--text-secondary)',
 ];
 
+/** 数据驱动的分段宽度 / 颜色（静态排版全部走 context.css 类名，仅保留无法静态表达的数据值）。 */
+function segStyle(widthPct: number, color: string): React.CSSProperties {
+  return { width: `${widthPct}%`, ['--seg-c' as string]: color } as React.CSSProperties;
+}
+function colorVar(color: string): React.CSSProperties {
+  return { ['--seg-c' as string]: color } as React.CSSProperties;
+}
+
 /**
  * 直观表示当前 Context 占压缩窗口比例的小圆环指示器。
  */
@@ -89,14 +99,6 @@ function ContextUsageMiniRing({
   const r = 6.5;
   const c = 2 * Math.PI * r;
   const dash = clamped * c;
-  const strokeColor =
-    level === 'critical'
-      ? 'var(--status-danger)'
-      : level === 'warning'
-        ? 'var(--status-warning)'
-        : level === 'moderate'
-          ? 'var(--accent-primary)'
-          : 'var(--status-success)';
 
   return (
     <svg
@@ -113,7 +115,7 @@ function ContextUsageMiniRing({
         r={r}
         fill="none"
         strokeWidth="2.4"
-        style={{ stroke: 'var(--bg-code)' }}
+        className="ctx-ring-track"
       />
       {clamped > 0 && (
         <circle
@@ -125,7 +127,7 @@ function ContextUsageMiniRing({
           strokeLinecap="round"
           strokeDasharray={`${Math.max(1.2, dash)} ${c}`}
           transform="rotate(-90 9 9)"
-          style={{ stroke: strokeColor, transition: 'stroke-dasharray 0.3s ease, stroke 0.25s ease' }}
+          className={`ctx-ring-fill is-${level}`}
         />
       )}
     </svg>
@@ -143,8 +145,8 @@ function Donut({
   const c = 2 * Math.PI * r;
   let offset = 0;
   return (
-    <svg width="92" height="92" viewBox="0 0 92 92" data-testid={testId} style={{ flexShrink: 0 }}>
-      <circle cx="46" cy="46" r={r} fill="none" strokeWidth="11" style={{ stroke: 'var(--bg-code)' }} />
+    <svg width="92" height="92" viewBox="0 0 92 92" data-testid={testId} className="ccv-donut">
+      <circle cx="46" cy="46" r={r} fill="none" strokeWidth="11" className="ctx-ring-track" />
       {items.map((m, idx) => {
         const len = Math.max(0, m.shareRatio) * c;
         const el = (
@@ -158,7 +160,8 @@ function Donut({
             strokeDasharray={`${len} ${c}`}
             strokeDashoffset={-offset}
             transform="rotate(-90 46 46)"
-            style={{ stroke: MODEL_COLORS[idx % MODEL_COLORS.length] }}
+            className="ccv-donut-seg"
+            style={colorVar(MODEL_COLORS[idx % MODEL_COLORS.length])}
           />
         );
         offset += len;
@@ -288,6 +291,7 @@ interface ExternalServiceSnapshot {
   cumulativeProviders: ExternalServiceProviderItem[];
   bySession: Record<string, TokenCostSummary & { callCount: number; avgLatencyMs: number; providers: ExternalServiceProviderItem[] }>;
   hourly24h: HourlyTokenBarBucket[];
+  daily7d?: DailyCalendarHeatmapCell[];
   matrix7d: DayHourHeatmapCell[];
   calendar30d: DailyCalendarHeatmapCell[];
   costByRange: Record<'today' | '7d' | '30d', TokenCostSummary & { callCount: number }>;
@@ -412,7 +416,7 @@ function ExternalServiceStatsSection({
             <button
               type="button"
               className={`badge ${connected ? 'badge-success' : 'badge-warning'}`}
-              style={{ cursor: 'pointer', border: 0 }}
+              data-variant="shortcut"
               onClick={onOpenSettings}
               data-testid={`${kind}-status-shortcut-btn`}
             >
@@ -429,10 +433,10 @@ function ExternalServiceStatsSection({
         <div className="ctx-session-metrics">
           <div className="ctx-metric-tile" data-testid={`${kind}-alltime-summary`}>
             <span className="ctx-metric-label">{dict.ui.copy.clientAllTime}</span>
-            <strong className="ctx-metric-val mono" style={{ color: 'var(--accent-text, var(--accent-primary))' }}>
+            <strong className="ctx-metric-val mono is-accent">
               {formatUsd(cum.totalCostUsd)}
             </strong>
-            <span className="stat-sub" style={{ fontSize: 11 }}>
+            <span className="stat-sub is-xs">
               {formatTokenShort(cum.totalTokens)} tok · {cum.callCount}
               {dict.ui.copy.fmtCallsProviders(cum.providerCount)}
             </span>
@@ -446,7 +450,7 @@ function ExternalServiceStatsSection({
             <strong className="ctx-metric-val mono">
               {formatUsd(treeStats ? treeStats.totalCostUsd : (sessionStats?.totalCostUsd ?? 0))}
             </strong>
-            <span className="stat-sub" style={{ fontSize: 11 }}>
+            <span className="stat-sub is-xs">
               {treeStats
                 ? treeStats.callCount > 0
                   ? usageLine(treeStats)
@@ -464,7 +468,7 @@ function ExternalServiceStatsSection({
             .map((o) => (
               <span
                 key={o.key}
-                style={{ width: `${(o.count / outcomeTotal) * 100}%`, background: o.c }}
+                style={segStyle((o.count / outcomeTotal) * 100, o.c)}
                 title={`${o.label}: ${o.count}`}
               />
             ))}
@@ -472,7 +476,7 @@ function ExternalServiceStatsSection({
         <div className="legend">
           {outcomes.map((o) => (
             <div key={o.key} className="legend-item">
-              <span className="legend-swatch" style={{ background: o.c }} />
+              <span className="legend-swatch" style={colorVar(o.c)} />
               <span className="legend-label truncate">{o.label}</span>
               <span className="legend-val">{o.count}</span>
             </div>
@@ -486,7 +490,7 @@ function ExternalServiceStatsSection({
         sectionTestId={`${kind}-heatmap-section`}
         title={labels.heatmapTitle}
         hourly24h={ext.hourly24h}
-        matrix7d={ext.matrix7d}
+        daily7d={ext.daily7d}
         calendar30d={ext.calendar30d}
       />
 
@@ -509,8 +513,8 @@ function ExternalServiceStatsSection({
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-          <span className="stat-big" style={{ color: 'var(--accent-text, var(--accent-primary))' }} data-testid={`${kind}-cost-total-usd`}>
+        <div className="ccv-total-row">
+          <span className="stat-big is-accent" data-testid={`${kind}-cost-total-usd`}>
             {formatUsd(cost.totalCostUsd)}
           </span>
           <span className="stat-sub">
@@ -525,7 +529,7 @@ function ExternalServiceStatsSection({
             .map((d) => (
               <span
                 key={d.key}
-                style={{ width: `${Math.min(100, (d.usd / costBarReferenceCap) * 100)}%`, background: d.c }}
+                style={segStyle(Math.min(100, (d.usd / costBarReferenceCap) * 100), d.c)}
                 title={`${d.label}: ${formatUsd(d.usd)}`}
               />
             ))}
@@ -535,7 +539,7 @@ function ExternalServiceStatsSection({
           {sortedDims.map((d) => (
             <div key={d.key} className="cost-cell" title={`${formatTokenShort(d.tokens)} Tokens`}>
               <span className="cost-cell-label">
-                <span className="legend-swatch" style={{ background: d.c }} />
+                <span className="legend-swatch" style={colorVar(d.c)} />
                 {d.label}
               </span>
               <span className="cost-cell-val">{formatUsd(d.usd)}</span>
@@ -563,14 +567,14 @@ function ExternalServiceStatsSection({
               return (
                 <div key={item.key} className="model-bar-row">
                   <div className="model-bar-head">
-                    <span className="badge badge-mono" style={{ fontSize: 10, padding: '0 5px' }}>
+                    <span className="badge badge-mono ccv-provider-badge">
                       {providerLabel}
                     </span>
                     <span className="mono truncate" title={`${providerLabel} · ${item.modelId} (${item.endpointHost})`}>
                       {item.modelId}
                     </span>
                     <span className="spacer" />
-                    <span className="muted mono" style={{ fontSize: 11 }}>
+                    <span className="muted mono is-xs">
                       {item.callCount}×
                     </span>
                     <span className="mono">{formatUsd(item.totalCostUsd)}</span>
@@ -579,7 +583,7 @@ function ExternalServiceStatsSection({
                     {segs.map((seg) => (
                       <span
                         key={seg.key}
-                        style={{ width: `${Math.min(100, seg.usd * scale)}%`, background: seg.c }}
+                        style={segStyle(Math.min(100, seg.usd * scale), seg.c)}
                       />
                     ))}
                   </div>
@@ -594,10 +598,10 @@ function ExternalServiceStatsSection({
             <div className="sub-head">{dict.ui.copy.providerShare}</div>
             <div className="donut-wrap">
               <Donut items={providers} testId={`${kind}-cost-donut-svg`} />
-              <div className="legend" style={{ gridTemplateColumns: '1fr', flex: 1 }}>
+              <div className="legend legend-single">
                 {providers.map((item, idx) => (
                   <div key={item.key} className="legend-item">
-                    <span className="legend-swatch" style={{ background: MODEL_COLORS[idx % MODEL_COLORS.length] }} />
+                    <span className="legend-swatch" style={colorVar(MODEL_COLORS[idx % MODEL_COLORS.length])} />
                     <span className="legend-label truncate mono" title={`${formatExternalReviewerProviderLabel(item.provider, locale)} · ${item.modelId}`}>
                       {item.modelId}
                     </span>
@@ -609,7 +613,7 @@ function ExternalServiceStatsSection({
           </>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="ccv-foot-row">
           <span className="disclaimer">
             <Icon icon={Info} size="xs" />
             {labels.disclaimer}
@@ -708,6 +712,50 @@ function ExternalTranslatorInspectorView({
 }
 
 
+type ContextSectionKey = 'usage' | 'heatmap' | 'cost';
+const CONTEXT_COLLAPSE_KEY = 'gravity.context.collapsed';
+
+function readCollapsed(): Record<ContextSectionKey, boolean> {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(CONTEXT_COLLAPSE_KEY) || '{}');
+    return { usage: raw?.usage === true, heatmap: raw?.heatmap === true, cost: raw?.cost === true };
+  } catch {
+    return { usage: false, heatmap: false, cost: false };
+  }
+}
+
+/** I2：Context 页分区折叠按钮（`aria-expanded` + `aria-controls`），状态持久化到本机。 */
+function SectionToggle({
+  name,
+  collapsed,
+  controls,
+  onToggle,
+  testId,
+}: {
+  name: string;
+  collapsed: boolean;
+  controls: string;
+  onToggle: () => void;
+  testId: string;
+}): React.ReactElement {
+  const { dict } = useI18n();
+  const label = collapsed ? dict.ui.v035.sectionExpand(name) : dict.ui.v035.sectionCollapse(name);
+  return (
+    <button
+      type="button"
+      className={`icon-btn icon-btn-sm ctx-section-toggle${collapsed ? ' is-collapsed' : ''}`}
+      aria-expanded={!collapsed}
+      aria-controls={controls}
+      aria-label={label}
+      title={label}
+      onClick={onToggle}
+      data-testid={testId}
+    >
+      <Icon icon={ChevronDown} size="xs" />
+    </button>
+  );
+}
+
 export function ContextCostInspectorView({
   sessionId,
   dashboard,
@@ -728,6 +776,41 @@ export function ContextCostInspectorView({
     onChangeViewMode?.(next);
   };
   const [scope, setScope] = useState<CostTimeScope>(sessionId ? 'session' : 'today');
+  const [collapsed, setCollapsed] = useState<Record<ContextSectionKey, boolean>>(readCollapsed);
+  const toggleSection = useCallback((key: ContextSectionKey) => {
+    setCollapsed((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try {
+        window.localStorage.setItem(CONTEXT_COLLAPSE_KEY, JSON.stringify(next));
+      } catch {
+        /* 仅本次会话保持 */
+      }
+      return next;
+    });
+  }, []);
+  const jumpTo = useCallback((key: ContextSectionKey) => {
+    setCollapsed((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev, [key]: false };
+      try {
+        window.localStorage.setItem(CONTEXT_COLLAPSE_KEY, JSON.stringify(next));
+      } catch {
+        /* 仅本次会话保持 */
+      }
+      return next;
+    });
+    const scrollTarget = () => {
+      const el = typeof document !== 'undefined' ? document.getElementById(`ctx-section-${key}`) : null;
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ block: 'start', behavior: scrollBehavior() });
+      }
+    };
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(scrollTarget);
+    } else {
+      scrollTarget();
+    }
+  }, []);
   const extSnap = dashboard.externalReviewer ?? EMPTY_EXT_REVIEWER;
   const transSnap = dashboard.externalTranslator ?? EMPTY_EXT_TRANSLATOR;
 
@@ -837,11 +920,16 @@ export function ContextCostInspectorView({
       <div className="inspector-toolbar">
         <div
           className="segmented segmented-sm ctx-view-switch"
-          style={{ width: '100%', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}
+          role="tablist"
+          aria-label={dict.ui.v034.contextViewSwitch}
+          onKeyDown={(e) => handleTablistKeyDown(e)}
           data-testid="context-inspector-mode-switch"
         >
           <button
             type="button"
+            role="tab"
+            aria-selected={activeView === 'context'}
+            tabIndex={activeView === 'context' ? 0 : -1}
             className={`segmented-btn ${activeView === 'context' ? 'is-active' : ''}`}
             onClick={() => setActiveView('context')}
             title={dict.ctxViewContext}
@@ -853,6 +941,9 @@ export function ContextCostInspectorView({
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeView === 'reviewer'}
+            tabIndex={activeView === 'reviewer' ? 0 : -1}
             className={`segmented-btn ${activeView === 'reviewer' ? 'is-active' : ''}`}
             onClick={() => setActiveView('reviewer')}
             title={dict.ctxViewReviewer}
@@ -864,6 +955,9 @@ export function ContextCostInspectorView({
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={activeView === 'translator'}
+            tabIndex={activeView === 'translator' ? 0 : -1}
             className={`segmented-btn ${activeView === 'translator' ? 'is-active' : ''}`}
             onClick={() => setActiveView('translator')}
             title={dict.ctxViewTranslator}
@@ -897,14 +991,39 @@ export function ContextCostInspectorView({
         />
       ) : (
         <>
+          <nav className="ctx-anchors" aria-label={dict.ui.v035.contextAnchorsLabel} data-testid="context-section-anchors">
+            {(['usage', 'heatmap', 'cost'] as const).map((key) => (
+              <button
+                key={key}
+                type="button"
+                className="ctx-anchor"
+                onClick={() => jumpTo(key)}
+                data-testid={`context-anchor-${key}`}
+              >
+                {key === 'usage'
+                  ? dict.ui.v035.contextAnchorUsage
+                  : key === 'heatmap'
+                    ? dict.ui.v035.contextAnchorHeatmap
+                    : dict.ui.v035.contextAnchorCost}
+              </button>
+            ))}
+          </nav>
           {/* Context 窗口 */}
-      <section className="card">
+      <section className="card ctx-section" id="ctx-section-usage" data-collapsed={collapsed.usage || undefined}>
         <div className="card-head">
           <span className="card-title">{dict.contextWindowTitle}</span>
+          <SectionToggle
+            name={dict.contextWindowTitle}
+            collapsed={collapsed.usage}
+            controls="ctx-section-usage-body"
+            onToggle={() => toggleSection('usage')}
+            testId="context-section-toggle-usage"
+          />
         </div>
+        <div className="ctx-section-body" id="ctx-section-usage-body" hidden={collapsed.usage}>
         {tele ? (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }} title={dict.usageSources[tele.usageSource]}>
+            <div className="ccv-ctx-head" title={dict.usageSources[tele.usageSource]}>
               <span className="stat-big">{formatTokenShort(tele.usedContextTokens)}</span>
               <span className="stat-sub">
                 / {formatTokenShort(tele.maxContextTokens)} · {pct.toFixed(1)}%
@@ -919,7 +1038,7 @@ export function ContextCostInspectorView({
               <div className="ctx-metric-tile" data-testid="context-cache-hit-rate"
                 title={cacheHitLabel === undefined ? dict.ui.sessionCacheHitUnknownDetail : undefined}>
                 <span className="ctx-metric-label">
-                  <span className="ctx-metric-dot" style={{ background: DIM_COLORS.cached }} />
+                  <span className="ctx-metric-dot" style={colorVar(DIM_COLORS.cached)} />
                   {dict.ui.sessionCacheHitLabel}
                 </span>
                 <strong className="ctx-metric-val mono">{cacheHitLabel ?? dict.ui.sessionCacheHitUnknown}</strong>
@@ -932,10 +1051,7 @@ export function ContextCostInspectorView({
                   <span
                     key={b.label}
                     data-segment-label={b.label}
-                    style={{
-                      width: `${(b.val / breakdownSum) * effectiveFillPct}%`,
-                      background: b.c,
-                    }}
+                    style={segStyle((b.val / breakdownSum) * effectiveFillPct, b.c)}
                     title={`${b.label}: ${formatTokenShort(b.val)}`}
                   />
                 ))}
@@ -943,45 +1059,44 @@ export function ContextCostInspectorView({
             <div className="legend">
               {breakdown.map((b) => (
                 <div key={b.label} className="legend-item">
-                  <span className="legend-swatch" style={{ background: b.c }} />
+                  <span className="legend-swatch" style={colorVar(b.c)} />
                   <span className="legend-label truncate">{b.label}</span>
                   <span className="legend-val">{formatTokenShort(b.val)}</span>
                 </div>
               ))}
             </div>
             {tele.attachments.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div className="ccv-col ccv-col-4">
                 <div className="sub-head">
                   <Icon icon={Paperclip} size="xs" />
                   <span>{dict.attachmentAuditTitle}</span>
                 </div>
                 {tele.attachments.map((att) => (
-                  <div key={att.id} className="legend-item" style={{ fontSize: 11.5 }}>
+                  <div key={att.id} className="legend-item is-sm">
                     <span className="legend-label truncate mono">{att.name}</span>
                     <span className="legend-val">{formatTokenShort(att.estimatedTokens)}</span>
                   </div>
                 ))}
               </div>
             )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }} data-testid="compaction-monitor-section">
+            <div className="ccv-col ccv-col-5" data-testid="compaction-monitor-section">
               <div className="sub-head">
                 <Icon icon={Minimize2} size="xs" />
                 <span>{dict.compactionMonitorTitle}</span>
-                <span className="badge badge-mono" style={{ marginLeft: 'auto', textTransform: 'none' }}>
+                <span className="badge badge-mono ccv-count-badge">
                   {tele.compactionCountIsMinimum && '≥'}{dict.compactionCountBadge(tele.compactionCount ?? tele.compactions?.length ?? 0)}
                 </span>
               </div>
               {(tele.compactionCount ?? 0) >= 50 && <span className="stat-sub">{dict.ui.copy.showingTheLatest50}</span>}
               {!tele.compactions || tele.compactions.length === 0 ? (
-                <div className="stat-sub" style={{ fontSize: 11.5 }}>
+                <div className="stat-sub is-sm">
                   {dict.compactionEmpty}
                 </div>
               ) : (
                 [...tele.compactions].reverse().map((comp) => (
                   <div
                     key={comp.id}
-                    className="legend-item"
-                    style={{ fontSize: 11.5, gap: 6 }}
+                    className="legend-item is-sm ccv-compaction-row"
                     data-testid={`compaction-record-${comp.id}`}
                   >
                     <span className="legend-label mono">
@@ -992,7 +1107,7 @@ export function ContextCostInspectorView({
                     {comp.savedTokens > 0 && (
                       <span className="badge badge-success badge-mono">-{formatTokenShort(comp.savedTokens)}</span>
                     )}
-                    <span className="legend-val muted" style={{ fontSize: 11 }}>
+                    <span className="legend-val muted is-xs">
                       {comp.trigger === 'manual' ? dict.compactionManualLabel : dict.compactionAutoLabel}
                       {comp.estimated && (dict.ui.copy.estimated)}
                       {comp.timestamp && Number.isFinite(Date.parse(comp.timestamp)) ? ` · ${new Date(comp.timestamp).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })}` : ''}
@@ -1005,20 +1120,25 @@ export function ContextCostInspectorView({
         ) : (
           <div className="stat-sub">{dict.contextEmpty}</div>
         )}
+        </div>
       </section>
 
       {/* Token 热力图 —— U-04 共享热力图（KPI 洞察条 + 7d 小时标尺矩阵 + 30d Mon–Sun 日历） */}
-      <TokenHeatmapView
-        testIdPrefix=""
-        sectionTestId="token-heatmap-section"
-        title={dict.heatmapSectionTitle}
-        hourly24h={dashboard.hourly24h}
-        matrix7d={dashboard.matrix7d}
-        calendar30d={dashboard.calendar30d}
-      />
+      <div className="ctx-section" id="ctx-section-heatmap">
+        <TokenHeatmapView
+          testIdPrefix=""
+          sectionTestId="token-heatmap-section"
+          title={dict.heatmapSectionTitle}
+          hourly24h={dashboard.hourly24h}
+          daily7d={dashboard.daily7d}
+          calendar30d={dashboard.calendar30d}
+          collapsed={collapsed.heatmap}
+          onToggleCollapsed={() => toggleSection('heatmap')}
+        />
+      </div>
 
       {/* Cost */}
-      <section className="card" data-testid="cost-breakdown-section">
+      <section className="card ctx-section" id="ctx-section-cost" data-testid="cost-breakdown-section">
         <div className="card-head">
           <span className="card-title">{dict.costSectionTitle}</span>
           <div className="segmented segmented-sm">
@@ -1034,10 +1154,18 @@ export function ContextCostInspectorView({
               </button>
             ))}
           </div>
+          <SectionToggle
+            name={dict.costSectionTitle}
+            collapsed={collapsed.cost}
+            controls="ctx-section-cost-body"
+            onToggle={() => toggleSection('cost')}
+            testId="context-section-toggle-cost"
+          />
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-          <span className="stat-big" style={{ color: 'var(--accent-text, var(--accent-primary))' }} data-testid="cost-total-usd">
+        <div className="ctx-section-body" id="ctx-section-cost-body" hidden={collapsed.cost}>
+        <div className="ccv-total-row">
+          <span className="stat-big is-accent" data-testid="cost-total-usd">
             {formatUsd(cost.totalCostUsd)}
           </span>
           <span className="stat-sub">{formatTokenShort(cost.totalTokens)} Tokens</span>
@@ -1052,10 +1180,7 @@ export function ContextCostInspectorView({
               <span
                 key={d.key}
                 data-cost-dim={d.key}
-                style={{
-                  width: `${Math.min(100, (d.usd / costBarReferenceCap) * 100)}%`,
-                  background: d.c,
-                }}
+                style={segStyle(Math.min(100, (d.usd / costBarReferenceCap) * 100), d.c)}
                 title={`${d.label}: ${formatUsd(d.usd)}`}
               />
             ))}
@@ -1065,7 +1190,7 @@ export function ContextCostInspectorView({
           {sortedDims.map((d) => (
             <div key={d.key} className="cost-cell" title={`${formatTokenShort(d.tokens)} Tokens`}>
               <span className="cost-cell-label">
-                <span className="legend-swatch" style={{ background: d.c }} />
+                <span className="legend-swatch" style={colorVar(d.c)} />
                 {d.label}
               </span>
               <span className="cost-cell-val">{formatUsd(d.usd)}</span>
@@ -1103,7 +1228,7 @@ export function ContextCostInspectorView({
                       <span
                         key={seg.key}
                         data-model-seg={seg.key}
-                        style={{ width: `${Math.min(100, seg.usd * scale)}%`, background: seg.c }}
+                        style={segStyle(Math.min(100, seg.usd * scale), seg.c)}
                       />
                     ))}
                   </div>
@@ -1118,10 +1243,10 @@ export function ContextCostInspectorView({
             <div className="sub-head">{dict.donutChartTitle}</div>
             <div className="donut-wrap">
               <Donut items={models} />
-              <div className="legend" style={{ gridTemplateColumns: '1fr', flex: 1 }}>
+              <div className="legend legend-single">
                 {models.map((m, idx) => (
                   <div key={m.modelId} className="legend-item">
-                    <span className="legend-swatch" style={{ background: MODEL_COLORS[idx % MODEL_COLORS.length] }} />
+                    <span className="legend-swatch" style={colorVar(MODEL_COLORS[idx % MODEL_COLORS.length])} />
                     <span className="legend-label truncate mono">{m.modelId}</span>
                     <span className="legend-val">{(m.shareRatio * 100).toFixed(1)}%</span>
                   </div>
@@ -1131,7 +1256,7 @@ export function ContextCostInspectorView({
           </>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="ccv-foot-row">
           <span className="disclaimer" data-testid="cost-disclaimer-banner">
             <Icon icon={Info} size="xs" />
             {COST_DISCLAIMER[locale]}
@@ -1141,6 +1266,7 @@ export function ContextCostInspectorView({
             <Icon icon={Settings2} size="xs" />
             <span>{dict.editRateCardsBtn}</span>
           </button>
+        </div>
         </div>
       </section>
         </>

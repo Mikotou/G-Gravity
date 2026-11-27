@@ -28,6 +28,8 @@ export class SessionLedger extends EventEmitter {
     return `owned-sessions-${this.profileId}.json`;
   }
 
+  ownsSession(id: string): boolean { return this.ownedIds.has(id); }
+
   hasPersistedLedger(): boolean {
     if (!this.store) return false;
     const raw = this.store.read<Record<string, ManagedSessionSummary> | null>(this.ownedLedgerFile(), null);

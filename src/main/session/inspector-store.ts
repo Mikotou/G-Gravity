@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
+import { normalizePlan, unreceivedPlan } from './session-plan';
 import { EventEmitter } from 'node:events';
 import type { AcpSessionUpdatePayload } from '../../shared/acp-protocol';
 import { computeUnifiedLineDiff, isToolCallFailure, terminalCommand } from '../../shared/session-contract';
-import type { SemanticToolCallCard, SessionInspectorData, FileDiffEntry } from '../../shared/session-contract';
+import type { SemanticToolCallCard, SessionInspectorData, SessionTodoItem, FileDiffEntry } from '../../shared/session-contract';
 import { getCanonicalToolName } from '../../shared/theme-i18n-contract';
 import type { ClientStore } from '../storage/client-store';
 
@@ -11,6 +13,9 @@ export class InspectorStore extends EventEmitter {
   private states = new Map<string, SessionInspectorData>();
   private proposedDiffs = new Map<string, FileDiffEntry[]>();
   private timers = new Map<string, NodeJS.Timeout>();
+  private legacyIds = new Set<string>();
+  private owned?: ReadonlySet<string>;
+  private dirtyFiles = new Set<string>();
   private filename = 'inspector-states.json';
   constructor(private store?: ClientStore, profileId?: string, owned?: ReadonlySet<string>) {
     super();
@@ -20,33 +25,65 @@ export class InspectorStore extends EventEmitter {
     this.flush();
     this.clear();
     this.filename = profileId ? 'inspector-states-' + profileId + '.json' : 'inspector-states.json';
-    if (this.store) {
-      const saved = this.store.readSessionRecords<SessionInspectorData>(this.filename, 'inspector-states.json', owned);
-      if (saved && typeof saved === 'object') {
-        for (const [sid, data] of Object.entries(saved)) {
-          if (data && typeof data === 'object' && Array.isArray(data.diffs)) {
-            for (const entry of data.terminals ??= []) entry.revision ??= 0;
-            this.states.set(sid, data);
-          }
-        }
+    this.owned = owned;
+    const legacy = this.store?.readSessionRecords<SessionInspectorData>(this.filename, 'inspector-states.json', owned);
+    this.legacyIds = new Set(Object.keys(legacy || {}));
+  }
+  private file(id: string): string {
+    return 'inspector-session-' + createHash('sha256').update(JSON.stringify([this.filename, id])).digest('hex') + '.json';
+  }
+  private state(id: string): SessionInspectorData {
+    let value = this.states.get(id);
+    if (!value) {
+      const file = this.file(id);
+      let saved = this.store?.read<SessionInspectorData | null>(file, null);
+      if (!saved && this.legacyIds.has(id)) {
+        saved = this.store?.readSessionRecords<SessionInspectorData>(this.filename, 'inspector-states.json', this.owned)[id];
+      }
+      value = saved && Array.isArray(saved.diffs) ? saved : { sessionId: id, diffs: [], todos: [], terminals: [] };
+      if (!value.plan) {
+        const legacy = value.todos?.length && normalizePlan(value.todos);
+        value.plan = legacy ? { ...legacy.plan, revision: 1 } : unreceivedPlan();
+        value.todos = legacy ? legacy.todos.map((todo, i) => ({ ...todo, id: value!.todos[i].id || todo.id })) : [];
+      }
+      for (const entry of value.terminals ??= []) entry.revision ??= 0;
+      if (this.states.size >= 200) {
+        const oldest = this.states.keys().next().value!;
+        if (this.timers.has(oldest)) this.publish(oldest);
+        this.flushFile(this.file(oldest));
+        this.states.delete(oldest);
       }
     }
+    this.states.delete(id);
+    this.states.set(id, value);
+    return value;
   }
-  get(sessionId: string): SessionInspectorData { return structuredClone(this.states.get(sessionId) || { sessionId, diffs: [], todos: [], terminals: [] }); }
+  needsPlanReplay(sessionId: string): boolean { return this.state(sessionId).plan?.state === 'unreceived'; }
+  get(sessionId: string): SessionInspectorData { return structuredClone(this.state(sessionId)); }
+  private flushFile(file: string): void {
+    if (this.dirtyFiles.has(file)) {
+      this.store?.flushPending(file);
+      this.dirtyFiles.delete(file);
+    }
+  }
   flush(): void {
     for (const id of this.timers.keys()) this.publish(id);
-    this.store?.flushPending(this.filename);
+    for (const file of this.dirtyFiles) this.flushFile(file);
   }
   clear(): void {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear(); this.states.clear(); this.proposedDiffs.clear();
   }
   /** 消费一条增量通知，更新该会话的计划、工具卡片或终端记录。调用者传入旧卡片以合并仅含状态的新通知。 */
-  consume(sessionId: string, update: AcpSessionUpdatePayload, previous?: SemanticToolCallCard, denyReason?: string): SemanticToolCallCard | undefined {
-    const state: SessionInspectorData = this.states.get(sessionId) || { sessionId, diffs: [], todos: [], terminals: [] };
+  consume(sessionId: string, update: AcpSessionUpdatePayload & { sessionUpdate: 'plan' }): SessionTodoItem[] | undefined;
+  consume(sessionId: string, update: AcpSessionUpdatePayload, previous?: SemanticToolCallCard, denyReason?: string): SemanticToolCallCard | undefined;
+  consume(sessionId: string, update: AcpSessionUpdatePayload, previous?: SemanticToolCallCard, denyReason?: string): SemanticToolCallCard | SessionTodoItem[] | undefined {
     if (update.sessionUpdate === 'plan') {
-      state.todos = (update.entries || []).slice(0, 100).map((entry, index) => ({ id: `todo-${index}`, content: entry.content, status: entry.status || 'pending', priority: entry.priority })); this.save(state); return;
+      const normalized = normalizePlan(update.entries);
+      if (normalized) return this.applyPlan(sessionId, normalized);
+      return;
     }
+    const state = this.state(sessionId);
     if (!update.toolCallId) return;
     const input = record(update.rawInput); const output = record(update.rawOutput);
     const kindNames: Record<string, string> = { execute: 'run_command', read: 'read_file', edit: 'edit_file', search: 'grep_search', fetch: 'search_web' };
@@ -122,17 +159,28 @@ export class InspectorStore extends EventEmitter {
     }
     state.diffs = state.diffs.slice(-200); state.terminals = state.terminals.slice(-200); this.save(state, Boolean(card.completedAt)); return card;
   }
+  applyPlan(sessionId: string, normalized: NonNullable<ReturnType<typeof normalizePlan>>): SessionTodoItem[] {
+    const state = this.state(sessionId);
+    state.todos = normalized.todos;
+    state.plan = { ...normalized.plan, revision: (state.plan?.revision ?? 0) + 1 };
+    this.save(state);
+    return structuredClone(state.todos);
+  }
   remove(id: string): void {
     for (const key of this.proposedDiffs.keys()) if (key.startsWith(id + '\0')) this.proposedDiffs.delete(key);
     clearTimeout(this.timers.get(id));
     this.timers.delete(id);
     this.states.delete(id);
-    this.store?.write(this.filename, Object.fromEntries(this.states));
+    this.store?.write(this.file(id), null);
+    this.dirtyFiles.delete(this.file(id));
+    if (this.store && this.legacyIds.has(id)) {
+      const legacy = this.store.readSessionRecords(this.filename, 'inspector-states.json', this.owned);
+      delete legacy[id];
+      this.store.write(this.filename, legacy);
+      this.legacyIds.delete(id);
+    }
   }
   private save(state: SessionInspectorData, immediate = false): void {
-    this.states.delete(state.sessionId);
-    this.states.set(state.sessionId, state);
-    while (this.states.size > 200) this.states.delete(this.states.keys().next().value!);
     if (immediate) { this.publish(state.sessionId); return; }
     if (this.timers.has(state.sessionId)) return;
     const timer = setTimeout(() => this.publish(state.sessionId), 50);
@@ -144,7 +192,11 @@ export class InspectorStore extends EventEmitter {
     this.timers.delete(id);
     const state = this.states.get(id);
     if (!state) return;
-    this.store?.writeDebounced(this.filename, Object.fromEntries(this.states));
+    if (this.store) {
+      const file = this.file(id);
+      this.store.writeDebounced(file, state);
+      this.dirtyFiles.add(file);
+    }
     this.emit('updated', structuredClone(state));
   }
 }

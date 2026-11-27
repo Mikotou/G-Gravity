@@ -4,7 +4,7 @@ import { SquarePen } from 'lucide-react';
 import type { ChatMessageItem, ReviseMessageInput } from '@shared';
 import { canResendAttachment } from '../../shared/message-revision';
 import { useI18n } from '../i18n/I18nContext';
-import { isImeComposing } from '../lib/platform-keys';
+import { isImeComposing, isPrimaryModifier } from '../lib/platform-keys';
 import { stripIpcErrorPrefix } from '../i18n/locales';
 import { Icon } from './ui/Icon';
 
@@ -12,7 +12,8 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
   latest?: boolean; editRequest?: number;
   message: ChatMessageItem; busy: boolean; submit: (input: ReviseMessageInput) => Promise<void>; children: React.ReactNode;
 }) {
-  const zh = useI18n().locale === 'zh-CN';
+  const { locale, mac } = useI18n();
+  const zh = locale === 'zh-CN';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [annotations, setAnnotations] = useState(message.annotations || []);
@@ -57,7 +58,7 @@ export function EditUserMessage({ message, busy, submit, children, editRequest =
       onChange={e => setDraft(e.target.value)} onKeyDown={e => {
         if (isImeComposing(e)) return;
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void send(); }
+        if (e.key === 'Enter' && isPrimaryModifier(e, mac)) { e.preventDefault(); void send(); }
       }} />
     {annotations.map((item, index) => <div className="sent-annotation" key={index}>
       <blockquote>{item.excerpt}</blockquote>

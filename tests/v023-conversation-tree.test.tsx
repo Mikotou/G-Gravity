@@ -268,8 +268,9 @@ describe('v0.2.3 Codex 风格原地对话分支树（左侧单主对话 + 多级
     expect(screen.getByTestId('context-branch-banner').textContent).toContain('第 2 轮分叉');
     const contextViewShortText = screen.getByTestId('context-cost-inspector').textContent || '';
 
-    // 切回「分支树」页签，点击主对话节点切回主分支
-    fireEvent.click(screen.getByTestId('context-banner-open-tree'));
+    // 切回「分支树」页签（v0.3.5 I1：横幅不再重复按钮，统一经 Context 二级页签进入），点击主对话节点切回主分支
+    expect(screen.queryByTestId('context-banner-open-tree')).toBeNull();
+    fireEvent.click(screen.getByTestId('inspector-tab-tree'));
     await screen.findByTestId('conversation-tree-panel');
     fireEvent.click(screen.getByTestId(`tree-node-${root.sessionId}`));
 
@@ -491,7 +492,7 @@ describe('v0.2.3 Codex 风格原地对话分支树（左侧单主对话 + 多级
     // 兄弟分支自己的新提问正常可见；用户通过「发送回答」回复后消失
     const bar2 = await screen.findByTestId('question-bar');
     expect(bar2.textContent).toContain('靛蓝');
-    fireEvent.click(within(bar2).getByRole('button', { name: '靛蓝' }));
+    fireEvent.click(within(bar2).getByRole('radio', { name: '靛蓝' }));
     await act(async () => {
       fireEvent.click(within(bar2).getByRole('button', { name: '发送回答' }));
     });

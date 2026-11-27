@@ -725,7 +725,7 @@ describe('GitHub Releases 自动更新引擎（安全域名白名单、平台匹
       ? Response.json({ tag_name: 'v0.2.5', assets: [{ name: 'Gravity.exe', size: 8,
         browser_download_url: 'https://github.com/Mikotou/G-Gravity/releases/download/v0.2.5/Gravity.exe' }] })
       : new Response(body));
-    const options = { currentVersion: '0.2.4', platform: 'win32' as const, updatesDir, fetcher,
+    const options = { currentVersion: '0.2.4', platform: 'win32' as const, arch: 'x64' as const, updatesDir, fetcher,
       installHandler: vi.fn(async () => ({ launched: false, message: 'opened folder' })) };
     const updater = new GitHubUpdater(options);
     const failures = await Promise.all([updater.downloadUpdate(), updater.downloadUpdate()]);
@@ -751,7 +751,7 @@ describe('GitHub Releases 自动更新引擎（安全域名白名单、平台匹
     const base = mkDir('gravity-update-dir-');
     const updatesDir = path.join(base, 'pending');
     writeFileSync(updatesDir, 'file occupying directory path');
-    const updater = new GitHubUpdater({ currentVersion: '0.2.4', updatesDir, platform: 'win32',
+    const updater = new GitHubUpdater({ currentVersion: '0.2.4', updatesDir, platform: 'win32', arch: 'x64',
       fetcher: async url => String(url).includes('api.github.com')
         ? Response.json({ tag_name: 'v0.2.5', assets: [{ name: 'Gravity.exe', size: 2,
           browser_download_url: 'https://github.com/Mikotou/G-Gravity/releases/download/v0.2.5/Gravity.exe' }] })

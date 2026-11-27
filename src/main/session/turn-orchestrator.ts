@@ -35,7 +35,7 @@ export class TurnOrchestrator extends TurnStream {
   private finishPromptTurn(id: string, stop?: SessionDiagnosticBanner): void {
     try {
       this.questions.cancel(id);
-      this.finishMessage(id, stop);
+      this.finishMessage(id, stop, false);
     } finally {
       this.app.telemetry.endTurn(id);
     }
@@ -45,34 +45,35 @@ export class TurnOrchestrator extends TurnStream {
       this.app.treeUpdated(id);
     }
   }
-  private nextQueuedReply(id: string): SendPromptInput | undefined {
-    const answers = this.customAnswers.get(id);
-    this.customAnswers.delete(id);
-    if (answers?.length) return { sessionId: id, text: answers.join('\n\n') };
+  private nextQueuedReply(id: string): { input: SendPromptInput; followup?: ChatMessageItem } | undefined {
+    const followup = this.followups.take(id);
+    if (followup) return { input: { sessionId: id, text: followup.content }, followup };
     const feedback = this.feedback.get(id);
     this.feedback.delete(id);
-    if (feedback?.length) return { sessionId: id, text: '用户拒绝了上一轮操作，并要求根据以下反馈调整：\n' + feedback.join('\n') };
+    if (feedback?.length) return { input: { sessionId: id, text: '用户拒绝了上一轮操作，并要求根据以下反馈调整：\n' + feedback.join('\n') } };
   }
   protected sendQueuedReply(id: string): void {
     if (this.app.disposed || this.promptOwners.has(id) || !this.app.sessions.isActive(id)) return;
     const next = this.nextQueuedReply(id);
     if (!next) return;
     const profile = this.app.accounts.activeProfileId;
-    void this.sendPrompt(next).catch(error => {
+    void this.runQueue(next.input, next.followup).catch(error => {
       if (!this.app.disposed && this.app.accounts.activeProfileId === profile && this.app.sessions.isActive(id)) {
         this.app.sessions.setStatus(id, 'error', diagnosticForError(error, this.app.client));
       }
     });
   }
-  async sendPrompt(input: SendPromptInput): Promise<void> {
+  sendPrompt(input: SendPromptInput): Promise<void> { return this.runQueue(input); }
+  private async runQueue(input: SendPromptInput, followup?: ChatMessageItem): Promise<void> {
     const id = input.sessionId;
     if (this.promptOwners.has(id)) throw new Error('会话仍在生成，请等待或停止');
     const owner = new AbortController();
     this.promptOwners.set(id, owner);
     try {
-      let next: SendPromptInput | undefined = input;
+      let next: ReturnType<typeof this.nextQueuedReply> = { input, followup };
       while (next) {
-        await this.runPrompt(next, owner);
+        await this.runPrompt(next.input, owner, next.followup);
+        if (this.promptOwners.get(id) === owner) this.settleActivity(id);
         if (owner.signal.aborted || this.promptOwners.get(id) !== owner || !this.app.sessions.isActive(id) || this.turnUserCancelled.has(id)) break;
         next = this.nextQueuedReply(id);
       }
@@ -86,11 +87,12 @@ export class TurnOrchestrator extends TurnStream {
     this.submitted.delete(id);
     this.promptOwners.delete(id);
     this.resetTurnState(id);
-    this.customAnswers.delete(id);
+    this.followups.end(id);
+    this.settleActivity(id);
     this.feedback.delete(id);
   }
 
-  private async runPrompt(input: SendPromptInput, owner: AbortController): Promise<void> {
+  private async runPrompt(input: SendPromptInput, owner: AbortController, followup?: ChatMessageItem): Promise<void> {
     this.app.accounts.assertReady();
     if (this.app.isChangingSession(input.sessionId)) throw new Error('该会话正在创建修订分支');
     if (typeof input?.text !== 'string' || (input.annotations !== undefined && (!Array.isArray(input.annotations) ||
@@ -167,9 +169,10 @@ export class TurnOrchestrator extends TurnStream {
     this.clearReactiveTurnTimer(input.sessionId);
     if (this.assistantMessages.has(input.sessionId) || this.questionSegments.has(input.sessionId)) this.finishMessage(input.sessionId);
     this.questions.cancel(input.sessionId);
-    const submitted = this.userMessage({ ...input, attachments: input.attachments?.map((item, index) => ({ ...item, sizeBytes: prepared[index].sizeBytes })) });
+    this.activity.begin(input.sessionId);
+    const submitted = followup ?? this.userMessage({ ...input, attachments: input.attachments?.map((item, index) => ({ ...item, sizeBytes: prepared[index].sizeBytes })) });
     this.submitted.set(input.sessionId, submitted);
-    this.upsert(submitted);
+    if (!followup) this.upsert(submitted);
     this.resetTurnState(input.sessionId);
     this.app.telemetry.ensure(input.sessionId, session.modelId);
     if (isManualCompact) this.app.telemetry.beginManualCompaction(input.sessionId);
@@ -190,15 +193,23 @@ export class TurnOrchestrator extends TurnStream {
     let compactSucceeded = false;
     let stopReason: string | undefined;
     let errorStop: SessionDiagnosticBanner | undefined;
+    let sendAttempted = false;
     try {
       owner.signal.throwIfAborted();
+      if (followup) this.followups.change(followup, 'sending');
+      owner.signal.throwIfAborted();
+      sendAttempted = true;
       const result = await this.app.sessions.sendPrompt({ sessionId: input.sessionId, prompt });
       if (!isCurrent()) return;
+      if (followup) this.followups.change(followup, 'sent');
       stopReason = result.stopReason;
       compactSucceeded = result.stopReason === 'end_turn' && !this.turnUserCancelled.has(input.sessionId);
       if (result.usage) this.app.telemetry.applyUsage(input.sessionId, result.usage);
     }
     catch (error) {
+      if (followup && isCurrent() && followup.questionFollowup?.state === 'sending') {
+        this.followups.change(followup, !sendAttempted || error instanceof AcpRequestNotSentError ? 'failed-unsent' : 'unknown');
+      }
       discardUnsent(error);
       const notice = error instanceof Error && !(error instanceof AcpRequestNotSentError) &&
           !(error instanceof AcpRpcError && [401, 403, 429, -32800].includes(error.code))
@@ -221,8 +232,7 @@ export class TurnOrchestrator extends TurnStream {
         if (!canRecoverToolError) {
           errorStop = diagnostic;
           this.app.sessions.setStatus(input.sessionId, 'error', diagnostic);
-          submitted.sendFailed = true;
-          this.upsert(submitted);
+          if (!followup) { submitted.sendFailed = true; this.upsert(submitted); }
           throw error;
         }
       }
@@ -244,12 +254,15 @@ export class TurnOrchestrator extends TurnStream {
       }
     }
     // 防止因单条命令触发安全拦截、少量命令失败或瞬态断连导致整轮无正文回复即完全中止：最多自动续接 1 次（有界，绝不循环）。
+    // A server-side interruption can settle without a local cancel or a thrown RPC error.
+    const hadFollowup = this.followups.has(input.sessionId);
+    if (stopReason !== 'end_turn' || this.turnStreamInterrupted.has(input.sessionId)) this.followups.failQueued(input.sessionId);
     const wasCancelledByUser = this.turnUserCancelled.has(input.sessionId);
     const autoDenied = this.turnAutoDenied.get(input.sessionId) || [];
     const streamInterruptedUnrecovered = this.turnStreamInterrupted.has(input.sessionId);
     const shouldAutoRecover =
-      !isManualCompact &&
-      !this.customAnswers.has(input.sessionId) && !this.feedback.has(input.sessionId) &&
+      !isManualCompact && !followup &&
+      !hadFollowup && !this.feedback.has(input.sessionId) &&
       !owner.signal.aborted && !wasCancelledByUser && this.app.client.cooldownUntilMs === cooldownAtStart &&
       !this.app.client.isRateLimited &&
       (stopReason === undefined || stopReason === 'end_turn' || (stopReason === 'cancelled' && (autoDenied.length > 0 || failedTools.length > 0))) &&
@@ -305,6 +318,7 @@ export class TurnOrchestrator extends TurnStream {
           prompt: [{ type: 'text', text: continuationPrompt }],
         });
         if (!isCurrent()) return;
+        if (resumed.stopReason !== 'end_turn' || this.turnStreamInterrupted.has(input.sessionId)) this.followups.failQueued(input.sessionId);
         if (resumed.usage) this.app.telemetry.applyUsage(input.sessionId, resumed.usage);
         recoveryStop = this.turnStop(input.sessionId, resumed.stopReason);
         if (!this.turnUserCancelled.has(input.sessionId)) {
@@ -327,6 +341,7 @@ export class TurnOrchestrator extends TurnStream {
           }
         }
       } catch (error) {
+        if (isCurrent()) this.followups.failQueued(input.sessionId);
         discardUnsent(error);
         if (isCurrent() && this.turnUserCancelled.has(input.sessionId)) {
           this.app.sessions.setStatus(input.sessionId, 'idle');
@@ -346,11 +361,11 @@ export class TurnOrchestrator extends TurnStream {
     }
     // Release with the finished turn so immediate ACP replies expose a settled, idle session.
     const id = input.sessionId;
-    if (!this.customAnswers.has(id) && !this.feedback.has(id)) this.releasePrompt(id, owner);
+    if (!this.followups.has(id) && !this.feedback.has(id)) this.releasePrompt(id, owner);
   }
-  async answerQuestion(input: QuestionSubmission): Promise<void> {
+  async answerQuestion(input: QuestionSubmission) {
     this.app.accounts.assertReady();
-    this.questions.answer(input);
+    return this.questions.answer(input);
   }
   async cancelPrompt(sessionId: string): Promise<void> {
     this.promptOwners.get(sessionId)?.abort(new AcpRequestNotSentError('用户已取消本次提交'));

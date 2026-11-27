@@ -129,7 +129,7 @@ describe('v0.2.0 前端交互与视觉契约', () => {
     expect(details.querySelectorAll('progress.quota-progress')).toHaveLength(4);
   });
 
-  it.each(['zh-CN', 'en-US'] as const)('额度不可读取时给出 %s 指引且隐藏刷新入口', async locale => {
+  it.each(['zh-CN', 'en-US'] as const)('额度不可读取时给出 %s 指引且保留可恢复手动刷新入口', async locale => {
     const profileId = 'quota-guide-' + locale;
     const read = vi.fn().mockResolvedValue({ profileId, unavailable: 'profile' });
     window.gravityDesktop = { ...getFallbackDesktopBridge(), getAccountQuota: read };
@@ -137,7 +137,8 @@ describe('v0.2.0 前端交互与视觉契约', () => {
     fireEvent.click(screen.getByTestId('quota-weekly'));
     const guide = await screen.findByText(/\/usage/);
     expect(guide.textContent).toContain(locale === 'zh-CN' ? '默认登录资料' : 'default sign-in');
-    expect(screen.queryByRole('button', { name: /^(刷新|Refresh)$/ })).toBeNull();
+    // v0.3.5 AQ-1：绝不因单次 unavailable 永久隐藏或禁用手动刷新按钮
+    expect(screen.getByRole('button', { name: /^(刷新|Refresh)$/ })).toBeTruthy();
     expect(read).toHaveBeenCalledTimes(1);
   });
 

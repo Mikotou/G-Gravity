@@ -61,10 +61,12 @@ export function TopBar({
           const pending = pendingCount > 0;
           const tabState = pending ? 'waiting_approval' : tab.status;
           return (
+            // T1：`role="tab"` 与关闭按钮为兄弟节点（外层仅作布局 / 拖拽 / 中键关闭容器），消除可交互控件嵌套
             <div
               key={tab.sessionId}
               className={`tab ${active ? 'is-active' : ''}`}
               data-tab-state={tabState}
+              role="presentation"
               draggable onDragStart={e => startSessionDrag(e.dataTransfer, tab.sessionId)}
               onClick={() => onSelectTab(tab.sessionId)}
               onMouseDown={(e) => {
@@ -77,37 +79,44 @@ export function TopBar({
                   onCloseTab(tab.sessionId);
                 }
               }}
-              onKeyDown={(e) => {
-                if (e.target !== e.currentTarget) return;
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onSelectTab(tab.sessionId);
-                } else if (e.key === 'Delete') {
-                  e.preventDefault();
-                  onCloseTab(tab.sessionId);
-                } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End') {
-                  // 标签条内的方向键漫游焦点（WAI-ARIA tablist）
-                  e.preventDefault();
-                  const tabs = Array.from(e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []);
-                  const index = tabs.indexOf(e.currentTarget);
-                  const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1
-                    : (index + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-                  tabs[next]?.focus();
-                }
-              }}
-              tabIndex={active ? 0 : -1}
-              role="tab"
-              aria-selected={active}
-              title={`${tab.title}\n${tab.cwd}`}
-              data-testid={`tab-item-${tab.sessionId}`}
             >
-              <span className={`status-dot is-${tabState}`} />
-              <span className="tab-title">{tab.title}</span>
-              {pending && <span className="tab-alert-count" title={dict.pendingApprovalsBadge(pendingCount)}>{pendingCount}</span>}
+              <div
+                className="tab-main"
+                role="tab"
+                tabIndex={active ? 0 : -1}
+                aria-selected={active}
+                title={`${tab.title}\n${tab.cwd}`}
+                data-testid={`tab-item-${tab.sessionId}`}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelectTab(tab.sessionId);
+                  } else if (e.key === 'Delete') {
+                    e.preventDefault();
+                    onCloseTab(tab.sessionId);
+                  } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Home' || e.key === 'End') {
+                    // 标签条内的方向键漫游焦点（WAI-ARIA tablist）
+                    e.preventDefault();
+                    const list = e.currentTarget.closest('[role="tablist"]');
+                    const tabs = Array.from(list?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []);
+                    const index = tabs.indexOf(e.currentTarget);
+                    const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1
+                      : (index + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+                    tabs[next]?.focus();
+                  }
+                }}
+              >
+                <span className={`status-dot is-${tabState}`} />
+                <span className="tab-title">{tab.title}</span>
+                {pending && <span className="tab-alert-count" title={dict.pendingApprovalsBadge(pendingCount)}>{pendingCount}</span>}
+              </div>
               <button
                 type="button"
-                className="icon-btn icon-btn-sm"
-                aria-label={dict.closeAction}
+                className="icon-btn icon-btn-sm tab-close"
+                aria-label={dict.ui.v035.closeTab(tab.title)}
+                title={dict.closeAction}
+                tabIndex={active ? 0 : -1}
                 onClick={(e) => {
                   e.stopPropagation();
                   onCloseTab(tab.sessionId);

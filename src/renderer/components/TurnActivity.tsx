@@ -20,6 +20,7 @@ import {
   basenameOf,
   classifyTool,
   formatDuration,
+  isTurnUnconfirmed,
   summarizeTurn,
 } from '../lib/turn-insights';
 import { ToolCallCard } from './ToolCallCard';
@@ -50,14 +51,20 @@ export function pickFailurePeekLine(output: string | undefined, max = 160): stri
 export function ToolActivityStream({
   tools,
   onInspectDiff,
+  settled = false,
+  unconfirmed = false,
 }: {
   tools: SemanticToolCallCard[];
   onInspectDiff: (filePath: string) => void;
+  /** TA-1/TA-4：回合已明确收口（含 turnSettledAt / turnStop）时不再因遗留工具状态持续转圈 */
+  settled?: boolean;
+  /** TA-4：命中旧历史未确认判定时停止转圈 */
+  unconfirmed?: boolean;
 }): React.ReactElement {
   const { dict } = useI18n();
   // v0.3.2：exit 1 等非零退出码与被拦截（rejected）统一计入失败数。
   const failed = tools.filter(isToolCallFailure).length;
-  const running = tools.some(t => t.status === 'pending' || t.status === 'running');
+  const running = !settled && !unconfirmed && tools.some(t => t.status === 'pending' || t.status === 'running');
   // 折叠态用最多 3 颗语义小圆点呈现本轮涉及的操作类别（改动/命令/探索等），无需展开即可感知重点。
   const categories = Array.from(new Set(tools.map(t => classifyTool(t.canonicalToolName || t.rawToolName)))).slice(0, 4);
   // 收起态也要能看到第一处失败/拦截的原因（主进程会把本地策略拦截原因置顶写入 outputPreview）。
@@ -86,7 +93,9 @@ export function ToolActivityStream({
         {running && <UiIcon icon={Loader2} size="xs" className="spin tool-group-spin" label={dict.ui.copy.running} />}
       </summary>
       <div className="tool-group-body">
-        {tools.map(tool => <ToolCallCard key={tool.toolCallId} tool={tool} onInspectDiff={onInspectDiff} nested />)}
+        {tools.map(tool => (
+          <ToolCallCard key={tool.toolCallId} tool={tool} onInspectDiff={onInspectDiff} nested settled={settled || unconfirmed} />
+        ))}
       </div>
     </details>
     {firstFailure && (
@@ -108,10 +117,14 @@ export function ToolActivityStream({
 export function TurnOutcomeBar({
   message,
   turnStartedAt,
+  isLatestAssistant,
+  sessionStatus,
   onInspectDiff,
 }: {
   message: ChatMessageItem;
   turnStartedAt?: string;
+  isLatestAssistant?: boolean;
+  sessionStatus?: ManagedSessionStatus;
   onInspectDiff: (filePath: string) => void;
 }): React.ReactElement | null {
   const { locale, dict } = useI18n();
@@ -119,44 +132,64 @@ export function TurnOutcomeBar({
   const insight = summarizeTurn(message, turnStartedAt);
   // 非正常结束（暂停 / 截断 / 断连 / 拒绝 / 自动续接失败）不能显示绿色「完成」。
   const stopSeverity = message.turnStop?.severity ?? (message.autoResumeFailure ? 'warning' : undefined);
+  const unconfirmed = isTurnUnconfirmed(message, { isLatestAssistant, sessionStatus });
+  const settled = Boolean(message.turnSettledAt);
 
-  // 纯文字回复且没有耗时信息（或耗时很短）时不显示，避免噪音
-  if (!stopSeverity && insight.totalTools === 0 && (insight.durationMs ?? 0) < 1500) return null;
+  // 纯文字回复且没有耗时信息（或耗时很短）时不显示，避免噪音；命中未确认判定时需展示警示。
+  if (!stopSeverity && !unconfirmed && insight.totalTools === 0 && (insight.durationMs ?? 0) < 1500) return null;
 
-  // 结果条优先显示失败，其次显示尚未结束的工具。文件按汇总后的顺序最多展示三项。
+  // TA-1/TA-4：已通过 turnSettledAt 收口或判定为旧历史未确认时，不再继续展示「等待中」转圈。
   const hasFailure = insight.failedTools > 0;
-  const pending = insight.activeTools > 0 && !stopSeverity;
+  const pending = insight.activeTools > 0 && !stopSeverity && !settled && !unconfirmed;
   const shownFiles = insight.changedFiles.slice(0, 3);
   const hiddenFiles = insight.changedFiles.length - shownFiles.length;
   const stateTone = hasFailure || stopSeverity === 'error'
     ? 'tone-danger'
-    : stopSeverity === 'paused' ? 'tone-paused' : stopSeverity === 'warning' || pending ? 'tone-warning' : 'tone-success';
-  const StateIcon = stopSeverity === 'paused' ? CirclePause : stopSeverity === 'error' ? OctagonAlert
-    : hasFailure || stopSeverity === 'warning' ? AlertTriangle : pending ? Loader2 : CheckCircle2;
+    : stopSeverity === 'paused'
+      ? 'tone-paused'
+      : stopSeverity === 'warning' || pending || unconfirmed
+        ? 'tone-warning'
+        : 'tone-success';
+  const StateIcon = stopSeverity === 'paused'
+    ? CirclePause
+    : stopSeverity === 'error'
+      ? OctagonAlert
+      : hasFailure || stopSeverity === 'warning' || unconfirmed
+        ? AlertTriangle
+        : pending
+          ? Loader2
+          : CheckCircle2;
   const stopLabel = stopSeverity === 'paused'
     ? (message.turnStop?.code === 'user_cancelled' ? dict.ui.v031.stoppedChip : dict.ui.v031.pausedChip)
     : stopSeverity === 'error' ? dict.ui.v031.errorChip : dict.ui.v031.warningChip;
 
   return (
     <div
-      className={`turn-outcome ${hasFailure ? 'has-failure' : stopSeverity ? `is-stopped is-${stopSeverity}` : pending ? 'is-pending' : 'is-ok'}`}
+      className={`turn-outcome ${hasFailure ? 'has-failure' : stopSeverity ? `is-stopped is-${stopSeverity}` : unconfirmed ? 'is-unconfirmed' : pending ? 'is-pending' : 'is-ok'}`}
       data-testid={`turn-outcome-${message.id}`}
       data-turn-stop={message.turnStop?.code}
+      data-unconfirmed={unconfirmed ? 'true' : undefined}
     >
-      <span className={`outcome-chip outcome-state ${stateTone}`}>
+      <span
+        className={`outcome-chip outcome-state ${stateTone}`}
+        title={unconfirmed && !hasFailure && !stopSeverity ? dict.ui.v035.turnUnconfirmed : undefined}
+        data-testid={unconfirmed && !hasFailure && !stopSeverity ? `turn-unconfirmed-${message.id}` : undefined}
+      >
         <UiIcon icon={StateIcon} size="xs" className={pending && !hasFailure ? 'spin' : undefined} />
         <span>
           {stopSeverity && !hasFailure
             ? stopLabel
             : hasFailure
-            ? dict.ui.copy.fmtFailed(insight.failedTools)
-            : pending
-              ? dict.ui.copy.fmtPending(insight.activeTools)
-              : dict.ui.copy.done}
+              ? dict.ui.copy.fmtFailed(insight.failedTools)
+              : unconfirmed
+                ? dict.ui.v035.turnUnconfirmedShort
+                : pending
+                  ? dict.ui.copy.fmtPending(insight.activeTools)
+                  : dict.ui.copy.done}
         </span>
       </span>
 
-      {insight.durationMs !== undefined && (
+      {!unconfirmed && insight.durationMs !== undefined && (
         <span className="outcome-chip tone-muted" title={dict.ui.copy.turnDuration}>
           <UiIcon icon={Clock3} size="xs" />
           <span>{formatDuration(insight.durationMs)}</span>

@@ -56,7 +56,7 @@ export class ApprovalEngine extends EventEmitter {
     this.reviewer = options.reviewer || reviewWithIndependentModel;
     this.now = options.now || Date.now;
     this.config = structuredClone(DEFAULT_APPROVAL_CONFIG);
-    if (options.config) this.updateConfig(options.config);
+    if (options.config) this.config = structuredClone(validatedApprovalConfig(this.config, options.config, true));
   }
 
   getConfig(): ApproveForMeConfig {
@@ -148,6 +148,11 @@ export class ApprovalEngine extends EventEmitter {
 
   screen(command: string, cwd: string, toolName = 'run_command', rawInput?: unknown): DeterministicScreeningResult {
     return screenCommand(command, cwd, this.config, toolName, rawInput);
+  }
+
+  hasPendingForSession(sessionId: string): boolean {
+    for (const item of this.pending.values()) if (item.card.sessionId === sessionId) return true;
+    return false;
   }
 
   listPending(): PendingApprovalRequest[] {

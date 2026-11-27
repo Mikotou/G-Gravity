@@ -17,32 +17,58 @@ async function launchHeadlessChromium() {
 }
 
 async function checkActivitySeam(page) {
-  const duration = await page.evaluate(async () => {
-    // Measure the repeating flow after the active tab has finished changing from its idle color.
+  const { tabDuration, paneDuration } = await page.evaluate(async () => {
+    // Measure the repeating streaming indicators after the active tab has finished changing from its idle color.
     await Promise.all(document.getAnimations().filter(a => a instanceof CSSTransition).map(a => a.finished.catch(() => {})));
-    const lines = document.getAnimations().filter(a => a.animationName === 'gv-activity-flow');
-    if (lines.length !== 2) throw new Error('Expected a running tab and pane indicator, got ' + lines.length);
-    lines.forEach(a => a.pause());
-    return Number(lines[0].effect.getTiming().duration);
+    const tabAnims = document.getAnimations().filter(a => a.animationName === 'gv-tab-breathe');
+    const paneAnims = document.getAnimations().filter(a => a.animationName === 'gv-activity-flow');
+    if (tabAnims.length !== 1) throw new Error('Expected 1 running gv-tab-breathe tab indicator, got ' + tabAnims.length);
+    if (paneAnims.length !== 1) throw new Error('Expected 1 running gv-activity-flow pane rail indicator, got ' + paneAnims.length);
+    for (const a of [...tabAnims, ...paneAnims]) a.pause();
+    return {
+      tabDuration: Number(tabAnims[0].effect.getTiming().duration),
+      paneDuration: Number(paneAnims[0].effect.getTiming().duration),
+    };
   });
-  for (const [selector, isTab] of [['.tab[data-tab-state="streaming"]', true], ['.pane[data-pane-state="streaming"]', false]]) {
+  const targets = [
+    {
+      label: '.tab[data-tab-state="streaming"]',
+      selector: '.tab[data-tab-state="streaming"]',
+      animName: 'gv-tab-breathe',
+      duration: tabDuration,
+      isTab: true,
+    },
+    {
+      label: '.pane[data-pane-state="streaming"] > .pane-activity-rail > span',
+      selector: '.pane[data-pane-state="streaming"] > .pane-activity-rail',
+      animName: 'gv-activity-flow',
+      duration: paneDuration,
+      isTab: false,
+    },
+  ];
+  for (const { label, selector, animName, duration, isTab } of targets) {
     const rect = await page.locator(selector).boundingBox();
-    const clip = { x: Math.ceil(rect.x) + 12, y: isTab ? Math.floor(rect.y + rect.height) - 1 : Math.ceil(rect.y) + 1,
-      width: Math.floor(rect.width) - 24, height: 1 };
+    assert.ok(rect && rect.width > 24 && rect.height >= 1, label + ' boundingBox invalid: ' + JSON.stringify(rect));
+    const clip = {
+      x: Math.ceil(rect.x) + 12,
+      y: isTab ? Math.floor(rect.y + rect.height) - 1 : Math.floor(rect.y),
+      width: Math.floor(rect.width) - 24,
+      height: 1,
+    };
     async function sample(t) {
-      await page.evaluate(async time => {
-        document.getAnimations().filter(a => a.animationName === 'gv-activity-flow').forEach(a => { a.currentTime = time; });
+      await page.evaluate(async ([name, time]) => {
+        document.getAnimations().filter(a => a.animationName === name).forEach(a => { a.currentTime = time; });
         await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
-      }, t);
+      }, [animName, t]);
       return (await page.screenshot({ clip })).toString('base64');
     }
     const images = [], phases = [];
     for (const t of [0, duration, duration - 16, duration + 16, duration / 2]) {
       images.push(await sample(t));
-      phases.push(await page.locator(selector).evaluate((el, pseudo) => {
-        const s = getComputedStyle(el, pseudo);
-        return [s.backgroundPositionX, s.backgroundSize, s.backgroundColor, s.backgroundRepeat, s.animationName];
-      }, isTab ? '::after' : '::before'));
+      phases.push(await page.locator(isTab ? selector : selector + ' > span').evaluate((el, pseudo) => {
+        const s = getComputedStyle(el, pseudo || undefined);
+        return [s.transform, s.opacity, s.animationName];
+      }, isTab ? '::after' : null));
     }
     const [same, seam, middle] = await page.evaluate(async frames => {
       const pixels = await Promise.all(frames.map(async b64 => {
@@ -55,12 +81,15 @@ async function checkActivitySeam(page) {
       const delta = (a, b) => pixels[a].reduce((max, channel, i) => Math.max(max, Math.abs(channel - pixels[b][i])), 0);
       return [delta(0, 1), delta(2, 3), delta(0, 4)];
     }, images);
-    assert.equal(same, 0, selector + ' loop boundary ' + JSON.stringify({ phases, seam, middle, rect, clip }));
-    assert.ok(middle > 20 && seam < middle / 4, selector + ' channel deltas ' + [same, seam, middle]);
-    console.log(selector + ' loop pixel differences (boundary, ±16ms, half cycle): ' + [same, seam, middle].join('/'));
+    assert.equal(same, 0, label + ' loop boundary ' + JSON.stringify({ phases, seam, middle, rect, clip }));
+    assert.ok(middle > 20 && seam < middle / 4, label + ' channel deltas ' + [same, seam, middle]);
+    console.log(label + ' loop pixel differences (boundary, ±16ms, half cycle): ' + [same, seam, middle].join('/'));
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  assert.equal(await page.evaluate(() => document.getAnimations().filter(a => a.animationName === 'gv-activity-flow').length), 0);
+  const reducedCount = await page.evaluate(() =>
+    document.getAnimations().filter(a => ['gv-activity-flow', 'gv-tab-breathe', 'gv-busy-line'].includes(a.animationName)).length
+  );
+  assert.equal(reducedCount, 0, 'Expected 0 streaming rail/tab animations under prefers-reduced-motion: reduce, got ' + reducedCount);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
 }
 

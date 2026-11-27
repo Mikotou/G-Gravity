@@ -997,7 +997,7 @@ describe('v0.3.2 前端与自研插件 UI Bug 全量回归 (FE-01 ~ FE-15, Turbo
     fireEvent.change(input, { target: { value: '@shared' } });
     const menu1 = await screen.findByTestId('mention-menu-sess-current');
     const fileOpt = Array.from(menu1.querySelectorAll('button.menu-item')).find((b) =>
-      (b.textContent || '').includes('File')
+      /(?:File|文件)/.test(b.textContent || '')
     );
     expect(fileOpt).toBeTruthy();
     fireEvent.click(fileOpt!);
@@ -1006,7 +1006,7 @@ describe('v0.3.2 前端与自研插件 UI Bug 全量回归 (FE-01 ~ FE-15, Turbo
     fireEvent.change(input, { target: { value: '@shared' } });
     const menu2 = await screen.findByTestId('mention-menu-sess-current');
     const threadOpt = Array.from(menu2.querySelectorAll('button.menu-item')).find((b) =>
-      (b.textContent || '').includes('Thread')
+      /(?:Thread|对话)/.test(b.textContent || '')
     );
     expect(threadOpt).toBeTruthy();
     fireEvent.click(threadOpt!);

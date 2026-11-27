@@ -29,7 +29,6 @@ import {
   type AppUpdateState,
   type ApprovalAuditEntry,
   type ApprovalDecisionSubmission,
-  type ApprovalGuardActivityEvent,
   type ApprovalMode,
   type ApprovalReviewingEvent,
   type ApproveForMeConfig,
@@ -247,8 +246,6 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   const [reviewingApprovals, setReviewingApprovals] = useState<ApprovalReviewingEvent[]>([]);
   /** F-07：启动阶段单个标签加载失败的原因，窗格内提示并可重试 */
   const [sessionLoadErrors, setSessionLoadErrors] = useState<Record<string, string>>({});
-  // 各会话的突发高频保护状态（burst guard），用于输入框权限胶囊的轻提示
-  const [guardActiveBySession, setGuardActiveBySession] = useState<Record<string, boolean>>({});
   const localeRef = useRef<ClientLocale>('zh-CN');
   const [auditEntries, setAuditEntries] = useState<ApprovalAuditEntry[]>([]);
   const [telemetry, setTelemetry] = useState<TelemetryDashboardSnapshot>(INITIAL_TELEMETRY);
@@ -342,25 +339,6 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   );
 
   localeRef.current = preferences.locale;
-  /** 突发保护与复核接管通知：更新会话的保护状态，并用克制的轻提示告知用户。 */
-  const handleGuardActivityRef = useRef<(event: ApprovalGuardActivityEvent) => void>(() => {});
-  handleGuardActivityRef.current = (event: ApprovalGuardActivityEvent) => {
-    const ui = UI_DICTIONARIES[localeRef.current].ui;
-    if (event.kind === 'burst-guard-enabled') {
-      setGuardActiveBySession((prev) => ({ ...prev, [event.sessionId]: true }));
-      showToast(ui.guardBurstEnabled(event.activeCount), 'info');
-    } else if (event.kind === 'burst-guard-cleared') {
-      setGuardActiveBySession((prev) => {
-        if (!prev[event.sessionId]) return prev;
-        const next = { ...prev };
-        delete next[event.sessionId];
-        return next;
-      });
-      showToast(ui.guardBurstCleared, 'success');
-    } else {
-      showToast(ui.guardReviewCancelled, 'info');
-    }
-  };
 
   const beginSessionRead = useCallback((id: string) => {
     // A slow history read can finish after a newer stream event or a second request for the same tab.
@@ -601,9 +579,6 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
               return event.status === 'reviewing' ? [...rest, event] : rest;
             });
           })]
-        : []),
-      ...(typeof bridge.onApprovalGuardActivity === 'function'
-        ? [bridge.onApprovalGuardActivity((event) => handleGuardActivityRef.current(event))]
         : []),
       bridge.onApprovalConfigUpdated(cfg => {
         if (earlyApprovals) earlyApprovalConfig = cfg;
@@ -1039,7 +1014,6 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   const handleOrganizeTitles = useCallback(
     async (request: TitleOrganizeRequest = { scope: 'all' }, fromModal = false) => {
       const bridge = getDesktopBridge();
-      const dict = UI_DICTIONARIES[preferences.locale];
       const scope =
         request.scope ??
         (request.projectCwd ? 'project' : request.sessionIds?.length === 1 ? 'session' : request.sessionIds?.length ? 'project' : 'all');
@@ -1052,7 +1026,6 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
       setOrganizing(true);
       setOrganizingTarget(targetKey);
-      showToast(dict.ui.organizingWithModel(TITLE_ORGANIZE_MODEL_LABEL), 'info');
       try {
         const res = await bridge.organizeTitles({ ...request, scope });
         const remaining = res.remainingQuotaInWindow ?? TITLE_ORGANIZE_RATE_LIMIT.maxCalls;
@@ -1106,7 +1079,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       const nextHide = !layout.hideLegacyPollutionSessions;
       const [nextLayout, list] = await Promise.all([
         bridge.saveWorkspaceLayout({ hideLegacyPollutionSessions: nextHide }),
-        bridge.listSessions(!nextHide),
+        bridge.listSessions(true),
       ]);
       setLayout(nextLayout);
       setSessions(list);
@@ -1201,6 +1174,10 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
         setFocusedSessionId(res.session.sessionId);
       } catch (err) {
         reportError(err);
+        void getDesktopBridge()
+          .getConversationTree(rootSessionId)
+          .then((freshTree) => setTreeByRoot((prev) => ({ ...prev, [freshTree.rootSessionId]: freshTree })))
+          .catch(() => {});
       } finally {
         if (sessionReads.current.get(targetBranchId) === updates) sessionReads.current.delete(targetBranchId);
         switchingBranchRef.current = false;
@@ -1226,9 +1203,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       const bridge = getDesktopBridge();
       const result = await bridge.submitApprovalDecision(submission);
       const zh = preferences.locale === 'zh-CN';
-      if (result?.outcome === 'cancelled') {
-        showToast(getComponentCopy(zh).approvalCancelled, 'info');
-      } else if (submission.decision === 'approve_for_me_ai' && result) {
+      if (submission.decision === 'approve_for_me_ai' && result) {
         if (result.outcome === 'approved' && result.delegatedMode) {
           const mode = result.delegatedMode === 'hybrid' ? (getComponentCopy(zh).aiReview) : (getComponentCopy(zh).basicRules);
           showToast(zh ? '已放行本次操作。仅当前会话使用' + mode : 'Approved. This session now uses ' + mode, 'success');
@@ -1370,9 +1345,12 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
     }
   }, [reportError, showToast]);
   const pluginWorkspace = tabSessions.find(s => s.sessionId === focusedSessionId)?.cwd || preferences.defaultWorkspaceCwd || undefined;
+  const pluginWorkspaceRef = useRef(pluginWorkspace);
+  pluginWorkspaceRef.current = pluginWorkspace;
+  // PL-1：刷新回调保持稳定引用，避免切换会话页签/工作区 cwd 时静默触发 CLI 探测；仅在显式打开插件页或手动刷新时读取当前工作区。
   const handleRefreshPlugins = useCallback(async () => {
-    setPluginsSnap(await getDesktopBridge().getPluginsSnapshot(pluginWorkspace));
-  }, [pluginWorkspace]);
+    setPluginsSnap(await getDesktopBridge().getPluginsSnapshot(pluginWorkspaceRef.current));
+  }, []);
   const handleRunPluginAction = useCallback(async (input: PluginActionInput) => {
     setPluginsSnap(await getDesktopBridge().runPluginAction(input));
   }, []);
@@ -1564,6 +1542,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   const recentCwds = useMemo(
     () =>
       [...sessions]
+        .filter((s) => !s.isLegacyApprovalPollution)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
         .map((s) => s.cwd)
         .filter((cwd) => Boolean(cwd) && !isTempExtractionDir(cwd)),
@@ -1606,7 +1585,11 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
   const stageRootId = stageSession ? (stageSession.rootSessionId || stageSession.sessionId) : null;
   const stageTree = stageRootId ? treeByRoot[stageRootId] : undefined;
   const stageSessionBusy = stageSession?.status === 'streaming' || stageSession?.status === 'waiting_approval';
-  const activeCount = sessions.filter((s) => !s.archivedAt && s.status !== 'closed').length;
+  const activeCount = sessions.filter(
+    (s) => !s.archivedAt && s.status !== 'closed' && (!layout.hideLegacyPollutionSessions || !s.isLegacyApprovalPollution)
+  ).length;
+  const isIsolatedProfile =
+    accounts.profiles.find((p) => p.profileId === accounts.activeProfileId)?.isDefault === false;
 
   return (
     <I18nProvider locale={preferences.locale} onChangeLocale={handleChangeLocale} macShortcuts={macShortcuts}>
@@ -1684,7 +1667,6 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
               onLoadEarlier={loadEarlierMessages}
               pendingApprovals={pendingApprovals}
               reviewingApprovals={reviewingApprovals}
-              guardActiveBySession={guardActiveBySession}
               onCancelStage2Review={handleCancelStage2Review}
               recentCwds={recentCwds}
               defaultWorkspaceCwd={
@@ -1716,6 +1698,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
               onCycleApprovalMode={handleSetApprovalMode}
               {...gridHandlers}
               connection={connection}
+              isIsolatedProfile={isIsolatedProfile}
               onReconnectSession={handleReconnectSession}
             />
           </ComposerDrafts.Provider>
@@ -1735,6 +1718,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
           onOpenExternalTranslatorSettings={openExternalTranslatorSettings}
           focusedDiffFile={focusedDiffFile}
           sessionId={stageSessionId}
+          sessionCwd={stageSession?.cwd}
           inspectorData={stageSessionId ? inspectorBySession[stageSessionId] : undefined}
           {...inspectorHandlers}
           sessionMessages={stageSessionId ? messagesBySession[stageSessionId] ?? EMPTY_MESSAGES : EMPTY_MESSAGES}

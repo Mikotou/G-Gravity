@@ -1,7 +1,6 @@
-import { readBoundedLocalFile } from './local-path-safety';
 import { promises as fs } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { isUnsafeLocalPath } from './local-path-safety';
+import { isUnsafeLocalPath, localPathMember, readBoundedLocalFile } from './local-path-safety';
 
 const SKIP = new Set(['.git', 'node_modules', 'dist', '.gemini', 'antigravity-cli', '.ssh', '.aws', '.gnupg', '.env', '.next', '.cache']);
 /** 根据相对路径的目录分段判断归属，兼顾同名前缀的相邻目录及 Windows 的跨盘路径。 */
@@ -34,13 +33,17 @@ export class WorkspaceFiles {
    */
   async readReference(cwd: string, file: string): Promise<{ path: string; text: string }> {
     if (!isAbsolute(cwd) || !safeWorkspacePath(cwd) || !safeWorkspacePath(file)) throw new Error('拒绝敏感文件引用');
-    const root = await fs.realpath(cwd); const target = resolve(root, file);
-    if (!within(root, target) || !safeWorkspacePath(root)) throw new Error('文件引用超出工作区');
+    const root = await fs.realpath(cwd);
+    const target = resolve(root, file);
+    const member = localPathMember(root, target);
+    if (member === undefined || !safeWorkspacePath(root)) throw new Error('文件引用超出工作区');
     // 每个路径分段都拒绝符号链接/Junction，避免穿越到凭据目录。
     let cursor = root;
-    for (const part of relative(root, target).split(sep).filter(Boolean)) { cursor = resolve(cursor, part); if ((await fs.lstat(cursor)).isSymbolicLink()) throw new Error('文件引用不能经过符号链接'); }
-    const actual = await fs.realpath(target); if (!within(root, actual) || !safeWorkspacePath(actual)) throw new Error('文件真实路径超出工作区或涉及敏感文件');
+    for (const part of member.split(sep).filter(Boolean)) { cursor = resolve(cursor, part); if ((await fs.lstat(cursor)).isSymbolicLink()) throw new Error('文件引用不能经过符号链接'); }
+    const actual = await fs.realpath(target);
+    const actualMember = localPathMember(root, actual);
+    if (actualMember === undefined || !safeWorkspacePath(actual)) throw new Error('文件真实路径超出工作区或涉及敏感文件');
     const data = await readBoundedLocalFile(actual, 512 * 1024); if (data.includes(0)) throw new Error('二进制文件不能作为文本引用');
-    return { path: relative(root, actual).split(sep).join('/'), text: data.toString('utf8') };
+    return { path: actualMember.split(sep).join('/'), text: data.toString('utf8') };
   }
 }

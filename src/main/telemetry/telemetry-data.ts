@@ -38,9 +38,6 @@ export function add(a: FourDimTokenCounts, b: FourDimTokenCounts): FourDimTokenC
     unclassifiedTokens: (a.unclassifiedTokens ?? 0) + (b.unclassifiedTokens ?? 0) };
 }
 
-export const intensity = (n: number): 0 | 1 | 2 | 3 | 4 =>
-  n === 0 ? 0 : n < 1000 ? 1 : n < 10000 ? 2 : n < 100000 ? 3 : 4;
-
 export interface HourRecord extends FourDimTokenCounts {
   hourKey: string;
   modelId: string;

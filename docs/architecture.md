@@ -21,7 +21,7 @@
    - 技术术语保留英文原名（模型名、`Bash/Read/Edit/Write/Grep`、Slash 命令、路径、`Token`、`tok/s`、`MCP`、`Skills`、`Plugins`、`Diff`、`Context`、`Cost`、快捷键、`mode` 与 `effort` 名称等）；
    - 说明文案、动作描述、风险解释与错误提示使用地道简体中文（支持在设置与顶栏一键切换 `简体中文 / English`）。
 5. **三档 Token 热力图（`24h` / `7d` / `30d`）与精细化分模型 Cost 看板**：
-   - 移除 52 周热力图与订阅回本对比；提供 **24h 按小时柱状图**、**7d（7×24 天×小时热力矩阵）**、**30d 按天日历热力格** 三档切换；
+   - 移除 52 周热力图与订阅回本对比；提供 **24h 按小时柱状图**、**7d 按日卡片（单行 7 日）**、**30d Codex 周行 7 格方格热力图** 三档切换（三套账本统一由共享双轴公式 `computeHeatLevel` 结合窗口相对占比、窗口峰值与绝对用量计算强度，前端以 OKLCH 5 阶色阶着色）；
    - 按 **本会话 / 今日 / 7d / 30d** 计算精细四维费用（`input / cachedInput / output / thinking` × 模型单价），提供 **分模型堆叠柱状图 + 环形占比图**，支持编辑单价表，并明确标注“参考 API 价格估算，非实际账单”。
 6. **Plugins 管理面板（Plugins / MCP Servers / Skills）**：
    - 仅在用户点击触发时以 `shell: false` 短时调用官方 CLI 子命令（`agy plugin list|install|uninstall|enable|disable`、`agy mcp list|add|remove|enable|disable`），严禁直接改写 `agy` 内部配置文件；内置能力标记 `Built-in`。
@@ -53,6 +53,23 @@
 - **前端样式体系、无障碍与交互升级**：
   - **CSS 单入口模块化收敛**：3 份旧 CSS（301.7 KB / 12,672 行）收敛为 `src/renderer/styles/index.css` + 18 个职责模块（源码 221.0 KB / 生产产物 202.88 KB / gzip 36.02 KB，0 跨文件重复选择器、0 死类、0 硬编码色值、0 非合成属性动画）。
   - **设计系统与用户专项交付（`D1`–`D5`, `U-01`–`U-04`）**：6 套预设与自定义主题 100% WCAG 2.1 AA（≥ 4.5:1）；`appIcon: 'auto'` 随主题自动联动；右侧检视器精简为 5 个一级页签（分支树归入 Context 二级切换）；全站矢量 `ui/Icon` 四档尺寸与主进程 `copyText` 剪贴板复制；新建对话弹窗与欢迎框支持选模型；Context 看板 `7d` / `30d` 重设计覆盖三套统计视图；流式增量 Markdown 分块解析与 `React.memo` 零跨窗格重渲染。
+
+---
+
+## 六、`v0.3.5` 双轴 OKLCH 热力图、Plan 多题提问卡 v2、Plan 检视器闭环与全栈精简（2026-11-27）
+
+- **合规终审裁定（Orchestrator 自定义配置）**：实测 `agy 1.5.18` `agy acp` 不暴露 planner/executor 参数且不接受 `--settings`，Google 官方仅在交互式 TUI `/model` 写入 `~/.gemini/antigravity-cli/settings.json`。坚守红线 #2（`~/.gemini` 零写入）、#4、#8，正式放弃设置页中的自定义 Orchestrator 配置项，保留模型菜单中官方公开预设 `Orchestrator (Neon / Carbon / Argon)`。
+- **后端架构与 Bug 清零（`src/main/` 106 文件、296 条内部静态依赖、0 循环依赖、0 `acp/ → services/` 反向依赖）**：
+  - `core-service.ts` 369 LOC、`index.ts` 137 LOC，全仓主进程单文件 ≤ 644 LOC，81/81 IPC 通道 1:1 对齐。
+  - 统一共享 `computeHeatLevel` 双轴强度公式与 `daily7d` / DST 数值 UTC 偏移 `startIso` / IANA 时区缓存键，覆盖主 Context / 外部复核 / 外部翻译三账本与 `preload.ts` 增量合并；保留仅返回 `total_tokens` 的未分类用量与直接费用。
+  - 原生提问 v2（`submissionVersion: 2`）按 `(profileId, sessionId, messageId, submissionId)` 幂等结算，跟进消息在 Gravity 存储原子登记后再 `decline` 原 RPC，区分 `failed-unsent`（仅此时可手动重发）与 `unknown`（禁止自动重发）。
+  - Plan 权威状态（6 态、`unreceived/empty/present`、全量统计与 100 条显示上限、重放代际暂存不触发计费/突发保护、200 内存 LRU 淘汰不删盘）与 128 KiB 只读 `implementation_plan.md` 产物预览（`SESSION_GET_PLAN_ARTIFACT` / `EVENT_PLAN_ARTIFACT_CHANGED`，`lstat`+`realpath` 零写入校验）。
+  - 六项结构精简（`hasPendingForSession`、Plan 轻量快照、清死导出、去跨模块绕道、共用迟到用量归属、ACP 纯协议错误下沉 L2）及 Title 迟到孤儿槽、Swarm SQLite 锁恢复、Windows x64/ARM64 更新资产隔离、Bergamot 超时回收、`parseMcpList`、grouped-select 模型目录、`getAccountQuota(manual = false)`、macOS DMG 回退文案与 `turnStartedAt`/`turnSettledAt` 全部修复。
+- **前端体验、动效清零与插件 UI 精简**：
+  - `theme.ts` `deriveHeatmapRamp()` OKLCH 5 阶色阶（6 套预设 + 200 随机自定义主题全达 WCAG AA），`TokenHeatmapView` 实现 `24h` 封顶柱图 / `7d` 单行日卡 / `30d` Codex 周行 7 格方格与 219px 窄栏容器断点。
+  - `QuestionBar` 重设计：多题步进器（不自动切题）、每项右上角铅笔就地编辑、卡片外「自定义回答」按钮与多题统一提交（过程 0 IPC）。
+  - 5 处 `background-position` 非合成动画清零为纯 `transform`/`opacity`（`v035-motion-guard.test.ts` 守卫），CSS 源码收敛至 215.09 KiB（0 死类、0 跨文件重复选择器）。
+  - 全站 UI 精简（`T1/T2`、`A1`、`S1/S2`、`I1/I2/I3`、`SV1/SV2` 合并外观二级页签、`C1/C2` 语义徽章、`A11Y-01` 全 `tablist` 方向键漫游）与 `AP-1/2/3`、`PL-1`、`AQ-1`、`IR-1` 及 9 项 P2 前端缺陷修复。
 
 ---
 

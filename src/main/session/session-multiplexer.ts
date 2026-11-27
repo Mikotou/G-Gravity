@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { diagnosticForError, disconnectDiagnostic } from '../services/session-diagnostics';
-import { AcpClient, AcpRpcError } from '../acp/acp-client';
+import { AcpClient, AcpRequestNotSentError, AcpRpcError } from '../acp/acp-client';
 import {
   normalizeWorkspacePath, isLegacyPollutionSessionTitle,
 } from '../../shared/session-contract';
@@ -14,7 +14,7 @@ import type {
 
 import { SessionSlots } from './session-slots';
 import { SessionLedger, resolveAccessibleCwd } from './session-ledger';
-import { declaredModels, isSessionExecutionMode } from './session-options-store';
+import { declaredModels, isSessionExecutionMode, modelConfig, selectValues } from './session-options-store';
 import { isAnyAbsolutePath } from '../workspace/local-path-safety';
 export { isSessionExecutionMode } from './session-options-store';
 export const CHINESE_SESSION_GUIDANCE =
@@ -57,7 +57,7 @@ export class SessionMultiplexer extends SessionLedger {
   hasConfigOptions(id: string) { return this.options.hasConfigOptions(id); }
   reportedChoice(id: string, option: 'model' | 'thought_level'): string | undefined {
     const receipt = this.options.optionsBySession.get(id);
-    const field = receipt?.configOptions?.find(item => item.id === option);
+    const field = option === 'model' ? modelConfig(receipt?.configOptions) : receipt?.configOptions?.find(item => item.id === option);
     return field ? field.currentValue : option === 'model' ? receipt?.models?.currentModelId : undefined;
   }
 
@@ -397,8 +397,8 @@ export class SessionMultiplexer extends SessionLedger {
 
   /** 用户提示按会话互斥。长回合关闭常规 RPC 超时，由服务端答复或连接中断结束等待。 */
   async sendPrompt(params: AcpSessionPromptParams): Promise<AcpSessionPromptResult> {
-    if (!this.active.has(params.sessionId)) throw new Error('请先恢复此会话');
-    if (this.configuring.has(params.sessionId) || this.busy.has(params.sessionId)) throw new Error('该会话仍在生成，请等待或停止');
+    if (!this.active.has(params.sessionId)) throw new AcpRequestNotSentError('请先恢复此会话');
+    if (this.configuring.has(params.sessionId) || this.busy.has(params.sessionId)) throw new AcpRequestNotSentError('该会话仍在生成，请等待或停止');
     const turn = Symbol();
     this.busy.set(params.sessionId, turn);
     this.setStatus(params.sessionId, 'streaming');
@@ -437,7 +437,7 @@ export class SessionMultiplexer extends SessionLedger {
       this.assertConfigurationOwner(sessionId, stored);
       if (stored?.modes) stored.modes.currentModeId = mode;
     };
-    if (cfgMode?.options?.some((opt) => opt.value === mode)) {
+    if (cfgMode && selectValues(cfgMode.options).some(opt => opt.value === mode)) {
       let res: { configOptions?: AcpConfigOption[] } | undefined;
       try {
         res = await this.client.request('session/set_config_option', { sessionId, configId: 'mode', value: mode });
@@ -485,7 +485,7 @@ export class SessionMultiplexer extends SessionLedger {
     if (Array.isArray(stored?.configOptions)) {
       const effortOpt = stored.configOptions.find((opt) => opt.id === 'thought_level');
       if (!effortOpt?.options?.length) throw new Error('当前所选模型没有独立的推理强度档位');
-      if (!effortOpt.options.some((opt) => opt.value === effort)) {
+      if (!selectValues(effortOpt.options).some(opt => opt.value === effort)) {
         throw new Error(`当前模型不支持 ${effort} 推理强度`);
       }
       const res = await this.client.request<{ configOptions?: AcpConfigOption[] }>('session/set_config_option', {
@@ -519,19 +519,19 @@ export class SessionMultiplexer extends SessionLedger {
   async setSessionModel(sessionId: string, modelId: string): Promise<ManagedSessionSummary> {
     if (!this.active.has(sessionId) || this.busy.has(sessionId)) throw new Error('请在活动会话空闲时修改 Model');
     const stored = this.options.optionsBySession.get(sessionId);
-    const cfgModel = stored?.configOptions?.find((opt) => opt.id === 'model');
+    const cfgModel = modelConfig(stored?.configOptions);
     const session = this.get(sessionId);
     if (!declaredModels(stored)?.some(model => model.modelId === modelId)) throw new Error('官方会话未声明此 Model 可用');
     if (cfgModel) {
       const res = await this.client.request<{ configOptions?: AcpConfigOption[] }>('session/set_config_option', {
         sessionId,
-        configId: 'model',
+        configId: cfgModel.id,
         value: modelId,
       });
       this.assertConfigurationOwner(sessionId, stored);
       if (res?.configOptions && stored) stored.configOptions = res.configOptions;
       this.options.syncSessionFromOptions(session, stored, Boolean(res?.configOptions));
-      const actual = stored?.configOptions?.find(option => option.id === 'model')?.currentValue;
+      const actual = modelConfig(stored?.configOptions)?.currentValue;
       if (actual !== modelId) {
         if (!actual) throw new Error('官方未确认切换到所选模型');
         this.emit('localPreference', { sessionId, text: '官方未确认所选模型 ' + modelId + '，当前模型为 ' + actual });

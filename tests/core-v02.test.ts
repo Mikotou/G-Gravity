@@ -28,7 +28,7 @@ describe('Gravity v0.2 真内核与标准ACP桩整合', () => {
       core.on('message-upserted', ({ message }) => {
         if (message.sessionId === sessionId && message.question) {
           id = message.id;
-          events.push(message.question.state);
+          events.push(message.turnSettledAt ? 'settled' : message.question.state);
         }
       });
       const turn = core.sendPrompt({ sessionId, text: '[question]' });
@@ -45,7 +45,7 @@ describe('Gravity v0.2 真内核与标准ACP桩整合', () => {
       expect((await readAllSessionMessages(core, sessionId)).find(m => m.id === id)?.question?.state).toBe('open');
       await core.answerQuestion(answer);
       await turn;
-      expect(events).toEqual(['open', 'answered']);
+      expect(events).toEqual(['open', 'answered', 'settled']);
       expect((await readAllSessionMessages(core, sessionId)).find(m => m.id === id)?.question?.state).toBe('answered');
     } finally { await cleanup(); }
   });

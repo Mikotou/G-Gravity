@@ -1764,16 +1764,20 @@ describe('Gravity v0.3.4 前端功能、图标主题动效、缺陷清零与用�
         )
       );
 
-      // 1) 7d 矩阵：168 格 + 小时刻度标尺 (00/06/12/18) + 星期与日期左轴 + 悬停/聚焦/移出复位
+      // 1) v0.3.5：7d 为 7 根按日柱状图（不再出现小时格）+ 同款左侧 Token 用量 Y 轴刻度 + 星期/日期轴 + 悬停/聚焦/移出复位
       fireEvent.click(screen.getByTestId(cfg.range7dId));
       const m7 = screen.getByTestId(cfg.matrix7dId);
       const cells7 = Array.from(m7.querySelectorAll<HTMLElement>('.heatmap-cell'));
-      expect(cells7).toHaveLength(168);
+      expect(cells7).toHaveLength(7);
+      expect(cells7.every((c) => c.classList.contains('hm-7d-col') && Boolean(c.querySelector('.hm-bar-7d')))).toBe(true);
 
       const section7 = m7.closest('section')!;
+      const yScale7 = section7.querySelector('.hm-y-scale') as HTMLElement;
+      expect(yScale7, `U-04 (${cfg.mode} 7d): missing token Y-axis scale`).toBeTruthy();
+      expect(yScale7.children).toHaveLength(3);
       const section7Text = section7.textContent || '';
-      expect(section7Text, `U-04 (${cfg.mode} 7d): missing hour scale ticks (00/06/12/18)`).toMatch(/00[\s\S]*06[\s\S]*12[\s\S]*18/);
-      expect(section7Text, `U-04 (${cfg.mode} 7d): missing weekday labels in day axis`).toMatch(/周[一二三四五六日]|Mon|Tue|Wed|Thu|Fri|Sat|Sun/);
+      expect(section7.querySelector('.hm-7d-ruler'), `U-04 (${cfg.mode} 7d): hour ruler must be gone`).toBeNull();
+      expect(section7Text, `U-04 (${cfg.mode} 7d): missing weekday labels on 7d axis`).toMatch(/[一二三四五六日]|Mon|Tue|Wed|Thu|Fri|Sat|Sun/);
 
       // 悬停非零格 -> 显示详情；移出 -> 复位
       const activeCell7 = cells7.find((c) => c.className.includes('i-4')) ?? cells7[0];

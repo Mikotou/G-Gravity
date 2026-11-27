@@ -1,24 +1,15 @@
+import { validateApprovalPattern } from '../../shared/approval-contract';
 import { tmpdir } from 'node:os';
 import { isForbiddenCredentialOrStatePath } from '../../shared/accounts-history-contract';
 
 
 export function compileSafePattern(pattern: string): RegExp {
-  // 不在 UI 线程执行可回溯的任意复杂正则；允许锚点、字符类和少量简单量词。
-  if (
-    typeof pattern !== 'string' ||
-    pattern.length > 200 ||
-    /[(){}]|\\[1-9]|\(\?/.test(pattern) ||
-    (pattern.match(/[+*]/g)?.length || 0) > 1 ||
-    (pattern.match(/\?/g)?.length || 0) > 4 ||
-    (/[+*]/.test(pattern) && !pattern.startsWith('^'))
-  ) {
-    throw new Error('审批正则过于复杂：请使用锚点、字符类和简单匹配，避免分组、回溯引用或大量量词');
+  const validation = validateApprovalPattern(pattern);
+  if (validation.code === 'empty') return /(?!)/;
+  if (!validation.valid && !(validation.code === 'whitespace_only' && pattern.length <= 200)) {
+    throw new Error('审批正则无效或过于复杂：' + validation.code);
   }
-  try {
-    return new RegExp(pattern, 'i');
-  } catch {
-    throw new Error('审批规则不是有效的正则表达式');
-  }
+  return new RegExp(pattern, 'i');
 }
 
 const escapedTemp = tmpdir().replace(/\\/g, '/').replace(/[.*+?^\x24{}()|[\]\\]/g, '\\$&');

@@ -6,7 +6,7 @@ export interface AcpChildProcess extends EventEmitter {
   stdin: Writable | null; stdout: Readable | null; stderr: Readable | null;
   pid?: number; exitCode?: number | null; signalCode?: NodeJS.Signals | null; kill(signal?: NodeJS.Signals | number): boolean;
 }
-export type AcpSpawn = (binary: string, args: string[], options: SpawnOptions) => AcpChildProcess;
+type AcpSpawn = (binary: string, args: string[], options: SpawnOptions) => AcpChildProcess;
 export interface AcpClientOptions {
   binaryPath?: string; args?: string[]; processPerSession?: boolean; cwd?: string; spawn?: AcpSpawn;
   requestTimeoutMs?: number; maxLineBytes?: number;

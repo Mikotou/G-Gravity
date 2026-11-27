@@ -270,9 +270,9 @@ describe('v0.3.1 前端本体与内置插件 UI 全仓缺陷回归 (F-P1-4 ~ F-P
     expect(numInput.value).not.toBe('NaN');
     expect(numInput.value).toBe('');
 
-    // 模拟浏览器在输入半截科学计数/非数字文本时上报非空 value 且 valueAsNumber = NaN
-    Object.defineProperty(numInput, 'valueAsNumber', { configurable: true, value: Number.NaN });
-    fireEvent.change(numInput, { target: { value: '1234' } });
+    // FE-BUG-07 改为本地文本缓冲后，输入半截科学计数/非数字文本（如 "1e"）可保留编辑中间态，但不应存入/渲染/提交 NaN
+    fireEvent.change(numInput, { target: { value: '1e' } });
+    expect(numInput.value).toBe('1e');
     expect(numInput.value).not.toBe('NaN');
 
     const stored = window.sessionStorage.getItem('gravity.question.numeric-nan-guard') || '';

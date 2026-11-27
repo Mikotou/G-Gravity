@@ -81,7 +81,11 @@ export class SwarmWorkerClient extends EventEmitter {
   }
   async readState(id: string, before?: SwarmHistoryCursor): Promise<SwarmTopologyState> {
     const result = await this.request<SwarmTopologyState>({ method: 'getState', args: [id, before] });
-    if (!before) this.cache(result);
+    if (!before) {
+      const recovered = this.snapshots.get(id)?.historyUnavailable && !result.historyUnavailable;
+      this.cache(result);
+      if (recovered) this.emit('updated', result);
+    }
     return result;
   }
   needsReplay(id: string) { return this.request<boolean>({ method: 'needsReplay', args: [id] }); }

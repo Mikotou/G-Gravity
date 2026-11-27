@@ -14,8 +14,8 @@ type DashboardBaseline = TelemetryCharts & Pick<TelemetryDashboardSnapshot, 'pro
 let baseline: DashboardBaseline | undefined;
 function rememberDashboard(value?: TelemetryDashboardSnapshot): void {
   if (!value || (baseline?.sequence ?? -1) > (value.sequence ?? 0)) return;
-  const { profileId, sequence, rateCards, pricingSource, hourly24h, matrix7d, calendar30d, costByRange, modelBreakdownByRange } = value;
-  baseline = { profileId, sequence, rateCards, pricingSource, hourly24h, matrix7d, calendar30d, costByRange, modelBreakdownByRange };
+  const { profileId, sequence, rateCards, pricingSource, hourly24h, daily7d, matrix7d, calendar30d, costByRange, modelBreakdownByRange } = value;
+  baseline = { profileId, sequence, rateCards, pricingSource, hourly24h, daily7d, matrix7d, calendar30d, costByRange, modelBreakdownByRange };
 }
 const readDashboard = async (): Promise<TelemetryDashboardSnapshot> => {
   const result = await invoke('gravity:telemetry:get-dashboard');
@@ -79,6 +79,7 @@ const bridge: GravityDesktopBridge = {
   setSessionEffort: (id, effort) => invoke('gravity:session:set-effort', id, effort),
   setSessionModel: (id, model) => invoke('gravity:session:set-model', id, model),
   getSessionInspector: id => invoke('gravity:session:get-inspector', id),
+  getSessionPlanArtifact: input => invoke('gravity:session:get-plan-artifact', input),
   listWorkspaceFiles: (cwd, query) => invoke('gravity:session:list-workspace-files', cwd, query),
   getSessionMessagePage: (id, before) => invoke('gravity:session:get-message-page', id, before),
   reviseMessage: input => invoke('gravity:session:revise-message', input),
@@ -118,6 +119,7 @@ const bridge: GravityDesktopBridge = {
   onSessionUpdated: listener => subscribe('gravity:event:session-updated', listener),
   onMessageUpserted: listener => subscribe('gravity:event:message-upserted', listener),
   onInspectorUpdated: listener => subscribe('gravity:event:inspector-updated', listener),
+  onPlanArtifactChanged: listener => subscribe('gravity:event:plan-artifact-changed', listener),
   onAccountUpdated: listener => subscribe('gravity:event:account-updated', listener),
   onApprovalRequested: listener => subscribe('gravity:event:approval-requested', listener),
   onApprovalConfigUpdated: listener => subscribe('gravity:event:approval-config-updated', listener),

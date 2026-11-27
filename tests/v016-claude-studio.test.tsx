@@ -29,10 +29,13 @@ describe('v0.1.6 Claude Code Studio 前端架构', () => {
     expect(within(rail).getByTestId('sidebar-new-session-btn')).toBeTruthy();
     expect(within(rail).getByTestId('account-menu-btn')).toBeTruthy();
     expect(within(rail).getByTestId('open-theme-modal-btn')).toBeTruthy();
-    // D3：项目与插件入口收进 Rail 账户菜单，点开后仍可一键直达
+    // v0.3.5 A1：账户浮层只保留账号与语言；项目 / 插件统一经底部齿轮进入设置中心
     fireEvent.click(within(rail).getByTestId('account-menu-btn'));
-    expect(within(rail).getByTestId('open-projects-modal-btn')).toBeTruthy();
-    expect(within(rail).getByTestId('open-plugins-modal-btn')).toBeTruthy();
+    const menu = within(rail).getByTestId('account-menu');
+    expect(within(menu).getByTestId('open-accounts-modal-btn')).toBeTruthy();
+    expect(within(menu).getByTestId('locale-switcher')).toBeTruthy();
+    expect(within(rail).queryByTestId('open-projects-modal-btn')).toBeNull();
+    expect(within(rail).queryByTestId('open-plugins-modal-btn')).toBeNull();
     fireEvent.click(within(rail).getByTestId('account-menu-btn'));
 
     // 点击图标轨的抽屉按钮折叠会话栏，图标轨本身仍常驻

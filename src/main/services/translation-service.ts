@@ -1,14 +1,14 @@
+import { ownedExternalUsage } from '../telemetry/external-usage-owner';
 import { ServiceVerifier } from '../llm/service-verifier';
-import { translatorCircuit } from '../llm/external-llm-transport';
 import { maskKnownSecret, redactSecretsForReviewer } from '../security/redaction';
 import type { ExternalTranslatorUsageRecordInput } from '../../shared/telemetry-contract';
-import type { TranslationHost, CoreServiceOptions } from '../core-contracts';
+import type { ExternalUsageHost, CoreServiceOptions } from '../core-contracts';
 import type { WorkspaceSettings } from './workspace-settings';
 import { publicTranslationConfig, VALID_THINKING_LEVELS } from './secret-vault';
 import { LocalTranslator } from '../translation/local-translator';
 import {
-  discoverExternalModels, IndependentModelCallError, validateExternalEndpoint, withModelDeadline,
-} from '../approval/external-reviewer';
+  translatorCircuit, discoverExternalModels, IndependentModelCallError, validateExternalEndpoint, withModelDeadline,
+} from '../llm/external-llm-transport';
 import { sameExternalService, type ExternalReviewerModelsDiscoveryInput } from '../../shared/approval-contract';
 import {
   EXTERNAL_TRANSLATOR_DEFAULTS, isExternalTranslatorConnected, sameTranslatorSettings,
@@ -23,7 +23,7 @@ import {
 export class TranslationService {
   private verifier = new ServiceVerifier(sameTranslatorSettings);
   private localTranslator = new LocalTranslator();
-  constructor(private settings: WorkspaceSettings, private app: TranslationHost,
+  constructor(private settings: WorkspaceSettings, private app: ExternalUsageHost,
     private options: Pick<CoreServiceOptions, 'externalTranslator' | 'modelDiscoveryFetcher'>,
     private sessionForThought: (thoughtId: string) => string | undefined,
     private nowMs: () => number, private isDisposed: () => boolean) {}
@@ -45,9 +45,7 @@ export class TranslationService {
       const profileId = this.app.sessions.profileId;
       const record = (event: ExternalTranslatorUsageRecordInput) => {
         if (this.isDisposed()) return;
-        const owned = profileId === this.app.sessions.profileId ? this.app.sessions.sessions.has(sessionId)
-          : Object.hasOwn(this.app.store.read('owned-sessions-' + profileId + '.json', {}), sessionId);
-        this.app.telemetry.recordExternalTranslationUsage(owned ? event : { ...event, sessionId: '' }, profileId);
+        this.app.telemetry.recordExternalTranslationUsage(ownedExternalUsage(this.app, profileId, event), profileId);
       };
       const redactedText = redactSecretsForReviewer(originalText);
       const started = this.nowMs();

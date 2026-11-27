@@ -1,9 +1,9 @@
 import {
-  calculateTokenCost, resolveModelRateCard, type ModelRateCard, type TokenCostSummary,
+  calculateTokenCost, computeHeatLevel, resolveModelRateCard, type ModelRateCard, type TokenCostSummary,
   type FourDimTokenCounts,
 } from '../../shared/telemetry-contract';
 import { calendarBuckets, calendarFor, ledgerHour } from './calendar';
-import { add, intensity, zero, type HourRecord } from './telemetry-data';
+import { add, zero, type HourRecord } from './telemetry-data';
 
 export class TelemetryAggregator<T> {
   private version = 0;
@@ -12,7 +12,7 @@ export class TelemetryAggregator<T> {
   invalidate(): void { this.version++; }
 
   get(now: number, rates: ModelRateCard[], compute: (calendar: ReturnType<typeof calendarFor>) => T): T {
-    const boundary = ledgerHour(now) + '/' + new Date(now).getTimezoneOffset();
+    const boundary = ledgerHour(now) + '/' + Intl.DateTimeFormat().resolvedOptions().timeZone + '/' + new Date(now).getTimezoneOffset();
     const cached = this.cached;
     if (cached && cached.version === this.version && cached.rates === rates && cached.boundary === boundary) return cached.result;
     const result = compute(calendarFor(now));
@@ -21,28 +21,35 @@ export class TelemetryAggregator<T> {
   }
 }
 
+function colorWindow<T extends { totalTokens: number }>(rows: T[], count: 24 | 7 | 30) {
+  const total = rows.reduce((sum, row) => sum + row.totalTokens, 0);
+  const peak = Math.max(0, ...rows.map(row => row.totalTokens));
+  return rows.map(row => ({ ...row, intensity: computeHeatLevel(row.totalTokens, total, peak, count) }));
+}
+
 export function summarizeCalendar<T extends { hourKey: string; sessions: string[] }, S extends TokenCostSummary, I>(
   records: Iterable<T>, calendar: ReturnType<typeof calendarFor>, summarize: (rows: T[]) => { total: S; items: I[] }
 ) {
   const buckets = calendarBuckets(records, calendar);
   const empty = summarize([]);
   const group = (rows: T[]) => rows.length ? summarize(rows) : empty;
-  const hourly24h = calendar.hours.map(({ hourKey, hourLabel }) => {
+  const hourly24h = colorWindow(calendar.hours.map(({ hourKey, hourLabel, startIso }) => {
     const { total } = group(buckets.hour(hourKey));
-    return { hourKey, hourLabel, ...total, costUsd: total.totalCostUsd };
-  });
-  const matrix7d = Array.from({ length: 168 }, (_, i) => {
-    const date = calendar.days[23 + Math.floor(i / 24)], hour = i % 24;
+    return { hourKey, hourLabel, startIso, ...total, costUsd: total.totalCostUsd };
+  }), 24);
+  const matrix7d = calendar.days.slice(-7).flatMap(date => colorWindow(Array.from({ length: 24 }, (_, hour) => {
     const { total } = group(buckets.slot(date, hour));
-    return { date, hour, totalTokens: total.totalTokens, costUsd: total.totalCostUsd, intensity: intensity(total.totalTokens) };
-  });
-  const calendar30d = calendar.days.map(date => {
+    return { date, hour, totalTokens: total.totalTokens, costUsd: total.totalCostUsd };
+  }), 24));
+  const days = calendar.days.map(date => {
     const rows = buckets.day(date);
     const { total } = group(rows);
-    return { date, ...total, costUsd: total.totalCostUsd, sessionCount: new Set(rows.flatMap(row => row.sessions)).size, intensity: intensity(total.totalTokens) };
+    return { date, ...total, costUsd: total.totalCostUsd, sessionCount: new Set(rows.flatMap(row => row.sessions)).size };
   });
+  const daily7d = colorWindow(days.slice(-7), 7);
+  const calendar30d = colorWindow(days, 30);
   const today = group(buckets.range('today')), week = group(buckets.range('7d')), month = group(buckets.range('30d'));
-  return { hourly24h, matrix7d, calendar30d, costByRange: { today: today.total, '7d': week.total, '30d': month.total },
+  return { hourly24h, daily7d, matrix7d, calendar30d, costByRange: { today: today.total, '7d': week.total, '30d': month.total },
     breakdownByRange: { today: today.items, '7d': week.items, '30d': month.items } };
 }
 export function modelBreakdowns(counts: Map<string, FourDimTokenCounts>, rates: ModelRateCard[]) {

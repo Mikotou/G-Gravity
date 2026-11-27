@@ -984,6 +984,7 @@ describe('Gravity v0.3.3 前端与自研插件 UI Bug 全量 TDD 回归 (FE-01 ~
     // 打开设置 -> 图标，点击切换图标（较早请求，故意延迟返回）
     fireEvent.keyDown(window, { key: ',', ctrlKey: true });
     await screen.findByTestId('settings-overlay');
+    fireEvent.click(screen.getByTestId('settings-tab-themes'));
     fireEvent.click(screen.getByTestId('settings-tab-icons'));
     fireEvent.click(screen.getByTestId('icon-variant-gravity-macos-dark'));
     await waitFor(() => expect(resolveSlowIcon).toBeTypeOf('function'));

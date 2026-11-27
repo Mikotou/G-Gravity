@@ -1,7 +1,7 @@
 import { getComponentCopy } from '../i18n/domains/copy';
-import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { Clock, Gauge, RefreshCw } from 'lucide-react';
-import type { AccountQuotaUnavailableReason, QuotaBucket } from '@shared';
+import type { AccountQuotaUnavailableReason, AcpConnectionStatus, QuotaBucket } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { accountQuotaFeed, QUOTA_PROFILE_SWITCHED } from '../lib/account-quota-feed';
 import { Icon } from './ui/Icon';
@@ -33,16 +33,48 @@ function resolveQuotaLevel(bucket?: QuotaBucket): QuotaLevel {
   return 'high';
 }
 
-export function AccountQuotaFooter({ profileId, generating = false, children }: {
-  profileId: string; generating?: boolean; children?: React.ReactNode;
+export function AccountQuotaFooter({
+  profileId,
+  generating = false,
+  isIsolatedProfile = false,
+  connection,
+  children,
+}: {
+  profileId: string;
+  generating?: boolean;
+  isIsolatedProfile?: boolean;
+  connection?: AcpConnectionStatus;
+  children?: React.ReactNode;
 }) {
-  const { locale , dict} = useI18n();
+  const { locale, dict } = useI18n();
   const zh = locale === 'zh-CN';
   const label = dict.ui.copy.accountQuota;
   const feed = accountQuotaFeed(profileId);
-  const { quota, loading, error, unavailable } = useSyncExternalStore(feed.subscribe, feed.snapshot);
+  const connectionRef = useRef(connection);
+  connectionRef.current = connection;
+  const subscribe = useCallback(
+    (listener: () => void) => feed.subscribe(listener, { isolated: isIsolatedProfile, connection: connectionRef.current }),
+    [feed, isIsolatedProfile]
+  );
+  const { quota, loading, error, unavailable, cooldownUntil, cooldownKind, pausedByCooldown } = useSyncExternalStore(
+    subscribe,
+    feed.snapshot
+  );
+  useEffect(() => {
+    feed.setIsolated(isIsolatedProfile);
+  }, [feed, isIsolatedProfile]);
+  useEffect(() => {
+    if (connection) feed.applyConnectionStatus(connection);
+  }, [feed, connection]);
   const [mode, setMode] = useState<'closed' | 'preview' | 'pinned'>('closed');
   const open = mode !== 'closed';
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const cooldownUntilMs = cooldownUntil ? Date.parse(cooldownUntil) : NaN;
+  const cooldownRemainingSec = Number.isFinite(cooldownUntilMs)
+    ? Math.max(0, Math.ceil((cooldownUntilMs - nowMs) / 1000))
+    : 0;
+  const cooldownActive = Boolean(pausedByCooldown && Number.isFinite(cooldownUntilMs) && cooldownUntilMs > nowMs);
+  const refreshDisabled = loading || cooldownActive;
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const lastTrigger = useRef<HTMLButtonElement | null>(null);
@@ -51,6 +83,19 @@ export function AccountQuotaFooter({ profileId, generating = false, children }: 
     if (wasGenerating.current && !generating) feed.afterTurn();
     wasGenerating.current = generating;
   }, [feed, generating]);
+  // FE-BUG-04：弹层打开且处于冷却期时按 1s 刷新剩余秒数，归零后自动解锁手动刷新按钮。
+  useEffect(() => {
+    if (!open) return;
+    const now = Date.now();
+    setNowMs(now);
+    if (!pausedByCooldown || !Number.isFinite(cooldownUntilMs) || cooldownUntilMs <= now) return;
+    const timer = window.setInterval(() => {
+      const tickNow = Date.now();
+      setNowMs(tickNow);
+      if (tickNow >= cooldownUntilMs) window.clearInterval(timer);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [open, pausedByCooldown, cooldownUntilMs]);
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => {
@@ -194,26 +239,40 @@ export function AccountQuotaFooter({ profileId, generating = false, children }: 
                 )}
               </div>
             </div>
-            {!unavailable && <button
+            <button
               type="button"
               className={`btn btn-ghost btn-sm quota-refresh-btn${loading ? ' is-busy' : ''}`}
               // FE-03：不用原生 disabled。按钮被禁用时 Chromium 会让焦点以 relatedTarget=null 离开，
               // 触发外层 onBlur 立即关闭固定浮层；改为 aria-disabled + 点击防重入，焦点留在按钮上。
-              aria-disabled={loading || undefined}
+              // AQ-1 / FE-BUG-04：429/403 活跃冷却期内禁用刷新按钮，倒计时归零后自动解锁；永不因单次 unavailable 永久禁用。
+              aria-disabled={refreshDisabled ? 'true' : undefined}
               data-testid="quota-refresh-btn"
               onClick={() => {
-                if (loading) return;
+                if (refreshDisabled) return;
                 void feed.manual();
               }}
             >
               <Icon icon={RefreshCw} size="xs" className={loading ? 'spin' : undefined} />
               <span>{dict.ui.copy.refresh}</span>
-            </button>}
+            </button>
           </header>
 
           {loading && !quota && (
             <p className="quota-state-note" role="status">
               {dict.ui.copy.readingOfficialQuota}
+            </p>
+          )}
+          {pausedByCooldown && (
+            <p className="quota-state-note" role="status" data-testid="quota-cooldown-note">
+              {dict.ui.v035.quotaCooldownPaused(
+                cooldownRemainingSec,
+                cooldownKind === 'permission_403' ? '403' : '429'
+              )}
+            </p>
+          )}
+          {isIsolatedProfile && !quota && !loading && !unavailable && !error && !pausedByCooldown && (
+            <p className="quota-state-note" role="status" data-testid="quota-isolated-note">
+              {dict.ui.v035.quotaIsolatedManual}
             </p>
           )}
           {unavailable && <p className="quota-state-note" role="status">{unavailableText[unavailable][zh ? 0 : 1]}</p>}

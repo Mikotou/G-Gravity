@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Cpu, Info, LogIn, LogOut, Plus, Puzzle, RefreshCw, Sparkles, Trash2, Wand2, X } from 'lucide-react';
+import { AlertTriangle, Check, Cpu, Info, LogIn, LogOut, Plus, Puzzle, RefreshCw, Sparkles, Trash2, Wand2, X } from 'lucide-react';
 import {
   APPROVAL_MODE_ORDER,
   APPROVAL_POLICY_DEFAULTS,
@@ -10,9 +10,12 @@ import {
   inferSupportedThinkingLevels,
   hasReviewerConnectionSettings,
   isExternalReviewerConnected,
+  MAX_APPROVAL_PATTERNS_PER_KIND,
   sameReviewerSettings,
   parseMcpCommandLine,
   sameExternalService,
+  validateApprovalPattern,
+  type AccountProfile,
   type AccountsStateSnapshot,
   type ApprovalAuditEntry,
   type ApproveForMeConfig,
@@ -34,7 +37,9 @@ import { formatLocalDateTime } from '../../lib/time-format';
 import { isImeComposing } from '../../lib/platform-keys';
 import { Icon } from '../ui/Icon';
 import { projectApiKeyForSubmit } from '../../lib/api-key-projection';
+import { canAutoDiscoverExternalModels, resolveExternalTargetOrigin } from '../../lib/external-endpoint';
 import { useSettingsDirty } from './settings-dirty';
+import { handleTablistKeyDown } from '../../hooks/useRovingTabs';
 
 /** v0.3.2：符合意图的高风险放行评分上限可配置范围（默认 90，覆盖全部 high 风险区间）。 */
 const ALIGNED_HIGH_RISK_SCORE_RANGE = { min: 60, max: 100 } as const;
@@ -626,23 +631,28 @@ export function ApprovalsPanel({
     [dict, locale]
   );
 
-  // 用户在复核页填完 API Key（或切到本地 Ollama）后自动防抖查询服务端允许的模型与思考强度。
+  const reviewerOrigin = resolveExternalTargetOrigin(reviewer.endpoint);
+  const [patternErrors, setPatternErrors] = useState<Record<PatternField, string | null>>({
+    allowPatterns: null,
+    askPatterns: null,
+    denyPatterns: null,
+  });
+
+  // AP-1：仅无鉴权本机 Ollama（http://127.0.0.1）保留自动防抖模型发现；凡携带 API Key 或已存密钥的外部服务必须由用户显式点击按钮触发。
   useEffect(() => {
     if (tab !== 'reviewer') return;
     const ep = reviewer.endpoint.trim();
     const key = reviewer.apiKey?.trim() || '';
-    const readyToProbe = hasReviewerConnectionSettings({ provider: reviewer.provider, endpoint: ep, model: 'probe',
-      apiKey: key.length >= 16 ? key : undefined, hasApiKey: !key && reviewer.hasApiKey });
-    if (!readyToProbe) return;
-    const probeKey = `${reviewer.provider}\0${ep}\0${key}`;
+    if (!canAutoDiscoverExternalModels({ provider: reviewer.provider, endpoint: ep, apiKey: key, hasApiKey: savedReviewerKey })) return;
+    const probeKey = `${reviewer.provider}\0${ep}`;
     if (probeKey === lastAutoDiscoveryKeyRef.current) return;
     const timer = window.setTimeout(() => {
       if (lastAutoDiscoveryKeyRef.current === probeKey) return;
       lastAutoDiscoveryKeyRef.current = probeKey;
-      void fetchServerModels(reviewer.provider, ep, key);
+      void fetchServerModels(reviewer.provider, ep);
     }, 650);
     return () => window.clearTimeout(timer);
-  }, [tab, reviewer.provider, reviewer.endpoint, reviewer.apiKey, fetchServerModels]);
+  }, [tab, reviewer.provider, reviewer.endpoint, reviewer.apiKey, savedReviewerKey, fetchServerModels]);
 
   const selectedModelMeta = useMemo<ExternalReviewerModelOption>(() => {
     const found = discoveredModels.find((m) => m.id === reviewer.model);
@@ -692,12 +702,40 @@ export function ApprovalsPanel({
     { field: 'denyPatterns', title: dict.denyRulesTitle, badge: 'badge-danger' },
   ];
 
-  /** 每类规则使用独立的输入草稿。将非空的新规则并入所选列表，提交发生异常时保留输入便于纠正。 */
+  /** AP-2/3：接入共享正则与上限契约，拒绝空串/纯空白/不安全正则/重复/超上限新增。 */
+  function validateDraftPattern(field: PatternField, raw: string): {
+    error: string | null;
+    broadWarning: boolean;
+    conflictTitles: string[];
+    normalized: string;
+  } {
+    const normalized = raw.trim();
+    const checkInput = normalized.length > 0 ? normalized : raw;
+    const res = validateApprovalPattern(checkInput);
+    if (!res.valid && res.code) {
+      return { error: dict.ui.v035.approvalPatternError[res.code], broadWarning: false, conflictTitles: [], normalized };
+    }
+    if (config[field].length >= MAX_APPROVAL_PATTERNS_PER_KIND) {
+      return { error: dict.ui.v035.approvalPatternLimit(MAX_APPROVAL_PATTERNS_PER_KIND), broadWarning: false, conflictTitles: [], normalized };
+    }
+    if (config[field].includes(normalized)) {
+      return { error: dict.ui.v035.approvalPatternDuplicate, broadWarning: false, conflictTitles: [], normalized };
+    }
+    const conflictTitles = groups
+      .filter((other) => other.field !== field && config[other.field].includes(normalized))
+      .map((other) => other.title);
+    return { error: null, broadWarning: Boolean(res.broadMatchWarning), conflictTitles, normalized };
+  }
+
   function addPattern(field: PatternField): void {
-    const value = drafts[field].trim();
-    if (!value) return;
+    const check = validateDraftPattern(field, drafts[field]);
+    if (check.error) {
+      setPatternErrors((prev) => ({ ...prev, [field]: check.error }));
+      return;
+    }
+    setPatternErrors((prev) => ({ ...prev, [field]: null }));
     void run(async () => {
-      if (!config[field].includes(value)) await onUpdateConfig({ [field]: [...config[field], value] });
+      await onUpdateConfig({ [field]: [...config[field], check.normalized] });
       setDrafts((prev) => ({ ...prev, [field]: '' }));
     });
   }
@@ -710,7 +748,12 @@ export function ApprovalsPanel({
         </div>
       )}
 
-      <div className="sub-tabs">
+      <div
+        className="sub-tabs"
+        role="tablist"
+        aria-label={dict.settingsNav.approvals}
+        onKeyDown={(e) => handleTablistKeyDown(e)}
+      >
         {(
           [
             ['rules', dict.approvalTabRules],
@@ -721,6 +764,9 @@ export function ApprovalsPanel({
           <button
             key={key}
             type="button"
+            role="tab"
+            aria-selected={tab === key}
+            tabIndex={tab === key ? 0 : -1}
             className={`sub-tab ${tab === key ? 'is-active' : ''}`}
             onClick={() => setTab(key)}
             data-testid={`drawer-tab-${key}`}
@@ -908,58 +954,144 @@ export function ApprovalsPanel({
             )}
           </div>
 
-          {groups.map((g) => (
-            <React.Fragment key={g.field}>
-              <h3 className="settings-group-title">
-                <span className={`badge ${g.badge}`}>{g.title}</span>
-              </h3>
-              <div className="settings-group">
-                {config[g.field].length === 0 ? (
-                  <div className="pattern-row pattern-row-empty muted">
-                    {dict.rulesEmpty}
-                  </div>
-                ) : (
-                  config[g.field].map((pat) => (
-                    <div key={pat} className="pattern-row">
-                      <code className="truncate pattern-code">
-                        {pat}
-                      </code>
-                      <button
-                        type="button"
-                        className="icon-btn icon-btn-sm"
-                        aria-label={dict.deleteRuleBtn}
-                        title={dict.deleteRuleBtn}
-                        disabled={busy}
-                        onClick={() =>
-                          void run(() => onUpdateConfig({ [g.field]: config[g.field].filter((item) => item !== pat) }))
-                        }
-                      >
-                        <Icon icon={X} size="xs" />
-                      </button>
+          <div className="settings-group settings-banner approval-priority-banner" role="note" data-testid="approval-priority-hint">
+            <Icon icon={Info} size="xs" />
+            <span className="settings-banner-text">{dict.ui.v035.approvalPriorityHint}</span>
+          </div>
+
+          {groups.map((g) => {
+            const list = config[g.field];
+            const atLimit = list.length >= MAX_APPROVAL_PATTERNS_PER_KIND;
+            const rawDraft = drafts[g.field];
+            const liveCheck = rawDraft.length > 0 ? validateDraftPattern(g.field, rawDraft) : null;
+            const activeError =
+              patternErrors[g.field] ??
+              (liveCheck?.error ?? (atLimit ? dict.ui.v035.approvalPatternLimit(MAX_APPROVAL_PATTERNS_PER_KIND) : null));
+            return (
+              <React.Fragment key={g.field}>
+                <h3 className="settings-group-title pattern-group-head">
+                  <span className={`badge ${g.badge}`}>{g.title}</span>
+                  <span className="muted mono pattern-count" data-testid={`pattern-count-${g.field}`}>
+                    {dict.ui.v035.approvalPatternCount(list.length, MAX_APPROVAL_PATTERNS_PER_KIND)}
+                  </span>
+                </h3>
+                <div className="settings-group">
+                  {list.length === 0 ? (
+                    <div className="pattern-row pattern-row-empty muted">
+                      {dict.rulesEmpty}
                     </div>
-                  ))
+                  ) : (
+                    list.map((pat, idx) => {
+                      // FE-BUG-03：区分旧版空串（后端已停用不会生效）与旧版非空纯空白（后端 compileSafePattern 仍按字面空白匹配）
+                      const isLegacyEmpty = typeof pat !== 'string' || pat.length === 0;
+                      const isLegacyWhitespace = typeof pat === 'string' && pat.length > 0 && pat.trim().length === 0;
+                      const isLegacyBlank = isLegacyEmpty || isLegacyWhitespace;
+                      const existingCheck = isLegacyBlank ? null : validateApprovalPattern(pat);
+                      const isDupInSelf = !isLegacyEmpty && list.indexOf(pat) !== idx;
+                      const conflicts = isLegacyEmpty
+                        ? []
+                        : groups.filter((o) => o.field !== g.field && config[o.field].includes(pat)).map((o) => o.title);
+                      return (
+                        <div key={`${g.field}-${idx}`} className="pattern-row" data-testid={`pattern-row-${g.field}-${idx}`}>
+                          <div className="pattern-row-main">
+                            <code className="truncate pattern-code">
+                              {isLegacyEmpty ? '""' : isLegacyWhitespace ? JSON.stringify(pat) : pat}
+                            </code>
+                            {isLegacyEmpty && (
+                              <span className="badge badge-warning badge-xs" data-testid={`pattern-legacy-blank-${g.field}-${idx}`}>
+                                {dict.ui.v035.approvalPatternLegacyBlank}
+                              </span>
+                            )}
+                            {isLegacyWhitespace && (
+                              <span className="badge badge-danger badge-xs" data-testid={`pattern-legacy-whitespace-${g.field}-${idx}`}>
+                                {dict.ui.v035.approvalPatternLegacyWhitespace}
+                              </span>
+                            )}
+                            {existingCheck?.broadMatchWarning && (
+                              <span className="badge badge-warning badge-xs" data-testid={`pattern-broad-warning-${g.field}-${idx}`}>
+                                {dict.ui.v035.approvalPatternBroad}
+                              </span>
+                            )}
+                            {conflicts.length > 0 && (
+                              <span className="badge badge-warning badge-xs" data-testid={`pattern-conflict-warning-${g.field}-${idx}`}>
+                                {dict.ui.v035.approvalPatternConflict(conflicts.join(' / '))}
+                              </span>
+                            )}
+                            {isDupInSelf && (
+                              <span className="badge badge-warning badge-xs" data-testid={`pattern-duplicate-warning-${g.field}-${idx}`}>
+                                {dict.ui.v035.approvalPatternDuplicate}
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className="icon-btn icon-btn-sm"
+                            aria-label={dict.deleteRuleBtn}
+                            title={dict.deleteRuleBtn}
+                            disabled={busy}
+                            data-testid={`delete-pattern-${g.field}-${idx}`}
+                            onClick={() =>
+                              void run(() => onUpdateConfig({ [g.field]: list.filter((_, i) => i !== idx) }))
+                            }
+                          >
+                            <Icon icon={X} size="xs" />
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <form
+                  className="inline-form inline-form-attached"
+                  data-testid={`pattern-form-${g.field}`}
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    addPattern(g.field);
+                  }}
+                >
+                  <input
+                    className="input input-mono"
+                    placeholder={dict.addPatternPlaceholder}
+                    value={rawDraft}
+                    disabled={busy || atLimit}
+                    aria-invalid={Boolean(activeError) || undefined}
+                    data-testid={`pattern-input-${g.field}`}
+                    onChange={(e) => {
+                      setPatternErrors((prev) => (prev[g.field] ? { ...prev, [g.field]: null } : prev));
+                      setDrafts((prev) => ({ ...prev, [g.field]: e.target.value }));
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    className="btn btn-sm"
+                    disabled={busy || atLimit || !rawDraft.length || Boolean(liveCheck?.error)}
+                    data-testid={`pattern-add-${g.field}`}
+                  >
+                    <Icon icon={Plus} size="xs" />
+                    <span>{dict.addRuleBtn}</span>
+                  </button>
+                </form>
+                {activeError && (
+                  <div className="pattern-feedback text-danger" role="alert" data-testid={`pattern-error-${g.field}`}>
+                    <Icon icon={AlertTriangle} size="xs" />
+                    <span>{activeError}</span>
+                  </div>
                 )}
-              </div>
-              <form
-                className="inline-form inline-form-attached"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  addPattern(g.field);
-                }}
-              >
-                <input
-                  className="input input-mono"
-                  placeholder={dict.addPatternPlaceholder}
-                  value={drafts[g.field]}
-                  onChange={(e) => setDrafts((prev) => ({ ...prev, [g.field]: e.target.value }))}
-                />
-                <button type="submit" className="btn btn-sm" disabled={busy || !drafts[g.field].trim()}>
-                  <Icon icon={Plus} size="xs" />
-                  <span>{dict.addRuleBtn}</span>
-                </button>
-              </form>
-            </React.Fragment>
-          ))}
+                {!activeError && liveCheck?.broadWarning && (
+                  <div className="pattern-feedback text-warning" role="note" data-testid={`pattern-draft-broad-${g.field}`}>
+                    <Icon icon={AlertTriangle} size="xs" />
+                    <span>{dict.ui.v035.approvalPatternBroad}</span>
+                  </div>
+                )}
+                {!activeError && liveCheck && liveCheck.conflictTitles.length > 0 && (
+                  <div className="pattern-feedback text-warning" role="note" data-testid={`pattern-draft-conflict-${g.field}`}>
+                    <Icon icon={AlertTriangle} size="xs" />
+                    <span>{dict.ui.v035.approvalPatternConflict(liveCheck.conflictTitles.join(' / '))}</span>
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          })}
         </>
       )}
 
@@ -968,7 +1100,20 @@ export function ApprovalsPanel({
           {auditEntries.length === 0 ? (
             <div className="empty-state">{dict.auditEmpty}</div>
           ) : (
-            auditEntries.map((item) => (
+            auditEntries.map((item) => {
+              const sourceKind: 'ai' | 'rule' | 'user' =
+                item.decisionSource === 'external-ai'
+                  ? 'ai'
+                  : item.decisionSource === 'user-inline'
+                    ? 'user'
+                    : 'rule';
+              const sourceBadgeText =
+                sourceKind === 'ai'
+                  ? dict.ui.v035.auditSourceAi
+                  : sourceKind === 'user'
+                    ? dict.ui.v035.auditSourceUser
+                    : dict.ui.v035.auditSourceRule;
+              return (
               <div key={item.id} className="audit-row" data-testid={`audit-row-${item.id}`}>
                 <div className="audit-head">
                   <span
@@ -982,6 +1127,13 @@ export function ApprovalsPanel({
                   >
                     {dict.verdictLabels[item.verdict]}
                   </span>
+                  <span
+                    className={`badge badge-xs audit-source is-${sourceKind}`}
+                    data-testid={`audit-source-${item.id}`}
+                    data-source-kind={sourceKind}
+                  >
+                    {sourceBadgeText}
+                  </span>
                   <span className="muted">{dict.decisionSourceLabels[item.decisionSource]}</span>
                   <span className="spacer" />
                   <span className="muted mono" title={item.timestamp}>
@@ -991,7 +1143,8 @@ export function ApprovalsPanel({
                 <code className="audit-cmd">{item.commandOrSummary}</code>
                 {item.reason && <div className="list-row-desc">{item.reason}</div>}
               </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
@@ -1186,6 +1339,12 @@ export function ApprovalsPanel({
             <div className="setting-row">
               <span className="setting-text">
                 <span className="setting-label">{dict.reviewerEndpointLabel}</span>
+                <span className="setting-desc mono" data-testid="reviewer-target-origin">
+                  {reviewerOrigin ? dict.ui.v035.targetOrigin(reviewerOrigin) : dict.ui.v035.targetOriginInvalid}
+                </span>
+                <span className="setting-desc" data-testid="reviewer-auto-discover-hint">
+                  {dict.ui.v035.autoDiscoverLocalOnly}
+                </span>
               </span>
               <input
                 className="input input-mono w-280"
@@ -1203,6 +1362,7 @@ export function ApprovalsPanel({
                   }));
                 }}
                 aria-label={dict.reviewerEndpointLabel}
+                data-testid="reviewer-endpoint-input"
               />
             </div>
 
@@ -1513,12 +1673,14 @@ type PluginsTab = 'builtins' | 'plugins' | 'mcp' | 'skills';
 
 export function PluginsPanel({
   snapshot,
+  activeProfile,
   onRefresh,
   onRunPluginAction,
   onRunMcpAction,
   onToggleSkill,
 }: {
   snapshot: PluginsManagerSnapshot;
+  activeProfile?: AccountProfile;
   onRefresh: () => Promise<void>;
   onRunPluginAction: (input: PluginActionInput) => Promise<void>;
   onRunMcpAction: (input: McpActionInput) => Promise<void>;
@@ -1532,7 +1694,12 @@ export function PluginsPanel({
   const [mcpType, setMcpType] = useState<'stdio' | 'http'>('stdio');
   const [mcpCmd, setMcpCmd] = useState('');
   const [refreshAttempt, setRefreshAttempt] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const onRefreshRef = useRef(onRefresh);
+  onRefreshRef.current = onRefresh;
+  const dictRef = useRef(dict);
+  dictRef.current = dict;
   // “上次命令输出”默认收起：例行只读刷新不打扰；用户亲手执行的操作结束或出错时自动展开。
   const [outputOpen, setOutputOpen] = useState(false);
   const wasBusyRef = useRef(false);
@@ -1556,12 +1723,23 @@ export function PluginsPanel({
     if (error) setOutputOpen(true);
   }, [error]);
   const formattedOutput = useMemo(() => (lastOutput ? formatCommandOutput(lastOutput) : null), [lastOutput]);
+  // PL-1：不将 dict 或被动变化的 onRefresh 放进依赖，切换语言或切换会话页签不会静默刷 CLI；仅打开面板或显式点击刷新触发。
   useEffect(() => {
     let current = true;
     setRefreshError(null);
-    void onRefresh().catch(err => { if (current) setRefreshError(formatActionError(err, dict)); });
-    return () => { current = false; };
-  }, [onRefresh, dict, refreshAttempt]);
+    setRefreshing(true);
+    void onRefreshRef
+      .current()
+      .catch((err) => {
+        if (current) setRefreshError(formatActionError(err, dictRef.current));
+      })
+      .finally(() => {
+        if (current) setRefreshing(false);
+      });
+    return () => {
+      current = false;
+    };
+  }, [refreshAttempt]);
 
   const sectionErrors = snapshot.sectionErrors ?? {};
   const sectionErrorFor = (section: 'plugins' | 'mcp' | 'skills') => {
@@ -1570,7 +1748,7 @@ export function PluginsPanel({
     return (
       <div role="alert" className="alert alert-warning plugins-section-error" data-testid={`plugins-section-error-${section}`}>
         <span className="settings-banner-text">{dict.ui.pluginSectionError(dict.ui.pluginSectionNames[section], message)}</span>
-        <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setRefreshAttempt(n => n + 1)}>
+        <button type="button" className="btn btn-sm" disabled={busy || refreshing} onClick={() => setRefreshAttempt(n => n + 1)}>
           {dict.ui.v034.retryLoad}
         </button>
       </div>
@@ -1584,13 +1762,23 @@ export function PluginsPanel({
     ['skills', dict.pluginsTabSkills, snapshot.skills.length],
   ];
 
+  const isIsolatedScope = Boolean(activeProfile && !activeProfile.isDefault);
+
   return (
     <div className="settings-section" data-testid="plugins-manager-modal">
-      <div className="sub-tabs">
+      <div
+        className="sub-tabs"
+        role="tablist"
+        aria-label={dict.settingsNav.plugins}
+        onKeyDown={(e) => handleTablistKeyDown(e)}
+      >
         {tabs.map(([key, label, count]) => (
           <button
             key={key}
             type="button"
+            role="tab"
+            aria-selected={tab === key}
+            tabIndex={tab === key ? 0 : -1}
             className={`sub-tab ${tab === key ? 'is-active' : ''}`}
             onClick={() => setTab(key)}
             data-testid={`plugins-tab-${key}`}
@@ -1602,7 +1790,34 @@ export function PluginsPanel({
             )}
           </button>
         ))}
+        <span className="spacer" />
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          disabled={busy || refreshing}
+          onClick={() => setRefreshAttempt((n) => n + 1)}
+          data-testid="plugins-refresh-btn"
+        >
+          <Icon icon={RefreshCw} size="xs" className={refreshing ? 'spin' : undefined} />
+          <span>{dict.ui.v035.pluginsManualRefresh}</span>
+        </button>
       </div>
+
+      {activeProfile && (
+        <div
+          className={`settings-group settings-banner${isIsolatedScope ? ' tone-warning' : ''}`}
+          role="note"
+          data-testid="plugins-profile-scope-banner"
+          data-profile-isolated={isIsolatedScope ? 'true' : 'false'}
+        >
+          <Icon icon={Info} size="xs" />
+          <span className="settings-banner-text">
+            {isIsolatedScope
+              ? dict.ui.v035.pluginsProfileScope(activeProfile.name)
+              : dict.ui.v035.pluginsDefaultScope}
+          </span>
+        </div>
+      )}
 
       {error && (
         <div role="alert" className="alert">

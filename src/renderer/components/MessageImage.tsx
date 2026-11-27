@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronLeft, ChevronRight, Copy, FolderOpen, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink, FolderOpen, RotateCw, X } from 'lucide-react';
 import { useI18n } from '../i18n/I18nContext';
 import { getDesktopBridge } from '../services/desktop-bridge';
 import { isImeComposing, isPrimaryModifier } from '../lib/platform-keys';
@@ -173,6 +173,8 @@ export function MessageImage({ source, alt, title, displayUrl, gallery, galleryI
   const { dict } = useI18n();
   const url = displayUrl || resolveImage(source, workspace);
   const [failed, setFailed] = useState<string>();
+  const [retryCount, setRetryCount] = useState(0);
+  const [openError, setOpenError] = useState('');
   const [zoom, setZoom] = useState(false);
   const [copied, setCopied] = useState(false);
   const [revealError, setRevealError] = useState('');
@@ -208,8 +210,51 @@ export function MessageImage({ source, alt, title, displayUrl, gallery, galleryI
     };
   }, []);
 
-  if (!url || failed === url) {
+  const isRemoteBlockedByCsp = Boolean(url && !displayUrl && /^https?:/i.test(url));
+  if (isRemoteBlockedByCsp && url) {
+    return (
+      <span className="md-img-blocked" data-testid="md-img-blocked-capsule" data-remote-src={url} title={dict.ui.v035.imageBlockedTitle}>
+        <span className="md-img-blocked-label truncate">{alt || url}</span>
+        <button
+          type="button"
+          className="btn btn-sm md-img-blocked-btn"
+          data-testid="md-img-blocked-open-btn"
+          onClick={() => {
+            setOpenError('');
+            void getDesktopBridge()
+              .openLinkOrFileTarget({ target: url, action: 'browser', cwd: workspace || undefined, sessionId: sessionId || undefined })
+              .catch((reason) => setOpenError(dict.ui.v031.linkOpenFailed(stripIpcErrorPrefix(reason))));
+          }}
+        >
+          <Icon icon={ExternalLink} size="xs" />
+          <span>{dict.ui.v035.imageBlockedOpen}</span>
+        </button>
+        {openError && <span role="alert" className="md-inline-error">{openError}</span>}
+      </span>
+    );
+  }
+
+  if (!url) {
     return <span className="muted md-img-unavailable">{alt || dict.ui.v031.imageUnavailable}</span>;
+  }
+  if (failed === url) {
+    return (
+      <span className="muted md-img-unavailable" data-testid="md-img-failed">
+        <span>{alt || dict.ui.v031.imageUnavailable}</span>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm md-img-retry"
+          data-testid="md-img-retry-btn"
+          onClick={() => {
+            setFailed(undefined);
+            setRetryCount((n) => n + 1);
+          }}
+        >
+          <Icon icon={RotateCw} size="xs" />
+          <span>{dict.ui.v035.imageRetry}</span>
+        </button>
+      </span>
+    );
   }
   const close = () => {
     setZoom(false);
@@ -221,6 +266,7 @@ export function MessageImage({ source, alt, title, displayUrl, gallery, galleryI
     <span className="message-image-wrap" data-image-source={source} data-image-url={url}>
       <button type="button" ref={trigger} className="message-image" aria-label={label} onClick={() => setZoom(true)}>
         <img
+          key={`${url}#${retryCount}`}
           ref={thumbImgRef}
           className="md-img"
           src={url}

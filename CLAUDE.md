@@ -23,7 +23,7 @@
 
 2. **桌面版仅展示 G-Gravity 自有会话，对 `~/.gemini` 严格 0 字节写入**
    - `v0.3.3` 已彻底移除外部只读历史导入链路（`history-importer.ts` / `ReadOnlyHistoryView.tsx`），侧栏仅展示当前 Profile 的 G-Gravity 自有会话登记表并保留旧版自有数据自动升级迁移。
-   - `src/main/telemetry/checkpoint-limit-reader.ts` 通过 `src/main/storage/readonly-sqlite-snapshot.ts` 以只读、0 字节写入、防 TOCTOU 方式将目标会话 `conversations/<sessionId>.db` 字节复制到客户端私有临时目录提取 `max_token_limit`（用后即删，绝不读取任何凭据或状态文件）；`src/main/services/local-media-inspector.ts` 仅以只读、有界字节上限与符号链接规范化校验方式检查工作区及当前会话 `brain/<sessionId>` 产物。
+   - `src/main/telemetry/checkpoint-limit-reader.ts` 通过 `src/main/storage/readonly-sqlite-snapshot.ts` 以只读、0 字节写入、防 TOCTOU 方式将目标会话 `conversations/<sessionId>.db` 字节复制到客户端私有临时目录提取 `max_token_limit`（用后即删，绝不读取任何凭据或状态文件）；`src/main/services/local-media-inspector.ts` 与 `src/main/session/plan-artifact-reader.ts` 仅以只读、有界字节上限（`implementation_plan.md` 严格 ≤ 128 KiB UTF-8）与 `lstat` + `realpath` 校验方式检查工作区及当前会话 `brain/<sessionId>` 产物。
    - 对官方目录必须保持 **0 字节写入、0 新增文件**。
 
 3. **多账号隔离仅限官方 `--app-data-dir` + 100% 用户手动切换（严禁自动轮换切号）**
@@ -64,28 +64,28 @@
 
 ### 1. 三层职责边界
 - **`src/shared/`**：纯 TypeScript 类型契约与无副作用校验纯函数（供 `tsconfig.main.json` 与 `tsconfig.renderer.json` 共同编译）。
-- **`src/main/`**：Electron 主进程（5 层零环 DAG，89 个文件，0 循环依赖）。薄外观入口为 `CoreService`（`src/main/core-service.ts`，314 行），协调 `AcpClient`、`SessionMultiplexer`、`SessionLifecycleService`、`TurnOrchestrator`、`AccountManager`、`PluginsManager`、`ApprovalEngine`、`TelemetryStore`、`InspectorStore`、`SwarmTracker` 等模块，并通过 `ipc-router.ts` 暴露给渲染层；共享基础设施收敛于 `security/redaction.ts`、`llm/external-llm-transport.ts`、`storage/readonly-sqlite-snapshot.ts` 与 `telemetry/external-service-ledger.ts`。
+- **`src/main/`**：Electron 主进程（5 层零环 DAG，`v0.3.5` 共 106 个文件、296 条内部静态边、0 循环依赖、0 `acp/ → services/` 反向依赖）。薄外观入口为 `CoreService`（`src/main/core-service.ts`，≤ 420 行），单文件硬上限 ≤ 650 行，协调 `AcpClient`、`SessionMultiplexer`、`SessionLifecycleService`、`TurnOrchestrator`、`AccountManager`、`PluginsManager`、`ApprovalEngine`、`TelemetryStore`、`InspectorStore`、`SwarmTracker` 等模块，并通过 `ipc-router.ts` 暴露给渲染层；共享基础设施收敛于 `security/redaction.ts`、`llm/external-llm-transport.ts`、`storage/readonly-sqlite-snapshot.ts` 与 `telemetry/external-service-ledger.ts`。
 - **`src/renderer/`**：React 19 单页工作台，所有跨进程调用统一收敛在 `src/renderer/services/desktop-bridge.ts`。
 
-### 2. 前端关键组件地图（`v0.3` 当前结构）
-- **布局骨架**：`App.tsx` → `TopBar.tsx` + `ProjectSidebar.tsx` + `SessionWorkspaceGrid.tsx` + `RightInspector.tsx`
+### 2. 前端关键组件地图（`v0.3.5` 当前结构）
+- **布局骨架**：`App.tsx` → `TopBar.tsx` + `ActivityRail.tsx` + `ProjectSidebar.tsx` + `SessionWorkspaceGrid.tsx` + `RightInspector.tsx`
 - **会话与输入**：
-  - `SessionPane.tsx`：单个会话窗格（空状态引导、消息时间线、工具卡片流、内联审批聚焦管理、底部 Composer 挂载）。
+  - `SessionPane.tsx`：单个会话窗格（空状态引导、消息时间线、工具卡片流、内联审批聚焦管理、Plan 多题提问卡 `QuestionBar`、底部 Composer 挂载）。
   - `Composer.tsx`：多行自适应输入框、`/` Slash 菜单、`@` 文件/会话补全、剪贴板贴图、顶部 `ContextStatusBar`、左下 Mode & 审批档位切换、右下 Model & Effort 选择。
-  - `Markdown.tsx`：安全自研 GFM Markdown 渲染器（不启用原始 HTML 注入，代码块带语言栏与复制按钮）。
+  - `Markdown.tsx`：安全自研 GFM Markdown 渲染器（不启用原始 HTML 注入，代码块带语言栏、超 40 行折叠与复制按钮，表格与代码块支持键盘横向滚动）。
   - `InlineRequestView.tsx`：Claude Code 风格 `1–4` 快捷键内联审批卡片（`SessionPane` 保证同一时刻仅首张待审卡片响应数字快捷键）。
   - `ToolCallCard.tsx` / `UnifiedDiffBlock.tsx` / `ThinkingBlock.tsx`：工具调用折叠行、红绿行级 Diff、双轨思考折叠块。
 - **右侧检视器**：
-  - `RightInspector.tsx`：`Diff`、`Files`、`Plan`、`Terminal`、`Context`、`Swarm` 六个 Tab 切换与拖拽调宽。
-  - `ContextCostInspectorView.tsx`：上下文构成条、`24h / 7d / 30d` Token 热力图、分模型四维费用构成（堆叠条 + SVG 环形图）。
+  - `RightInspector.tsx`：`Changes`（二级切换 `Diff` / `Files`）、`Plan`（6 态权威待办 + 可折叠只读 `PlanArtifactPanel`）、`Terminal`、`Context`（含二级分支树 `Tree`）、`Swarm` 五个一级 Tab 切换、键盘方向键漫游与拖拽调宽。
+  - `ContextCostInspectorView.tsx` & `context/TokenHeatmapView.tsx`：上下文构成条、统一双轴公式 `computeHeatLevel` 驱动的 `24h` 柱图 / `7d` 按日卡片 / `30d` Codex 周行 7 格方格热力图（OKLCH 5 阶色阶 + WCAG AA 对比度）、分模型四维费用构成（堆叠条 + SVG 环形图）。
   - `SwarmPanel.tsx`：多智能体拓扑与消息流面板。
 - **统一全屏设置中心（`Ctrl+,` / `Escape` 关闭）**：
-  - `SettingsView.tsx`：左侧分组导航（通用、外观、自定义配色、应用图标、账号、Approve for me、Plugins、Cost 单价、关于）。
+  - `SettingsView.tsx`：左侧 8 项分组导航（通用、外观［内含主题/自定义配色/应用图标二级页签］、账号、Approve for me、Plugins、Cost 单价、更新、关于；不暴露超规的 Orchestrator 自定义项）。
   - `settings/AppearancePanels.tsx`：语言/思考轨/进程隔离开关、6 套预设主题卡片、23 色 Token 自定义取色与 JSON 导入导出、6 套原创图标切换。
   - `settings/WorkspacePanels.tsx`：ACP 连接状态与官方登录 + 多 Profile 手动隔离管理、`Approve for me` 规则与审计日志、`Plugins / MCP / Skills` 面板、模型单价表编辑。
 - **设计系统与响应式分屏**：
-  - `styles/theme.ts` 将当前主题的 23 个基础颜色与 WCAG AA 派生色写入 `:root` CSS 变量；
-  - 渲染层设计系统（`v0.3.4` 合并为 `tokens.css` → `base.css` → `components/*.css` → `platform/{win,mac}.css`）基于主题变量与 `color-mix(in srgb, ...)` 派生视觉层级，并通过 `container-type: inline-size`（`@container pane`）让双分屏下的窄窗格自动紧凑排版。
+  - `styles/theme.ts` 将当前主题的 23 个基础颜色、WCAG AA 派生色与 OKLCH 热力图 5 阶色阶（`deriveHeatmapRamp`）写入 `:root` CSS 变量；
+  - 渲染层设计系统（`styles/index.css` → `tokens.css` → `base.css` → `components/*.css` → `platform/{win,mac}.css`，源码 ≤ 230 KiB、0 死类、0 跨文件重复选择器、0 非合成动画）基于主题变量与 `color-mix(in srgb, ...)` 派生视觉层级，并通过容器查询（`@container pane` / `@container insp` / `@container hm`）适配窄窗格与窄检视器布局。
 
 ---
 

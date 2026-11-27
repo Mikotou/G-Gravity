@@ -1,5 +1,5 @@
 import { getComponentCopy } from '../i18n/domains/copy';
-import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { CheckCircle2, ChevronDown, ChevronRight, GitBranch, Layers, Send } from 'lucide-react';
 import type { SwarmActionEvent, SwarmBoardMessage, SwarmHistoryCursor, SwarmTopologyState, SwarmWorkerStatus } from '@shared';
 import { swarmMessageMentions } from '@shared';
@@ -264,6 +264,8 @@ function SessionSwarmPanel({
   const [page, setPage] = useState<SwarmTopologyState>();
   const [cursors, setCursors] = useState<SwarmHistoryCursor[]>([]);
   const [loading, setLoading] = useState(false);
+  const dictRef = useRef(dict);
+  dictRef.current = dict;
   const topology = page ?? latest;
   const hasRecords = Boolean(topology && (topology.isActive && topology.swarmTitle || topology.workers.length || topology.boardMessages.length || topology.actionTimeline.length));
   const canLoadEarlier = Object.values(topology?.earlier ?? {}).some(Boolean);
@@ -274,13 +276,13 @@ function SessionSwarmPanel({
       let active = true;
       void onLoadPage(sessionId, { ...before, boardMessages: null, actionTimeline: null }).then(updated => {
         if (active) setPage(prev => prev ? { ...prev, workers: updated.workers, stats: updated.stats } : prev);
-      }).catch(err => { if (active) setError(formatActionError(err, dict)); });
+      }).catch(err => { if (active) setError(formatActionError(err, dictRef.current)); });
       return () => { active = false; };
     }
     if (!latest?.changedWorkers?.length) return;
     const changed = new Map(latest.changedWorkers.map(w => [w.rowId ?? w.id, w]));
     setPage(prev => prev ? { ...prev, stats: latest.stats, workers: prev.workers.map(w => changed.get(w.rowId ?? w.id) ?? w) } : prev);
-  }, [latest, cursors, sessionId, onLoadPage, dict]);
+  }, [latest, cursors, sessionId, onLoadPage]);
 
   async function navigate(older: boolean): Promise<void> {
     if (loading || !onLoadPage || !sessionId) return;

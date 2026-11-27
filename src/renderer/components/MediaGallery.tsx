@@ -155,6 +155,12 @@ export function TargetLink({
   const { dict } = useI18n();
   const [error, setError] = useState('');
   const isFile = safe.kind === 'file';
+  const openFileTarget = () => {
+    setError('');
+    void getDesktopBridge()
+      .openLinkOrFileTarget({ target: safe.href, action: 'default-app', cwd: cwd || undefined, sessionId: sessionId || undefined })
+      .catch(reason => setError(stripIpcErrorPrefix(reason)));
+  };
   return <>
     <a
       className={isFile ? 'md-link md-link-file' : 'md-link'}
@@ -169,10 +175,16 @@ export function TargetLink({
         isFile
           ? (e) => {
               e.preventDefault();
-              setError('');
-              void getDesktopBridge()
-                .openLinkOrFileTarget({ target: safe.href, action: 'default-app', cwd: cwd || undefined, sessionId: sessionId || undefined })
-                .catch(reason => setError(stripIpcErrorPrefix(reason)));
+              openFileTarget();
+            }
+          : undefined
+      }
+      onAuxClick={
+        isFile
+          ? (e) => {
+              if (e.button !== 1) return;
+              e.preventDefault();
+              openFileTarget();
             }
           : undefined
       }

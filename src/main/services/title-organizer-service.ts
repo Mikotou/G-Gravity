@@ -1,3 +1,4 @@
+import { modelConfig, selectValues } from '../session/session-options-store';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { AcpConfigOption, AcpSessionUpdateNotification } from '../../shared/acp-protocol';
@@ -134,11 +135,12 @@ export class TitleOrganizerService {
       tempSessionId = created.sessionId;
 
       let latestConfigOptions: AcpConfigOption[] | undefined = created.configOptions;
-      const cfgModel = latestConfigOptions?.find(opt => opt.id === 'model');
+      const cfgModel = modelConfig(latestConfigOptions);
       const hydrogenName = /^(?:gemini(?:[-\s]+\d+(?:\.\d+)*)?[-\s]+)?hydrogen(?:\s*\(medium\))?$/i;
+      const modelValues = selectValues(cfgModel?.options);
       const hydrogenOpt =
-        cfgModel?.options?.find(opt => /^gemini-4-hydrogen$/i.test(opt.value))
-        || cfgModel?.options?.find(opt => hydrogenName.test(opt.value) || hydrogenName.test(opt.name));
+        modelValues.find(opt => /^gemini-4-hydrogen$/i.test(opt.value))
+        || modelValues.find(opt => hydrogenName.test(opt.value) || hydrogenName.test(opt.name));
       const legacyHydrogen =
         created.models?.availableModels?.find(m => /^gemini-4-hydrogen$/i.test(m.modelId))
         || created.models?.availableModels?.find(m => hydrogenName.test(m.modelId) || hydrogenName.test(m.name));
@@ -157,25 +159,25 @@ export class TitleOrganizerService {
           throw new Error(`官方未确认 ${id} = ${value}，已保留原标题`);
         }
       };
-      if (hydrogenOpt) {
-        await setOption('model', hydrogenOpt.value);
+      if (hydrogenOpt && cfgModel) {
+        await setOption(cfgModel.id, hydrogenOpt.value);
       } else if (legacyHydrogen && created.models?.currentModelId !== legacyHydrogen.modelId) {
         await this.app.client.request('session/set_model', { sessionId: tempSessionId, modelId: legacyHydrogen.modelId });
       }
       const mode = config('mode');
-      if (mode?.options?.some(opt => opt.value === 'plan')) await setOption('mode', 'plan');
+      if (selectValues(mode?.options).some(opt => opt.value === 'plan')) await setOption('mode', 'plan');
       const effort = config('thought_level');
-      const medium = effort?.options?.find(opt => opt.value.toLowerCase() === 'medium')?.value;
+      const medium = selectValues(effort?.options).find(opt => opt.value.toLowerCase() === 'medium')?.value;
       if (medium) await setOption('thought_level', medium);
       const selectedName = hydrogenOpt?.name || legacyHydrogen?.name || '';
       const confirmedEffort = config('thought_level');
       const isMedium = confirmedEffort ? confirmedEffort.currentValue?.toLowerCase() === 'medium' :
         /\(medium\)\s*$/i.test(selectedName);
       if (!isMedium ||
-          (hydrogenOpt && config('model')?.currentValue !== hydrogenOpt.value) ||
-          (!hydrogenOpt && legacyHydrogen && config('model')?.currentValue &&
-            config('model')?.currentValue !== legacyHydrogen.modelId) ||
-          (mode?.options?.some(opt => opt.value === 'plan') && config('mode')?.currentValue !== 'plan')) {
+          (hydrogenOpt && modelConfig(latestConfigOptions)?.currentValue !== hydrogenOpt.value) ||
+          (!hydrogenOpt && legacyHydrogen && modelConfig(latestConfigOptions)?.currentValue &&
+            modelConfig(latestConfigOptions)?.currentValue !== legacyHydrogen.modelId) ||
+          (selectValues(mode?.options).some(opt => opt.value === 'plan') && config('mode')?.currentValue !== 'plan')) {
         throw new Error('官方未确认 Hydrogen (medium) 的整理配置，已保留原标题');
       }
 

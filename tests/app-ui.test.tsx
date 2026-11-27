@@ -112,7 +112,8 @@ describe('App 主界面演示桥接交互（不等同真实服务）', () => {
     await screen.findByTestId('context-cost-inspector');
     expect(screen.getByTestId('heatmap-24h-bars').children).toHaveLength(24);
     fireEvent.click(screen.getByTestId('heatmap-range-7d'));
-    expect(screen.getByTestId('heatmap-7d-matrix').querySelectorAll('.heatmap-cell')).toHaveLength(168);
+    // v0.3.5：7d 改为单行 7 张按日卡片（不再有 7×24 小时格）
+    expect(screen.getByTestId('heatmap-7d-matrix').querySelectorAll('.heatmap-cell')).toHaveLength(7);
     fireEvent.click(screen.getByTestId('heatmap-range-30d'));
     // U-04 (v0.3.4): 30d 日历新增周一–周日列头与前置偏移格，按 .heatmap-cell 精准计 30 天单元格
     expect(screen.getByTestId('heatmap-30d-calendar').querySelectorAll('.heatmap-cell')).toHaveLength(30);

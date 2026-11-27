@@ -1,7 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Blocks,
-  FolderKanban,
   Languages,
   PanelLeft,
   Plus,
@@ -30,15 +28,19 @@ export interface ActivityRailProps {
   sidebarCollapsed: boolean;
   connection: AcpConnectionStatus;
   accounts: AccountsStateSnapshot;
-  projectCount: number;
-  pluginCount: number;
+  /** @deprecated v0.3.5 A1：账户浮层不再展示项目入口 */
+  projectCount?: number;
+  /** @deprecated v0.3.5 A1：账户浮层不再展示插件入口 */
+  pluginCount?: number;
   activeSessionCount: number;
   hasAvailableUpdate?: boolean;
   availableUpdateVersion?: string;
   onToggleSidebar: () => void;
   onOpenNewSession: () => void;
-  onOpenProjects: () => void;
-  onOpenPlugins: () => void;
+  /** @deprecated v0.3.5 A1 */
+  onOpenProjects?: () => void;
+  /** @deprecated v0.3.5 A1 */
+  onOpenPlugins?: () => void;
   onOpenAccounts: () => void;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
@@ -56,15 +58,11 @@ export function ActivityRail({
   sidebarCollapsed,
   connection,
   accounts,
-  projectCount,
-  pluginCount,
   activeSessionCount,
   hasAvailableUpdate = false,
   availableUpdateVersion,
   onToggleSidebar,
   onOpenNewSession,
-  onOpenProjects,
-  onOpenPlugins,
   onOpenAccounts,
   onOpenSettings,
   onOpenAbout,
@@ -176,50 +174,7 @@ export function ActivityRail({
               <span>{dict.navAccounts}</span>
               <span className="menu-item-hint">{accounts.profiles.length || 1}</span>
             </button>
-            {/* D3：项目与插件入口从 Rail 收进账户菜单，Rail 只保留品牌、新建、抽屉开关与账户。 */}
-            <button
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              data-testid="open-projects-modal-btn"
-              onClick={() => {
-                setAccountMenuOpen(false);
-                onOpenProjects();
-              }}
-            >
-              <Icon icon={FolderKanban} size="sm" className="muted" />
-              <span>{dict.ui.projects}</span>
-              {projectCount > 0 && <span className="menu-item-hint">{projectCount}</span>}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              data-testid="open-plugins-modal-btn"
-              onClick={() => {
-                setAccountMenuOpen(false);
-                onOpenPlugins();
-              }}
-            >
-              <Icon icon={Blocks} size="sm" className="muted" />
-              <span>{dict.navPlugins}</span>
-              {pluginCount > 0 && <span className="menu-item-hint">{pluginCount}</span>}
-            </button>
-            <div className="menu-sep" />
-            <button
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              onClick={() => {
-                setAccountMenuOpen(false);
-                onOpenSettings();
-              }}
-            >
-              <Icon icon={Settings} size="sm" className="muted" />
-              <span>{dict.navSettings}</span>
-              <span className="kbd">{shortcut(',', 'keycap')}</span>
-            </button>
-            <div className="menu-sep" />
+            {/* v0.3.5 A1：账户浮层只保留账号与语言；项目 / 插件 / 设置统一经 Rail 底部齿轮进入设置中心 */}
             <div className="menu-row">
               <Icon icon={Languages} size="sm" className="muted" />
               <span>{dict.languageLabel}</span>

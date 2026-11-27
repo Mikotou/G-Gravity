@@ -361,6 +361,17 @@ describe('v0.3.2 双端图标视觉、macOS 排版体系与 FE-14 / FE-15 / FE-1
     expect(macCssText).toMatch(/PingFang SC/i);
     expect(macCssText).toMatch(/SF Mono/i);
 
+    const macFontDecls = getEffectiveDeclarations(
+      allRules,
+      (sel, rule) =>
+        rule.atContext.length === 0 &&
+        /^(?:html)?\[(?:data-platform=['"]darwin['"]|data-window-chrome=['"]mac-inset['"])\]$/.test(sel)
+    );
+    expect(macFontDecls.get('--font-sans')).toMatch(/SF Pro Text/i);
+    expect(macFontDecls.get('--font-sans')).not.toMatch(/Inter/i);
+    expect(macFontDecls.get('--font-mono')).toMatch(/^['"]?SF Mono['"]?/i);
+    expect(combinedCleanCss).not.toMatch(/\[data-platform=['"]darwin['"]\]\)\s+\[data-window-chrome=['"]win-overlay['"]\]/);
+
     // 2) 中英混排自动微间距 text-autospace
     expect(combinedCleanCss).toMatch(/text-autospace\s*:/i);
 

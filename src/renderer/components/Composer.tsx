@@ -7,6 +7,7 @@ import {
   EXECUTION_MODE_ORDER,
   isExternalReviewerConnected,
   REASONING_EFFORT_ORDER,
+  type AcpConnectionStatus,
   type AcpModelOption,
   type AgentExecutionMode,
   type AgentReasoningEffort,
@@ -51,6 +52,7 @@ import {
 } from './SelectionAnnotationTools';
 
 import { useComposerDraft, type DraftAttachment } from '../lib/composer-draft';
+import { isImeComposing } from '../lib/platform-keys';
 import { Icon } from './ui/Icon';
 import { EXECUTION_MODE_ICONS } from './ui/mode-icons';
 
@@ -102,10 +104,12 @@ export interface ComposerProps {
   onOpenContextInspector: () => void;
   /** @deprecated v0.3.4：见 canTriggerDemoApproval */
   onTriggerDemoApproval?: (sessionId: string) => void;
-  /** 本会话的突发高频保护（burst guard）当前是否生效 */
-  guardActive?: boolean;
   /** 已发出停止请求，等待回合结算 */
   stopping?: boolean;
+  /** AQ-1：当前活动账号是否为隔离 Profile（跳过默认自动额度探测） */
+  isIsolatedProfile?: boolean;
+  /** AQ-1：实时连接状态（同步 429/403 冷却暂停状态给额度组件） */
+  connection?: AcpConnectionStatus;
 }
 
 const COMPOSER_MIN_HEIGHT_KEY = 'gravity.composer.minHeight';
@@ -264,8 +268,9 @@ export function Composer({
   onOpenExternalReviewerSettings,
   onOpenReviewerStats,
   onOpenContextInspector,
-  guardActive = false,
   stopping = false,
+  isIsolatedProfile = false,
+  connection,
 }: ComposerProps): React.ReactElement {
   const { locale, dict, keys } = useI18n();
   const { text: draft, setDraft, references, setReferences, attachments, setAttachments, sending, setSending, isSending } = useComposerDraft(session.sessionId);
@@ -508,12 +513,26 @@ export function Composer({
 
   async function addFiles(files: File[]): Promise<void> {
     setError(null);
-    try {
-      const results = await Promise.all(files.map(readUserAttachmentFile));
-      const valid = results.filter((item): item is DraftAttachment => Boolean(item));
-      if (valid.length) setAttachments((prev) => [...prev, ...valid]);
-    } catch (err) {
-      reportError(err);
+    const settled = await Promise.allSettled(files.map(readUserAttachmentFile));
+    const valid: DraftAttachment[] = [];
+    const failures: unknown[] = [];
+    for (const entry of settled) {
+      if (entry.status === 'fulfilled') {
+        if (entry.value) valid.push(entry.value);
+      } else {
+        failures.push(entry.reason);
+      }
+    }
+    if (valid.length) setAttachments((prev) => [...prev, ...valid]);
+    if (failures.length > 0) {
+      if (valid.length > 0) {
+        const firstReason = failures[0] instanceof AttachmentTooLargeError
+          ? ui.attachmentTooLarge(failures[0].fileName)
+          : formatActionError(failures[0], dict);
+        setErrorState({ message: ui.v035.composerAttachPartial(failures.length, files.length), hint: firstReason });
+      } else {
+        reportError(failures[0]);
+      }
     }
   }
 
@@ -541,8 +560,13 @@ export function Composer({
   }
 
   const hasQuotesOrNotations = quotes.length > 0 || notations.length > 0;
+  const [runningEnterNotice, setRunningEnterNotice] = useState(false);
 
-  const sendLabel = notations.length ? (locale === 'zh-CN' ? '发送 ' + notations.length + ' 条批注' : 'Send annotations (' + notations.length + ')') : dict.sendMessageBtn;
+  useEffect(() => {
+    if (!turnActive) setRunningEnterNotice(false);
+  }, [turnActive]);
+
+  const sendLabel = notations.length ? ui.v035.composerSendAnnotations(notations.length) : dict.sendMessageBtn;
   async function submit(): Promise<void> {
     const text = draft.trim();
     if ((!text && attachments.length === 0 && !hasQuotesOrNotations) || isSending() || turnActive) return;
@@ -633,7 +657,7 @@ export function Composer({
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (isImeComposing(e)) return;
     if (e.key === 'ArrowUp' && onEditLast && !draft && !menuItems.length && !references.length && !attachments.length &&
         !hasQuotesOrNotations && !sending && !turnActive &&
         !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
@@ -667,10 +691,11 @@ export function Composer({
     if (e.key === 'Escape' && turnActive && !approvalMenuOpen && !modelMenuOpen && !modeMenuOpen) {
       // Claude Code 式中断：生成中按 Esc 停止当前回合，草稿保持不变。
       e.preventDefault();
+      setRunningEnterNotice(false);
       void onCancelPrompt(session.sessionId).catch(reportError);
       return;
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (e.key === 'Enter' && !e.shiftKey && !isImeComposing(e)) {
       const item = menuItems[menuIndex] ?? menuItems[0];
       if (item && !(item.type === 'slash' && draft.trim() === item.command)) {
         e.preventDefault();
@@ -678,6 +703,10 @@ export function Composer({
         return;
       }
       e.preventDefault();
+      if (turnActive) {
+        setRunningEnterNotice(true);
+        return;
+      }
       void submit();
     }
   }
@@ -765,7 +794,7 @@ export function Composer({
                   <span className={item.type === 'file' ? 'mono truncate' : 'truncate'}>
                     {item.type === 'file' ? item.path : item.session.title}
                   </span>
-                  <span className="badge">{item.type === 'file' ? 'File' : 'Thread'}</span>
+                  <span className="badge">{item.type === 'file' ? ui.v035.composerMentionFile : ui.v035.composerMentionThread}</span>
                 </button>
               );
             })}
@@ -779,6 +808,7 @@ export function Composer({
           }}
           onDrop={handleDrop}
         >
+          <span className="composer-busy-rail" aria-hidden="true"><span /></span>
           <ResizeHandle
             axis="y"
             value={inputMinHeight}
@@ -1010,17 +1040,16 @@ export function Composer({
             <div className="menu-anchor" ref={approvalMenuRef}>
               <button
                 type="button"
-                className={`mode-pill approval-pill${guardActive ? ' is-guarded' : ''}`}
+                className="mode-pill approval-pill"
                 onClick={() => setApprovalMenuOpen((open) => !open)}
                 aria-haspopup="menu"
                 aria-expanded={approvalMenuOpen}
                 aria-label={`${dict.approvalMenuTitle}: ${dict.approvalModes[sessionApprovalMode].label}`}
-                title={guardActive ? `${dict.approvalModes[sessionApprovalMode].shortDesc} · ${ui.guardBurstPill}` : dict.approvalModes[sessionApprovalMode].shortDesc}
+                title={dict.approvalModes[sessionApprovalMode].shortDesc}
                 data-testid={`approval-mode-pill-${session.sessionId}`}
               >
                 <Icon icon={ShieldCheck} size="sm" />
                 <span className="approval-label">{dict.approvalModes[sessionApprovalMode].label}</span>
-                {guardActive && <span className="approval-guard-dot" aria-hidden="true" data-testid={`approval-guard-dot-${session.sessionId}`} />}
               </button>
               {approvalMenuOpen && (
                 <div className="popover menu-up approval-menu" role="menu" aria-label={dict.approvalMenuTitle}
@@ -1094,7 +1123,6 @@ export function Composer({
                       <div className="approval-trust" data-testid={`approval-trust-${session.sessionId}`}>
                         <div className="approval-trust-head">
                           <span>{ui.trustTitle}</span>
-                          {guardActive && <span className="badge badge-warning approval-trust-guard">{ui.guardBurstPill}</span>}
                         </div>
                         {grantsState === 'loading' && !grants && <div className="approval-trust-muted">{ui.trustLoading}</div>}
                         {grantsState === 'unavailable' && <div className="approval-trust-muted">{ui.trustUnavailable}</div>}
@@ -1361,7 +1389,19 @@ export function Composer({
           </div>
         </div>
 
-        <AccountQuotaFooter key={session.profileId} profileId={session.profileId} generating={isStreaming}>
+        {runningEnterNotice && turnActive && (
+          <div role="status" className="composer-running-hint" data-testid={`composer-running-hint-${session.sessionId}`}>
+            <span>{ui.v035.composerRunningEnterHint}</span>
+          </div>
+        )}
+
+        <AccountQuotaFooter
+          key={session.profileId}
+          profileId={session.profileId}
+          generating={isStreaming}
+          isIsolatedProfile={isIsolatedProfile}
+          connection={connection}
+        >
           <ContextStatusBar
             sessionId={session.sessionId}
             modelId={session.modelId}

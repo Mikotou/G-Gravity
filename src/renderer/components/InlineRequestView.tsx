@@ -10,7 +10,7 @@ import {
   type PendingApprovalRequest,
 } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
-import { isImeComposing } from '../lib/platform-keys';
+import { isImeComposing, isPrimaryModifier } from '../lib/platform-keys';
 import { formatActionError } from '../i18n/locales';
 import { Icon } from './ui/Icon';
 
@@ -79,7 +79,7 @@ export function GuardianReviewingCard({ event, onTakeOver }: GuardianReviewingCa
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 200);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -103,15 +103,21 @@ export function GuardianReviewingCard({ event, onTakeOver }: GuardianReviewingCa
   return (
     <section
       className="guardian-review-card"
-      role="status"
-      aria-live="polite"
       data-testid={`approval-reviewing-card-${event.requestId}`}
     >
       <div className="guardian-review-head">
         <span className="guardian-review-orb" aria-hidden="true">
           <Icon icon={ShieldCheck} size="sm" />
         </span>
-        <span className="guardian-review-title">{ui.guardianReviewingTitle}</span>
+        <span
+          className="guardian-review-title"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid={`approval-reviewing-status-${event.requestId}`}
+        >
+          {ui.guardianReviewingTitle}
+        </span>
         <span className="guardian-review-tool mono">{canonicalTool}</span>
         <span className="spacer" />
         <span className="guardian-review-model mono" title={event.model}>
@@ -157,7 +163,7 @@ export function InlineRequestView({
   enableNumericShortcuts = false,
   onSubmitDecision,
 }: InlineRequestViewProps): React.ReactElement {
-  const { locale, dict } = useI18n();
+  const { locale, dict, mac } = useI18n();
   const ui = dict.ui;
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackText, setFeedbackText] = useState('');
@@ -165,6 +171,16 @@ export function InlineRequestView({
   const [actionError, setActionError] = useState<string | null>(null);
   const [commandExpanded, setCommandExpanded] = useState(false);
   const feedbackInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const focusTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (focusTimerRef.current !== null) {
+        window.clearTimeout(focusTimerRef.current);
+        focusTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const options = buildClaudeStyleApprovalOptions(request, locale);
   const prefixCandidate = request.commandPrefix?.trim() || undefined;
@@ -181,6 +197,21 @@ export function InlineRequestView({
         ? 'badge badge-warning'
         : 'badge badge-success';
 
+  // v0.3.2：规则预筛地板层级，向用户说明「为何仍需你确认」。standard 不额外提示。
+  const floorTier = request.floorTier;
+  const isTierA = floorTier === 'tier_a_immutable';
+  const showFloorTier = isTierA || floorTier === 'tier_b_intent_gated';
+  const hasAiReference = isTierA && Boolean(ai && !ai.isError && ai.recommended !== 'deny');
+  const tierAReason = isTierA ? request.explanation.risk?.trim().replace(/[。.]+\s*$/, '') : undefined;
+  const aiBannerText = (() => {
+    const raw = ai?.reason?.trim();
+    if (!raw) return '';
+    if (!isTierA) return raw;
+    const marker = '。外部 AI 评估：';
+    const idx = raw.indexOf(marker);
+    return idx >= 0 ? raw.slice(idx + marker.length).trim() || raw : raw;
+  })();
+
   const screeningLabel =
     request.screeningSource === 'local-ast'
       ? dict.screeningLocalAst
@@ -189,7 +220,9 @@ export function InlineRequestView({
         : request.screeningSource === 'ai-reviewer-fallback'
           ? ai?.isError
             ? dict.screeningAiFallback
-            : ui.screeningAiRequestedReview
+            : isTierA
+              ? ui.v032.screeningFloorForcedManual
+              : ui.screeningAiRequestedReview
           : dict.screeningManualMode;
 
   const aiBannerMeta = (() => {
@@ -208,9 +241,6 @@ export function InlineRequestView({
       : undefined;
   const alignment = ai?.intentAlignment;
   const labelSep = dict.ui.copy.labelItem2;
-  // v0.3.2：规则预筛地板层级，向用户说明「为何仍需你确认」。standard 不额外提示。
-  const floorTier = request.floorTier;
-  const showFloorTier = floorTier === 'tier_a_immutable' || floorTier === 'tier_b_intent_gated';
 
   async function handleAction(submission: ApprovalDecisionSubmission): Promise<void> {
     if (submitting) return;
@@ -230,7 +260,11 @@ export function InlineRequestView({
     if (submitting || opt.disabled) return;
     if (opt.decision === 'reject_with_feedback') {
       setFeedbackOpen((prev) => !prev);
-      setTimeout(() => feedbackInputRef.current?.focus(), 0);
+      if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
+      focusTimerRef.current = window.setTimeout(() => {
+        focusTimerRef.current = null;
+        feedbackInputRef.current?.focus();
+      }, 0);
       return;
     }
     if (opt.decision === 'allow_session_prefix') {
@@ -309,7 +343,7 @@ export function InlineRequestView({
         {riskScore !== undefined && (
           <span
             className={`request-score-pill tone-${riskScoreTone(riskScore)}`}
-            title={ui.riskScoreTitle}
+            title={isTierA ? ui.v032.floorTierAReferenceHint : ui.riskScoreTitle}
             data-testid={`risk-score-${request.requestId}`}
           >
             <span className="request-score-meter" aria-hidden="true">
@@ -321,7 +355,7 @@ export function InlineRequestView({
         {alignment && (
           <span
             className={`request-intent-pill is-${alignment}`}
-            title={ui.intentAlignmentTitle}
+            title={isTierA ? ui.v032.floorTierAReferenceHint : ui.intentAlignmentTitle}
             data-testid={`intent-alignment-${request.requestId}`}
           >
             <Icon icon={Target} size="xs" />
@@ -339,16 +373,24 @@ export function InlineRequestView({
 
       {showFloorTier && (
         <div
-          className={`request-floor-banner ${floorTier === 'tier_a_immutable' ? 'is-tier-a' : 'is-tier-b'}`}
+          className={`request-floor-banner ${isTierA ? 'is-tier-a' : 'is-tier-b'}`}
           role="note"
           data-testid={`request-floor-tier-${request.requestId}`}
         >
-          {floorTier === 'tier_a_immutable' ? <Icon icon={ShieldAlert} size="sm" /> : <Icon icon={Target} size="sm" />}
+          {isTierA ? <Icon icon={ShieldAlert} size="sm" /> : <Icon icon={Target} size="sm" />}
           <span className="request-floor-text">
-            <strong>{floorTier === 'tier_a_immutable' ? ui.v032.floorTierALabel : ui.v032.floorTierBLabel}</strong>
+            <strong>
+              {isTierA
+                ? hasAiReference
+                  ? ui.v032.floorTierAWithAiLabel
+                  : ui.v032.floorTierALabel
+                : ui.v032.floorTierBLabel}
+            </strong>
             <span>
-              {floorTier === 'tier_a_immutable'
-                ? ui.v032.floorTierADesc
+              {isTierA
+                ? hasAiReference
+                  ? ui.v032.floorTierAWithAiDesc(tierAReason)
+                  : ui.v032.floorTierADesc
                 : ui.v032.floorTierBDesc(ai && !ai.isError ? alignment : undefined)}
             </span>
           </span>
@@ -406,26 +448,32 @@ export function InlineRequestView({
         </div>
       </details>
 
-      {ai?.reason && (
+      {aiBannerText && (
         <div
           className={`request-ai-reason request-ai-banner${
-            ai.isError ? ' is-error' : ai.recommended === 'deny' ? ' is-deny' : ''
+            ai?.isError ? ' is-error' : ai?.recommended === 'deny' ? ' is-deny' : ''
           }`}
           data-testid={`request-ai-reason-${request.requestId}`}
         >
-          {ai.isError ? (
+          {ai?.isError ? (
             <Icon icon={AlertTriangle} size="xs" />
-          ) : ai.recommended === 'deny' ? (
+          ) : ai?.recommended === 'deny' ? (
             <Icon icon={ShieldAlert} size="xs" />
           ) : (
             <Icon icon={Sparkles} size="xs" />
           )}
           <span className="request-ai-banner-text">
             <strong>
-              {ai.isError ? ui.aiReviewErrorLabel : ai.recommended === 'deny' ? ui.aiReviewDenyLabel : ui.aiReviewNoteLabel}
+              {ai?.isError
+                ? ui.aiReviewErrorLabel
+                : ai?.recommended === 'deny'
+                  ? ui.aiReviewDenyLabel
+                  : isTierA
+                    ? ui.aiReviewReferenceLabel
+                    : ui.aiReviewNoteLabel}
               {labelSep}
             </strong>
-            {ai.reason}
+            {aiBannerText}
           </span>
           {aiBannerMeta && <span className="request-ai-banner-meta mono">{aiBannerMeta}</span>}
         </div>
@@ -480,7 +528,7 @@ export function InlineRequestView({
             onChange={(e) => setFeedbackText(e.target.value)}
             onKeyDown={(e) => {
               if (isImeComposing(e)) return;
-              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              if (e.key === 'Enter' && isPrimaryModifier(e, mac)) {
                 e.preventDefault();
                 submitRejection();
               } else if (e.key === 'Escape') {

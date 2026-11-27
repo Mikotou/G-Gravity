@@ -32,7 +32,7 @@ export function createCoreBridge(core: CoreService): GravityDesktopBridge {
     'setAppIcon', 'importCustomTheme', 'exportCustomTheme', 'inspectLocalTargets', 'openLinkOrFileTarget', 'copyText', 'selectDirectory',
     'checkForUpdates', 'downloadUpdate', 'installUpdate', 'getAccountsState',
     'createAccountProfile', 'deleteAccountProfile', 'switchAccountProfile', 'officialLogout',
-    'setSessionMode', 'setSessionEffort', 'setSessionModel', 'getSessionInspector', 'listWorkspaceFiles',
+    'setSessionMode', 'setSessionEffort', 'setSessionModel', 'getSessionInspector', 'getSessionPlanArtifact', 'listWorkspaceFiles',
     'updateModelRateCards',
     'getPluginsSnapshot', 'runPluginAction', 'runMcpAction', 'toggleSkillEnabled',
   ] as const satisfies readonly (keyof GravityDesktopBridge)[];
@@ -47,6 +47,7 @@ export function createCoreBridge(core: CoreService): GravityDesktopBridge {
     onSessionUpdated: 'session-updated',
     onMessageUpserted: 'message-upserted',
     onInspectorUpdated: 'inspector-updated',
+    onPlanArtifactChanged: 'plan-artifact-changed',
     onAccountUpdated: 'account-updated',
     onApprovalRequested: 'approval-requested',
     onApprovalReviewing: 'approval-reviewing',

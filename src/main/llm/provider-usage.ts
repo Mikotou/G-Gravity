@@ -4,6 +4,7 @@ export interface ExternalModelTokenUsage {
   cachedInputTokens: number;
   outputTokens: number;
   thinkingTokens: number;
+  unclassifiedTokens?: number;
   totalTokens: number;
   providerReported: boolean;
   directCostUsd?: number;
@@ -72,10 +73,12 @@ function extractOpenAiUsage(u?: OpenAiUsageRaw): ExternalModelTokenUsage | undef
   const completionTotal = safeUsageInt(u.completion_tokens);
   const thinkingTokens = Math.min(completionTotal, safeUsageInt(u.completion_tokens_details?.reasoning_tokens));
   const outputTokens = Math.max(0, completionTotal - thinkingTokens);
-  const totalTokens = inputTokens + cachedInputTokens + outputTokens + thinkingTokens;
+  const classified = promptTotal + completionTotal;
+  const unclassifiedTokens = Math.max(0, safeUsageInt(u.total_tokens) - classified);
+  const totalTokens = classified + unclassifiedTokens;
   const directCostUsd = safeUsageFloat(u.cost) ?? safeUsageFloat(u.total_cost);
   if (totalTokens <= 0 && directCostUsd === undefined) return undefined;
-  return { inputTokens, cachedInputTokens, outputTokens, thinkingTokens, totalTokens, providerReported: true, directCostUsd };
+  return { inputTokens, cachedInputTokens, outputTokens, thinkingTokens, ...(unclassifiedTokens > 0 && { unclassifiedTokens }), totalTokens, providerReported: true, directCostUsd };
 }
 
 function extractOllamaUsage(data?: OllamaUsageRaw): ExternalModelTokenUsage | undefined {

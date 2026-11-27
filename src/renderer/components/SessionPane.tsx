@@ -58,10 +58,12 @@ import {
 import { writtenQuestion } from '@shared';
 import { getDesktopBridge } from '../services/desktop-bridge';
 import { QuestionBar } from './QuestionBar';
+import { QuestionFollowupStatus } from './QuestionFollowupStatus';
 import { SentAnnotations } from './SentAnnotations';
 import { ThinkingBlock } from './ThinkingBlock';
 import { AccountQuotaFooter } from './AccountQuotaView';
 import { PaneStatusChip, ToolActivityStream, TurnOutcomeBar, TurnSettledStrip } from './TurnActivity';
+import { isTurnUnconfirmed } from '../lib/turn-insights';
 import { WorkingIndicator } from './WorkingIndicator';
 import { TurnDiagnosticCard, type DiagnosticHandlers } from './TurnDiagnosticCard';
 import { Icon } from './ui/Icon';
@@ -123,8 +125,6 @@ export interface SessionPaneProps {
   onTriggerDemoApproval?: (sessionId: string) => void;
   /** Stage 2 Guardian 正在复核的请求（全部会话，窗格内按会话过滤） */
   reviewingApprovals?: ApprovalReviewingEvent[];
-  /** 各会话突发保护是否生效 */
-  guardActiveBySession?: Record<string, boolean>;
   /** 中止 Stage 2 外部复核并转为人工审批 */
   onCancelStage2Review?: (requestId: string) => Promise<void>;
   /** 欢迎页直达：最近使用的工作目录、默认目录与目录选择器 */
@@ -135,6 +135,8 @@ export interface SessionPaneProps {
   onQuickStart?: (cwd: string, text: string, slotIndex: number, options?: QuickStartOptions) => Promise<void>;
   /** 实时连接状态（断连、429/403 冷却） */
   connection?: AcpConnectionStatus;
+  /** AQ-1：当前活动账号是否为隔离 Profile（跳过默认自动额度探测） */
+  isIsolatedProfile?: boolean;
   /** 断连或出错会话的一键重连（重新拉起官方 agy 并恢复会话） */
   onReconnectSession?: (sessionId: string) => Promise<void>;
   /** 由用户点击后拉起官方登录终端 */
@@ -546,6 +548,7 @@ const MessageTurn = React.memo(function MessageTurn({
   onInspectDiff,
   diagnosticHandlers,
   isLatestAssistant,
+  sessionStatus,
   dismissedDiagnostics,
   suppressDiagnostic,
 }: {
@@ -557,6 +560,7 @@ const MessageTurn = React.memo(function MessageTurn({
   onContinueInterrupted?: () => Promise<void>;
   diagnosticHandlers?: (stop: TurnStopState) => DiagnosticHandlers;
   isLatestAssistant?: boolean;
+  sessionStatus?: ManagedSessionSummary['status'];
   dismissedDiagnostics?: Set<string>;
   /** 紧随其后的助手消息（中间无用户回合）已显示同类诊断卡时隐藏本条，避免两张卡片叠放。 */
   suppressDiagnostic?: boolean;
@@ -572,7 +576,8 @@ const MessageTurn = React.memo(function MessageTurn({
     const q = message.question;
     if (q.state === 'open') return null;
     return <div className="question-history" data-message-id={message.id}><strong>{q.message}</strong>
-      <div>{q.answer || (q.state === 'declined' ? dict.ui.v034.questionSkipped : dict.ui.v034.questionCancelled)}</div></div>;
+      <div>{q.answer || (q.state === 'declined' ? dict.ui.v034.questionSkipped : dict.ui.v034.questionCancelled)}</div>
+      {message.questionFollowup && <QuestionFollowupStatus sessionId={message.sessionId} followup={message.questionFollowup} />}</div>;
   }
   if (message.role === 'user') {
     const body = (
@@ -590,6 +595,7 @@ const MessageTurn = React.memo(function MessageTurn({
           ) : null}
           <SentAnnotations items={message.annotations} />
           <Markdown text={message.content} attachments={message.attachments} />
+          {message.questionFollowup && <QuestionFollowupStatus sessionId={message.sessionId} followup={message.questionFollowup} />}
         </div>
       </div>
     );
@@ -699,6 +705,8 @@ const MessageTurn = React.memo(function MessageTurn({
   ) : null;
   const todos = message.todos ?? [];
   const doneTodos = todos.filter((t) => t.status === 'completed').length;
+  const unconfirmedTurn = isTurnUnconfirmed(message, { isLatestAssistant, sessionStatus });
+  const settledTurn = Boolean(message.turnSettledAt || message.turnStop);
   return (
     <div
       className={`cc-assistant ${message.isStreaming ? 'is-streaming' : 'is-settled'}`}
@@ -708,7 +716,12 @@ const MessageTurn = React.memo(function MessageTurn({
         <ThinkingBlock key={th.id} thought={th} defaultTrack={defaultThoughtTrack} />
       ))}
       {message.toolCalls && message.toolCalls.length > 0 && (
-        <ToolActivityStream tools={message.toolCalls} onInspectDiff={onInspectDiff} />
+        <ToolActivityStream
+          tools={message.toolCalls}
+          onInspectDiff={onInspectDiff}
+          settled={settledTurn}
+          unconfirmed={unconfirmedTurn}
+        />
       )}
       {todos.length > 0 && (
         <div className="cc-todos" data-testid={`inline-todos-${message.id}`}>
@@ -749,8 +762,14 @@ const MessageTurn = React.memo(function MessageTurn({
       {card && (streamCompat ? (
         <div className="stream-interrupted-banner is-card" data-testid={`stream-interrupted-${message.id}`}>{card}</div>
       ) : card)}
-      {!message.isStreaming && !message.toolCalls?.length && (
-        <TurnOutcomeBar message={message} turnStartedAt={turnStartedAt} onInspectDiff={onInspectDiff} />
+      {!message.isStreaming && (!message.toolCalls?.length || unconfirmedTurn) && (
+        <TurnOutcomeBar
+          message={message}
+          turnStartedAt={turnStartedAt}
+          isLatestAssistant={isLatestAssistant}
+          sessionStatus={sessionStatus}
+          onInspectDiff={onInspectDiff}
+        />
       )}
       {/* v0.3.2：含工具调用的回合已结算、存在失败/被拦截工具却没有 turnStop 时，底部给出明确的结束状态，杜绝「看似卡死」。 */}
       {!card && (
@@ -1240,8 +1259,10 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
       onFocusCapture={() => onFocusPane(session.sessionId)}
       data-testid={`session-pane-${session.sessionId}`}
     >
+      <span className="pane-activity-rail" aria-hidden="true"><span /></span>
       <header className="pane-header">
-        <span className={`status-dot is-${sessionApprovals.length ? 'waiting_approval' : session.status}`} />
+        {/* T2：单栏时顶部标签已显示同一状态点，窗格头不再重复 */}
+        {layoutMode !== 'single' && <span className={`status-dot is-${sessionApprovals.length ? 'waiting_approval' : session.status}`} />}
         <span className="pane-title truncate" title={session.title}>
           {session.title}
         </span>
@@ -1402,6 +1423,7 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
                   }
                   diagnosticHandlers={(stop) => diagnosticHandlers(stop, `${msg.id}:${stop.code}`)}
                   isLatestAssistant={msg.id === lastAssistantId}
+                  sessionStatus={session.status}
                   dismissedDiagnostics={dismissedDiagnostics}
                   suppressDiagnostic={supersededDiagnosticIds.has(msg.id)}
                   busy={paneBusy}
@@ -1508,7 +1530,8 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
         sendError={questionSendError?.id === questionSource.id ? questionSendError.message : undefined}
         submit={async reply => {
           if (nativeQuestion) {
-            await getDesktopBridge().answerQuestion({ sessionId: session.sessionId, messageId: nativeQuestion.id, ...reply });
+            // v2 主进程返回幂等回执；旧主进程返回 void，两者均兼容
+            return await getDesktopBridge().answerQuestion({ sessionId: session.sessionId, messageId: nativeQuestion.id, ...reply });
           } else {
             if (reply.action === 'accept') {
               setQuestionSendError(undefined);
@@ -1536,10 +1559,17 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
               }}>{dict.clearSessionApprovals}</button>
             )}
           </div>
-          <AccountQuotaFooter key={session.profileId} profileId={session.profileId} />
+          <AccountQuotaFooter
+            key={session.profileId}
+            profileId={session.profileId}
+            isIsolatedProfile={props.isIsolatedProfile}
+            connection={props.connection}
+          />
         </div>
       </div> : <Composer
         session={session}
+        isIsolatedProfile={props.isIsolatedProfile}
+        connection={props.connection}
         availableSessions={availableSessions}
         availableModels={props.availableModels}
         modelListSource={props.modelListSource}
@@ -1548,7 +1578,6 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
         sessionTelemetry={telemetryDashboard.activeSessions[session.sessionId]}
         treeCost={computeConversationTreeTotalCost(session.sessionId, conversationTree, telemetryDashboard)}
         externalReviewerTelemetry={telemetryDashboard.externalReviewer}
-        guardActive={Boolean(props.guardActiveBySession?.[session.sessionId])}
         autoFocus={isFocused && sessionApprovals.length === 0}
         quotes={sessionQuotes}
         notations={sessionNotations}

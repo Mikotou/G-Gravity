@@ -18,6 +18,42 @@ export type TelemetryPricingSource =
 
 export type TokenHeatmapRange = '24h' | '7d' | '30d';
 
+export type HeatLevel = 0 | 1 | 2 | 3 | 4;
+
+export const HEAT_LEVEL_THRESHOLDS = [0.12, 0.36, 0.67] as const;
+
+/**
+ * 统一双轴热力强度算法（单一共享来源，覆盖 24h / 7d / 30d 与主/外部复核/外部翻译三套看板）：
+ * 同时参考当前格的绝对用量 A（对数饱和至 B）、同窗口总量相对份额 R、以及窗口峰值占比 x/P，
+ * 价格与费用不参与着色。
+ */
+export function computeHeatLevel(
+  x: number,
+  windowTotal: number,
+  windowPeak: number,
+  bucketCount: 24 | 7 | 30
+): HeatLevel {
+  if (
+    !Number.isFinite(x) ||
+    !Number.isFinite(windowTotal) ||
+    !Number.isFinite(windowPeak) ||
+    x <= 0 ||
+    windowTotal <= 0 ||
+    windowPeak <= 0
+  ) {
+    return 0;
+  }
+  const benchmark = bucketCount === 24 ? 250_000 : 2_500_000;
+  const abs = Math.min(1, Math.log1p(x / 1000) / Math.log1p(benchmark / 1000));
+  const rel = Math.log1p((bucketCount * x) / windowTotal) / Math.log1p(bucketCount);
+  const peakRatio = Math.min(1, x / windowPeak);
+  const z = abs * (0.4 + 0.25 * rel + 0.35 * peakRatio);
+  if (z < HEAT_LEVEL_THRESHOLDS[0]) return 1;
+  if (z < HEAT_LEVEL_THRESHOLDS[1]) return 2;
+  if (z < HEAT_LEVEL_THRESHOLDS[2]) return 3;
+  return 4;
+}
+
 export type CostTimeScope = 'session' | 'today' | '7d' | '30d';
 
 export const COST_DISCLAIMER = {
@@ -392,12 +428,16 @@ export interface HourlyTokenBarBucket extends FourDimTokenCounts {
   hourKey: string;
   /** 展示标签如 "14:00" */
   hourLabel: string;
+  /** 该小时起点的本地 ISO-8601 时间戳（含数值 UTC 偏移如 +08:00 / -04:00 / +05:45，供精确区分 DST 回拨） */
+  startIso?: string;
   totalTokens: number;
   costUsd: number;
+  /** 由统一双轴公式计算的热力等级（0–4）；旧快照缺省时由渲染层按 24h 窗口回退计算 */
+  intensity?: HeatLevel;
 }
 
 /**
- * 2) `7d` 视图：7 天 × 24 小时矩阵热力格（168 个单元格）
+ * 2) `7d` 历史兼容视图：7 天 × 24 小时矩阵热力格（168 个单元格，v0.3.5 起保留一版兼容，新 UI 改消费 `daily7d`）
  */
 export interface DayHourHeatmapCell {
   /** 日期 YYYY-MM-DD */
@@ -406,11 +446,11 @@ export interface DayHourHeatmapCell {
   hour: number;
   totalTokens: number;
   costUsd: number;
-  intensity: 0 | 1 | 2 | 3 | 4;
+  intensity: HeatLevel;
 }
 
 /**
- * 3) `30d` 视图：过去 30 天按天日历热力格（30 个单元格）
+ * 3) 按天热力格（驱动 `daily7d` 7 天按日热力卡与 `calendar30d` 30 天 Codex 周行日历）
  */
 export interface DailyCalendarHeatmapCell extends FourDimTokenCounts {
   /** 日期 YYYY-MM-DD */
@@ -418,7 +458,7 @@ export interface DailyCalendarHeatmapCell extends FourDimTokenCounts {
   totalTokens: number;
   costUsd: number;
   sessionCount: number;
-  intensity: 0 | 1 | 2 | 3 | 4;
+  intensity: HeatLevel;
 }
 
 /**
@@ -507,7 +547,9 @@ export interface ExternalReviewerTelemetrySnapshot {
   bySession: Record<string, ExternalReviewerSessionSummary>;
   /** 24h 按小时柱状序列（长度 24） */
   hourly24h: HourlyTokenBarBucket[];
-  /** 7d 7×24 天×小时热力矩阵（长度 168） */
+  /** 7d 按自然日热力序列（长度 7，按 7d 窗口独立计算强度；旧快照可缺省） */
+  daily7d?: DailyCalendarHeatmapCell[];
+  /** 7d 7×24 天×小时热力矩阵（长度 168，v0.3.5 保留一版向后兼容） */
   matrix7d: DayHourHeatmapCell[];
   /** 30d 按日历天热力序列（长度 30） */
   calendar30d: DailyCalendarHeatmapCell[];
@@ -578,7 +620,9 @@ export interface ExternalTranslatorTelemetrySnapshot {
   bySession: Record<string, ExternalTranslatorSessionSummary>;
   /** 24h 按小时柱状序列（长度 24） */
   hourly24h: HourlyTokenBarBucket[];
-  /** 7d 7×24 天×小时热力矩阵（长度 168） */
+  /** 7d 按自然日热力序列（长度 7，按 7d 窗口独立计算强度；旧快照可缺省） */
+  daily7d?: DailyCalendarHeatmapCell[];
+  /** 7d 7×24 天×小时热力矩阵（长度 168，v0.3.5 保留一版向后兼容） */
   matrix7d: DayHourHeatmapCell[];
   /** 30d 按日历天热力序列（长度 30） */
   calendar30d: DailyCalendarHeatmapCell[];
@@ -601,7 +645,9 @@ export interface TelemetryDashboardSnapshot {
   activeSessions: Record<string, SessionContextTelemetry>;
   /** 24h 按小时柱状序列（长度 24） */
   hourly24h: HourlyTokenBarBucket[];
-  /** 7d 7×24 天×小时热力矩阵（长度 168） */
+  /** 7d 按自然日热力序列（长度 7，按 7d 窗口独立计算强度；旧快照可缺省） */
+  daily7d?: DailyCalendarHeatmapCell[];
+  /** 7d 7×24 天×小时热力矩阵（长度 168，v0.3.5 保留一版向后兼容） */
   matrix7d: DayHourHeatmapCell[];
   /** 30d 按日历天热力序列（长度 30） */
   calendar30d: DailyCalendarHeatmapCell[];

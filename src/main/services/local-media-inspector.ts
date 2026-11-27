@@ -1,6 +1,6 @@
 import { lstatSync, realpathSync, statSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   extractTargetBaseName, isPlausibleLocalFileCandidate, isSupportedPreviewImageExt,
@@ -8,9 +8,9 @@ import {
   MAX_MESSAGE_ATTACHMENTS_TOTAL_BYTES, type InspectedLocalTarget, type InspectLocalTargetsInput,
   type InspectLocalTargetsResult,
 } from '../../shared/media-contract';
-import { within } from '../workspace/workspace-files';
 import {
   isPrivateStatePath, isUnsafeLocalFile, isUnsafeLocalPath, openLocalFile, readPrefix,
+  localPathMember, normalizeDarwinSystemAlias, sameLocalPath,
 } from '../workspace/local-path-safety';
 import { EXECUTABLE_OR_SCRIPT_EXT_RE } from '../../shared/media-contract';
 
@@ -69,44 +69,50 @@ function candidates(path: string, cwd: string | undefined, home: string, scopes:
 }
 
 function expectedArtifactRoot({ root, anchor }: ArtifactScope): string {
-  return resolve(realpathSync(anchor), relative(anchor, root));
+  return resolve(realpathSync.native(anchor), relative(anchor, root));
 }
 
 /** Verify the root from its trusted anchor without accepting a redirected brain or session directory. */
 function artifactMember(scope: ArtifactScope, target: string): string | undefined {
   const expected = expectedArtifactRoot(scope);
-  const actual = realpathSync(scope.root);
-  if (relative(expected, actual) === '' && within(actual, target)) return relative(actual, target);
-
-  // APFS can preserve the caller's spelling on a case-insensitive volume. Compare identity
-  // as well as spelling so a case-sensitive volume cannot substitute a different directory.
-  if (process.platform !== 'darwin' && process.platform !== 'win32') return;
-  if (expected.toLowerCase() !== actual.toLowerCase()) return;
-  let root = realpathSync(scope.anchor);
+  const actual = realpathSync.native(scope.root);
+  if (!sameLocalPath(expected, actual)) return;
+  let root = realpathSync.native(scope.anchor);
   for (const part of relative(scope.anchor, scope.root).split(sep)) {
     root = join(root, part);
     if (lstatSync(root).isSymbolicLink()) return;
   }
-  const parts = target.split(sep);
-  const prefix = parts.slice(0, actual.split(sep).length).join(sep);
-  if (prefix.toLowerCase() !== actual.toLowerCase()) return;
-  const expectedStat = statSync(root, { bigint: true });
-  const targetStat = statSync(prefix, { bigint: true });
-  if (expectedStat.dev === targetStat.dev && expectedStat.ino === targetStat.ino) return parts.slice(actual.split(sep).length).join(sep);
+  return localPathMember(actual, target);
 }
 
 function canonicalWorkspace(cwd?: string): string | undefined {
   if (!cwd || !isAbsolute(cwd) || isUnsafeLocalPath(cwd)) return;
   try {
-    const root = realpathSync(cwd);
+    const root = realpathSync.native(cwd);
     if (!isUnsafeLocalPath(root)) return root;
   } catch { /* An explicit target can still exist when its workspace has gone away. */ }
+}
+
+/** Check whether a candidate path targets inside the workspace across APFS case/NFD, /tmp aliases, and symlinked cwd. */
+function targetsWorkspace(candidatePath: string, cwd?: string, workspaceRoot?: string): boolean {
+  if (cwd && isAbsolute(cwd) && localPathMember(cwd, candidatePath) !== undefined) return true;
+  if (workspaceRoot && localPathMember(workspaceRoot, candidatePath) !== undefined) return true;
+  if (!cwd || !workspaceRoot || !isAbsolute(cwd)) return false;
+  const base = normalizeDarwinSystemAlias(resolve(cwd));
+  const target = normalizeDarwinSystemAlias(resolve(candidatePath));
+  const volume = parse(target).root;
+  const depth = base.slice(parse(base).root.length).split(sep).filter(Boolean).length;
+  const parts = target.slice(volume.length).split(sep).filter(Boolean);
+  if (parts.length < depth) return false;
+  try { return sameLocalPath(workspaceRoot, realpathSync.native(join(volume, ...parts.slice(0, depth)))); }
+  catch { return false; }
 }
 
 type LocalResolution = { kind: 'found'; path: string; candidatePath: string; workspaceRoot?: string } | { kind: 'missing'; path?: string } | { kind: 'forbidden' };
 export function resolveLocalTarget(raw: string, input: { cwd?: string; sessionId?: string }, context: LocalTargetContext, restrictWorkspaceLinks = false): LocalResolution {
   const home = context.homeDir || homedir();
   const { cwd, sessionId } = input;
+  const inProfileStore = (path: string) => context.appDataRoot && localPathMember(context.appDataRoot, path) !== undefined;
   const workspaceRoot = restrictWorkspaceLinks ? canonicalWorkspace(cwd) : undefined;
   const stores = context.appDataRoot ? [context.appDataRoot] : ['antigravity-cli', 'antigravity'].map(name => join(home, '.gemini', name));
   const scopes = sessionId && /^[a-z0-9_-]{1,100}$/i.test(sessionId)
@@ -116,16 +122,16 @@ export function resolveLocalTarget(raw: string, input: { cwd?: string; sessionId
   for (const candidate of paths) {
     if (isUnsafeLocalFile(candidate.path)) return { kind: 'forbidden' };
     let artifact = candidate.artifact;
-    if (!artifact && (isPrivateStatePath(candidate.path) || (context.appDataRoot && within(context.appDataRoot, candidate.path)))) {
+    if (!artifact && (isPrivateStatePath(candidate.path) || inProfileStore(candidate.path))) {
       // An explicit file URL can use either the home-directory spelling or its canonical /private path.
       artifact = scopes.find(scope => {
-        if (within(scope.root, candidate.path)) return true;
-        try { return within(expectedArtifactRoot(scope), candidate.path); } catch { return false; }
+        if (localPathMember(scope.root, candidate.path) !== undefined) return true;
+        try { return localPathMember(expectedArtifactRoot(scope), candidate.path) !== undefined; } catch { return false; }
       });
       if (!artifact) return { kind: 'forbidden' };
     }
     let real: string;
-    try { real = realpathSync(candidate.path); } catch (error) {
+    try { real = realpathSync.native(candidate.path); } catch (error) {
       if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code || '')) return { kind: 'forbidden' };
       continue;
     }
@@ -135,9 +141,9 @@ export function resolveLocalTarget(raw: string, input: { cwd?: string; sessionId
       if (member === undefined || isPrivateStatePath(member) ||
           /(?:^|[\\/])\.system_generated(?:[\\/]|$)|\.pb$/i.test(member)) return { kind: 'forbidden' };
     } else {
-      if (isPrivateStatePath(real) || (context.appDataRoot && within(context.appDataRoot, real))) return { kind: 'forbidden' };
-      if (restrictWorkspaceLinks && (candidate.relativeToWorkspace || (cwd && isAbsolute(cwd) && within(cwd, candidate.path)) ||
-          (workspaceRoot && within(workspaceRoot, candidate.path))) && (!workspaceRoot || !within(workspaceRoot, real))) return { kind: 'forbidden' };
+      if (isPrivateStatePath(real) || inProfileStore(real)) return { kind: 'forbidden' };
+      if (restrictWorkspaceLinks && (candidate.relativeToWorkspace || targetsWorkspace(candidate.path, cwd, workspaceRoot)) &&
+          (!workspaceRoot || localPathMember(workspaceRoot, real) === undefined)) return { kind: 'forbidden' };
     }
     return { kind: 'found', path: real, candidatePath: candidate.path, workspaceRoot };
   }
@@ -210,7 +216,8 @@ function cachePreview(key: string, data: string): void {
 }
 
 function parentHint(parent: string, workspaceRoot?: string): string {
-  return workspaceRoot && within(workspaceRoot, parent) ? relative(workspaceRoot, parent) || '.' : basename(parent);
+  const member = workspaceRoot ? localPathMember(workspaceRoot, parent) : undefined;
+  return member !== undefined ? member || '.' : basename(parent);
 }
 
 async function inspectOne(rawTarget: string, input: InspectLocalTargetsInput, context: LocalTargetContext, previewBudget: number): Promise<InspectedLocalTarget> {
@@ -264,7 +271,7 @@ async function inspectOne(rawTarget: string, input: InspectLocalTargetsInput, co
         const pathStat = lstatSync(real);
         if (current.ctimeMs !== after.ctimeMs || current.size !== after.size || current.mtimeMs !== after.mtimeMs ||
             stat.dev !== pathStat.dev || stat.ino !== pathStat.ino || stat.ctimeMs !== pathStat.ctimeMs ||
-            relative(real, realpathSync(target.candidatePath)) !== '') return missing;
+            relative(real, realpathSync.native(target.candidatePath)) !== '') return missing;
         cachePreview(key, url);
         item.previewDataUrl = url;
       }

@@ -6,6 +6,7 @@ import type {
   SwarmWorkerStatus,
 } from '../../shared/swarm-contract';
 import type { ClientStore } from '../storage/client-store';
+import { SwarmPendingWrites } from './swarm-pending-writes';
 import { SwarmArchive } from './swarm-archive';
 import type { SwarmSessionLog } from './swarm-session-log';
 import { swarmMessageMentions } from '../../shared/swarm-contract';
@@ -95,51 +96,71 @@ interface TrackedCall {
 export class SwarmTracker extends EventEmitter {
   private archive: SwarmArchive;
   private pending = new Map<string, TrackedCall>();
+  private connectionSessions = new Set<string>();
+  private recovering = new Set<string>();
   private replays = new Map<string, Map<string, TrackedCall>>();
-  private unsaved = new Map<string, Array<() => void>>();
-  private storageWarnings = new Set<string>();
+  private unsaved = new SwarmPendingWrites(id => {
+    if (this.listenerCount('updated')) this.emit('updated', this.unavailable(id));
+  }, id => {
+    if (!this.listenerCount('updated')) return;
+    let state: SwarmTopologyState;
+    try { state = this.archive.read(id, log => log.state()); } catch { state = this.unavailable(id); }
+    if (this.unsaved.has(id)) state.historyUnavailable = true;
+    state.refreshHistoryWorkers = true;
+    this.emit('updated', state);
+  });
   constructor(private store?: ClientStore) {
     super();
     this.archive = new SwarmArchive(store);
   }
   setProfile(profile?: string, owned?: ReadonlySet<string>): void {
-    if (this.unsaved.size && this.flush().length) throw new Error('Swarm 仍有未保存记录，请重试');
+    if (this.flush().length) throw new Error('Swarm 仍有未保存记录，请重试');
     this.clear();
     this.archive = new SwarmArchive(this.store, profile, owned);
   }
   clear(): string[] {
-    if (this.unsaved.size) {
+    if (this.unsaved.ids().length) {
       if (this.store) this.archive.close();
-      return [...this.unsaved.keys()];
+      return this.unsaved.ids();
     }
     this.pending.clear();
+    this.connectionSessions.clear();
     this.replays.clear();
-    this.storageWarnings.clear();
     this.archive.close();
     return [];
   }
   flush(): string[] {
-    for (const sessionId of this.unsaved.keys()) {
-      try { this.retryUnsaved(sessionId); } catch { this.reportStorageError(sessionId); }
-    }
-    return [...this.unsaved.keys()];
+    for (const id of this.unsaved.ids()) while (this.unsaved.drain(id)) { /* finish each FIFO batch before switching */ }
+    return this.unsaved.ids();
   }
   remove(sessionId: string): void {
     this.archive.remove(sessionId);
     this.dropPending(sessionId);
     this.replays.delete(sessionId);
-    this.unsaved.delete(sessionId);
-    this.storageWarnings.delete(sessionId);
+    this.unsaved.remove(sessionId);
+    this.connectionSessions.delete(sessionId);
   }
   private dropPending(sessionId: string): void {
     for (const key of this.pending.keys()) if (key.startsWith(sessionId + '\0')) this.pending.delete(key);
   }
   getState(sessionId: string, before?: SwarmHistoryCursor): SwarmTopologyState {
     try {
-      if (!this.storageWarnings.has(sessionId)) this.retryUnsaved(sessionId);
-      const state = this.archive.read(sessionId, (log) => log.state(before));
-      if (this.storageWarnings.has(sessionId)) state.historyUnavailable = true;
-      return state;
+      const read = () => this.archive.read(sessionId, log => log.state(before));
+      if (!this.unsaved.has(sessionId)) return read();
+      return this.archive.withoutLockWait(() => {
+        if (this.unsaved.drain(sessionId, true) && !this.recovering.has(sessionId)) {
+          this.recovering.add(sessionId);
+          const archive = this.archive;
+          setImmediate(() => {
+            this.recovering.delete(sessionId);
+            if (this.archive !== archive || !this.unsaved.has(sessionId)) return;
+            this.getState(sessionId);
+          }).unref();
+        }
+        const state = read();
+        if (this.unsaved.has(sessionId)) state.historyUnavailable = true;
+        return state;
+      });
     } catch {
       if (before) throw Error('暂时无法读取这一页 Swarm 记录');
       return this.unavailable(sessionId);
@@ -159,37 +180,15 @@ export class SwarmTracker extends EventEmitter {
       historyUnavailable: true,
     };
   }
-  private retryUnsaved(sessionId: string): void {
-    const unsaved = this.unsaved.get(sessionId);
-    if (!unsaved) return;
-    while (unsaved.length) {
-      unsaved[0]();
-      unsaved.shift();
-    }
-    this.unsaved.delete(sessionId);
-    this.storageWarnings.delete(sessionId);
-  }
-  private persist(sessionId: string, operation: () => void): void {
-    const queued = this.unsaved.get(sessionId);
-    if (queued) { queued.push(operation); return; }
-    try { operation(); } catch {
-      this.unsaved.set(sessionId, [operation]);
-      this.reportStorageError(sessionId);
-    }
-  }
-  private reportStorageError(sessionId: string): void {
-    this.storageWarnings.add(sessionId);
-    if (this.listenerCount('updated')) this.emit('updated', this.unavailable(sessionId));
-  }
   needsReplay(sessionId: string): boolean {
     try {
-      return this.storageWarnings.has(sessionId) || this.archive.read(sessionId, (log) => !log.checked());
+      return this.unsaved.has(sessionId) || this.archive.read(sessionId, (log) => !log.checked());
     } catch {
       return true;
     }
   }
   trackNew(sessionId: string): void {
-    this.persist(sessionId, () => this.archive.write(sessionId, log => log.markChecked()));
+    this.unsaved.persist(sessionId, () => this.archive.write(sessionId, log => log.markChecked()));
   }
   beginReplay(sessionId: string): void {
     this.replays.set(sessionId, new Map());
@@ -201,7 +200,8 @@ export class SwarmTracker extends EventEmitter {
     const calls = this.replays.get(sessionId);
     this.replays.delete(sessionId);
     if (!calls) return;
-    this.persist(sessionId, () => {
+    if (calls.size) this.connectionSessions.add(sessionId);
+    this.unsaved.persist(sessionId, () => {
       let changed = false;
       this.archive.write(sessionId, (log) => {
         log.markChecked();
@@ -211,7 +211,7 @@ export class SwarmTracker extends EventEmitter {
             changed = true;
           }
       });
-      if (changed) this.emit('updated', this.archive.read(sessionId, log => log.state()));
+      if (changed && !this.unsaved.draining(sessionId)) this.emit('updated', this.archive.read(sessionId, log => log.state()));
     });
   }
   private terminal(status?: string): boolean {
@@ -240,11 +240,12 @@ export class SwarmTracker extends EventEmitter {
       table.set(key, call);
       return;
     }
+    this.connectionSessions.add(sessionId);
     if (!this.terminal(call.status)) {
       table.set(key, call);
       const sender = firstText(input.sender, input.actor);
       if (sender)
-        this.persist(sessionId, () => {
+        this.unsaved.persist(sessionId, () => {
           this.update(sessionId, (log) => {
             if (log.seen(id)) return false;
             const worker = log.member(sender);
@@ -257,7 +258,7 @@ export class SwarmTracker extends EventEmitter {
         });
       return;
     }
-    this.persist(sessionId, () => this.update(sessionId, log => {
+    this.unsaved.persist(sessionId, () => this.update(sessionId, log => {
       if (log.seen(id)) return false;
       this.apply(log, id, call, false);
       return true;
@@ -268,7 +269,7 @@ export class SwarmTracker extends EventEmitter {
     const changed = this.archive.write(sessionId, log => {
       if (!edit(log)) return;
       log.touch(new Date().toISOString());
-      if (this.listenerCount('updated')) return [...log.changedWorkers.values()];
+      if (this.listenerCount('updated') && !this.unsaved.draining(sessionId)) return [...log.changedWorkers.values()];
     });
     if (changed) {
       const state = this.archive.read(sessionId, log => log.state());
@@ -278,8 +279,9 @@ export class SwarmTracker extends EventEmitter {
     }
   }
   markUnconfirmed(sessionId: string, zh = '连接已中断', en = 'Connection interrupted'): void {
+    this.connectionSessions.delete(sessionId);
     this.dropPending(sessionId);
-    this.persist(sessionId, () => {
+    this.unsaved.persist(sessionId, () => {
       this.update(sessionId, (log) => {
         const work = log.matching('status', 'working');
         for (const worker of work) {
@@ -306,15 +308,8 @@ export class SwarmTracker extends EventEmitter {
     });
   }
   disconnected(): void {
-    this.persist('', () => {
-      const ids = this.archive.read('', (log) =>
-        log.database
-          .prepare("SELECT DISTINCT sid FROM workers WHERE status='working'")
-          .all()
-          .map((row) => String(row.sid))
-      );
-      for (const id of ids) this.markUnconfirmed(id);
-    });
+    // Opening the archive already retires earlier connections. Only this connection can introduce new working members.
+    for (const id of [...this.connectionSessions]) this.markUnconfirmed(id);
     this.pending.clear();
   }
   private event(

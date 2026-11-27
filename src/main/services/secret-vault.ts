@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_APPROVAL_CONFIG } from '../../shared/approval-contract';
+import { DEFAULT_APPROVAL_CONFIG, MAX_APPROVAL_PATTERNS_PER_KIND } from '../../shared/approval-contract';
 import { compileSafePattern } from '../approval/shell-screening';
 import { alignedRiskCeiling, validateExternalEndpoint } from '../approval/external-reviewer';
 import type { ClientStore } from '../storage/client-store';
@@ -47,7 +47,7 @@ function sanitizeStoredApprovalConfig(raw: unknown, restoredApiKey?: string): Ap
     if (Array.isArray(rec[field])) {
       const valid: string[] = [];
       for (const item of rec[field] as unknown[]) {
-        if (typeof item !== 'string' || valid.length >= 50) continue;
+        if (typeof item !== 'string' || valid.length >= MAX_APPROVAL_PATTERNS_PER_KIND) continue;
         try { compileSafePattern(item); valid.push(item); } catch { /* 跳过损坏的旧正则，保留其余全部规则 */ }
       }
       base[field] = valid;

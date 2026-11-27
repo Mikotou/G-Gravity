@@ -13,7 +13,6 @@ export interface ComponentCopyStrings {
   aiReview: string;
   allTime: string;
   answerTheRequiredFields: string;
-  approvalCancelled: string;
   approved: string;
   archiveConversation: string;
   archived: string;
@@ -227,7 +226,6 @@ export const COPY_ZH: ComponentCopyStrings = {
   aiReview: "AI 代审",
   allTime: "累计",
   answerTheRequiredFields: "请回答所有必填问题",
-  approvalCancelled: "本次审批已取消",
   approved: "AI 放行",
   archiveConversation: "归档会话",
   archived: "已归档",
@@ -441,7 +439,6 @@ export const COPY_EN: ComponentCopyStrings = {
   aiReview: "AI review",
   allTime: "All-time",
   answerTheRequiredFields: "Answer the required fields",
-  approvalCancelled: "Approval cancelled",
   approved: "Approved",
   archiveConversation: "Archive conversation",
   archived: "Archived",

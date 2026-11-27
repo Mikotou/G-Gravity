@@ -25,6 +25,8 @@ export interface ToolCallCardProps {
   onInspectDiff?: (filePath: string) => void;
   /** 在探索分组内部渲染时使用更紧凑的样式 */
   nested?: boolean;
+  /** TA-1/TA-4：所属回合已收口或已判定为旧历史未确认时，停止残留 running/pending 工具的旋转指示器 */
+  settled?: boolean;
 }
 
 function firstLine(text?: string): string {
@@ -61,7 +63,7 @@ export function resolveToolIcon(canonical: string): LucideIcon {
  * Claude Code 风格工具行：类别图标 + 名称 + 目标，默认折叠；
  * 失败行红色高亮、运行中图标旋转，结果摘要在下方 ⎿ 行展示。
  */
-export function ToolCallCard({ tool, onInspectDiff, nested = false }: ToolCallCardProps): React.ReactElement {
+export function ToolCallCard({ tool, onInspectDiff, nested = false, settled = false }: ToolCallCardProps): React.ReactElement {
   const { dict } = useI18n();
   const [expanded, setExpanded] = useState<boolean>(false);
 
@@ -70,7 +72,7 @@ export function ToolCallCard({ tool, onInspectDiff, nested = false }: ToolCallCa
   const category = classifyTool(canonical);
   // v0.3.2：与主进程共用 isToolCallFailure —— failed、rejected 与 exit≠0 都视为失败。
   const failed = isToolCallFailure(tool);
-  const active = isToolActive(tool);
+  const active = !settled && isToolActive(tool);
   const Icon = active ? Loader2 : failed ? OctagonAlert : resolveToolIcon(canonical);
   const nonZeroExit = typeof tool.exitCode === 'number' && tool.exitCode !== 0 ? tool.exitCode : undefined;
   const duration = formatDuration(toolDurationMs(tool));

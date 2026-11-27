@@ -156,7 +156,7 @@ export async function withModelDeadline<T>(timeoutMs: number, label: string, par
   }
 }
 
-export async function readBoundedText(response: Response, maxBytes: number, signal?: AbortSignal): Promise<string> {
+async function readBoundedText(response: Response, maxBytes: number, signal?: AbortSignal): Promise<string> {
   if (!response.body) return '';
   signal?.throwIfAborted();
   const reader = response.body.getReader();

@@ -14,6 +14,7 @@ interface ExternalBaseBucket extends FourDimTokenCounts {
   errorCount: number;
   directCostUsd: number;
   hasDirectCost: boolean;
+  unattributedCostUsd: number;
   // Tokens belonging to calls without provider pricing. Legacy buckets did not separate them.
   estimatedTokens: FourDimTokenCounts;
   totalLatencyMs: number;
@@ -37,11 +38,13 @@ const safeNonNegInt = (v: unknown): number =>
 const safeNonNegFloat = (v: unknown): number =>
   typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
 
-function safeCounts(value?: Partial<Record<keyof FourDimTokenCounts, unknown>>): FourDimTokenCounts {
-  return {
+function safeCounts(value?: Partial<Record<keyof FourDimTokenCounts | 'totalTokens', unknown>>): FourDimTokenCounts {
+  const classified = {
     inputTokens: safeNonNegInt(value?.inputTokens), cachedInputTokens: safeNonNegInt(value?.cachedInputTokens),
     outputTokens: safeNonNegInt(value?.outputTokens), thinkingTokens: safeNonNegInt(value?.thinkingTokens),
   };
+  const remainder = safeNonNegInt(value?.totalTokens) - Object.values(classified).reduce((a, b) => a + b, 0);
+  return { ...classified, unclassifiedTokens: Math.max(safeNonNegInt(value?.unclassifiedTokens), remainder) };
 }
 
 function sanitizeBaseExternalBucket(raw: unknown): ExternalBaseBucket | null {
@@ -51,18 +54,18 @@ function sanitizeBaseExternalBucket(raw: unknown): ExternalBaseBucket | null {
   const estimate = r.estimatedTokens && typeof r.estimatedTokens === 'object'
     ? r.estimatedTokens as Partial<FourDimTokenCounts>
     : r.hasDirectCost ? {} : r;
+  const counts = safeCounts(r), directCostUsd = safeNonNegFloat(r.directCostUsd);
+  const unpriced = counts.unclassifiedTokens || !(counts.inputTokens || counts.cachedInputTokens || counts.outputTokens || counts.thinkingTokens);
   return {
     provider: r.provider,
     endpointHost: typeof r.endpointHost === 'string' && r.endpointHost.trim() ? r.endpointHost.trim() : r.provider,
     modelId: r.modelId.trim(),
-    inputTokens: safeNonNegInt(r.inputTokens),
-    cachedInputTokens: safeNonNegInt(r.cachedInputTokens),
-    outputTokens: safeNonNegInt(r.outputTokens),
-    thinkingTokens: safeNonNegInt(r.thinkingTokens),
+    ...counts,
     callCount: safeNonNegInt(r.callCount),
     errorCount: safeNonNegInt(r.errorCount),
-    directCostUsd: safeNonNegFloat(r.directCostUsd),
+    directCostUsd,
     hasDirectCost: Boolean(r.hasDirectCost),
+    unattributedCostUsd: r.unattributedCostUsd === undefined && unpriced ? directCostUsd : Math.min(directCostUsd, safeNonNegFloat(r.unattributedCostUsd)),
     estimatedTokens: safeCounts(estimate),
     totalLatencyMs: safeNonNegInt(r.totalLatencyMs),
   };
@@ -104,6 +107,7 @@ export class ExternalServiceLedger<K extends string> {
   private merge(target: Bucket<K>, src: Bucket<K>): Bucket<K> {
     return { ...target, ...add(target, src), ...this.counters(key => target[key] + src[key]),
       callCount: target.callCount + src.callCount, errorCount: target.errorCount + src.errorCount,
+      unattributedCostUsd: target.unattributedCostUsd + src.unattributedCostUsd,
       directCostUsd: target.directCostUsd + src.directCostUsd, hasDirectCost: target.hasDirectCost || src.hasDirectCost,
       estimatedTokens: add(target.estimatedTokens, src.estimatedTokens), totalLatencyMs: target.totalLatencyMs + src.totalLatencyMs };
   }
@@ -187,6 +191,8 @@ export class ExternalServiceLedger<K extends string> {
       errorCount: input.outcome === 'error' ? 1 : 0,
       directCostUsd: directCost ?? 0,
       hasDirectCost: directCost !== undefined,
+      unattributedCostUsd: counts.unclassifiedTokens || !(counts.inputTokens || counts.cachedInputTokens || counts.outputTokens || counts.thinkingTokens)
+        ? directCost ?? 0 : 0,
       estimatedTokens: directCost !== undefined ? zero() : counts,
       totalLatencyMs: safeNonNegInt(input.latencyMs),
     };
@@ -277,11 +283,10 @@ export class ExternalServiceLedger<K extends string> {
     if (!bucket.hasDirectCost) return computed;
     const estimated = calculateTokenCost(bucket.estimatedTokens, rate);
     const reportedWeight = computed.totalCostUsd - estimated.totalCostUsd;
-    const ratio = reportedWeight > 0 ? bucket.directCostUsd / reportedWeight : 0;
+    const ratio = reportedWeight > 0 ? (bucket.directCostUsd - bucket.unattributedCostUsd) / reportedWeight : 0;
     for (const field of ['inputCostUsd', 'cachedInputCostUsd', 'outputCostUsd', 'thinkingCostUsd'] as const) {
       computed[field] = estimated[field] + (computed[field] - estimated[field]) * ratio;
     }
-    if (reportedWeight <= 0) computed.inputCostUsd += bucket.directCostUsd;
     computed.totalCostUsd = estimated.totalCostUsd + bucket.directCostUsd;
     return computed;
   }
@@ -314,14 +319,16 @@ export class ExternalServiceLedger<K extends string> {
   }
 
   private calendar(calendar: ReturnType<typeof calendarFor>) {
-    const { hourly24h, calendar30d, matrix7d, costByRange, breakdownByRange } = summarizeCalendar(this.hours.values(), calendar, rows => this.breakdown(rows));
+    const { hourly24h, daily7d, calendar30d, matrix7d, costByRange, breakdownByRange } = summarizeCalendar(this.hours.values(), calendar, rows => this.breakdown(rows));
     const { total, items } = this.breakdown(this.cumulative.values());
     const providerCount = new Set(items.map(item => item.provider + ':' + item.endpointHost)).size;
     const tokens = (row: TokenCostSummary) => ({ inputTokens: row.inputTokens, cachedInputTokens: row.cachedInputTokens,
-      outputTokens: row.outputTokens, thinkingTokens: row.thinkingTokens, totalTokens: row.totalTokens, costUsd: row.totalCostUsd });
+      unclassifiedTokens: row.unclassifiedTokens, outputTokens: row.outputTokens, thinkingTokens: row.thinkingTokens, totalTokens: row.totalTokens, costUsd: row.totalCostUsd });
+    const day = (row: typeof calendar30d[number]) => ({ date: row.date, sessionCount: row.sessionCount, intensity: row.intensity, ...tokens(row) });
     return {
-      hourly24h: hourly24h.map(row => ({ hourKey: row.hourKey, hourLabel: row.hourLabel, ...tokens(row) })),
-      calendar30d: calendar30d.map(row => ({ date: row.date, sessionCount: row.sessionCount, intensity: row.intensity, ...tokens(row) })),
+      daily7d: daily7d.map(day),
+      hourly24h: hourly24h.map(row => ({ hourKey: row.hourKey, hourLabel: row.hourLabel, startIso: row.startIso, intensity: row.intensity, ...tokens(row) })),
+      calendar30d: calendar30d.map(day),
       matrix7d, costByRange, providerBreakdownByRange: breakdownByRange,
       cumulativeAllTime: { ...total, providerCount }, cumulativeProviders: items,
     };

@@ -1,7 +1,6 @@
-import { APPROVAL_POLICY_DEFAULTS, type ApproveForMeConfig } from '../../shared/approval-contract';
-import { compileSafePattern } from './shell-screening';
+import { APPROVAL_POLICY_DEFAULTS, validateApprovalPattern, MAX_APPROVAL_PATTERNS_PER_KIND, type ApproveForMeConfig } from '../../shared/approval-contract';
 import { alignedRiskCeiling, validateExternalEndpoint } from './external-reviewer';
-export function validatedApprovalConfig(current: ApproveForMeConfig, patch: Partial<ApproveForMeConfig>): ApproveForMeConfig {
+export function validatedApprovalConfig(current: ApproveForMeConfig, patch: Partial<ApproveForMeConfig>, restoring = false): ApproveForMeConfig {
     const next = {
       ...current,
       ...patch,
@@ -9,8 +8,19 @@ export function validatedApprovalConfig(current: ApproveForMeConfig, patch: Part
     };
     if (!['manual', 'rules-only', 'hybrid'].includes(next.mode)) throw new Error('无效的审批模式');
     for (const field of ['allowPatterns', 'askPatterns', 'denyPatterns'] as const) {
-      if (!Array.isArray(next[field]) || next[field].length > 50) throw new Error('每类审批规则最多 50 条');
-      next[field].forEach(compileSafePattern);
+      if (!Array.isArray(next[field]) || next[field].length > MAX_APPROVAL_PATTERNS_PER_KIND) throw new Error('每类审批规则最多 50 条');
+      const legacy = restoring ? next[field] : current[field];
+      const retained = [...legacy];
+      for (const pattern of next[field]) {
+        const result = validateApprovalPattern(pattern);
+        if (result.valid) continue;
+        const index = retained.indexOf(pattern);
+        if (index >= 0 && (result.code === 'empty' || result.code === 'whitespace_only') && pattern.length <= 200) {
+          retained.splice(index, 1);
+          continue;
+        }
+        throw new Error('审批正则无效或过于复杂：' + result.code);
+      }
     }
     if (!Number.isFinite(next.cacheTtlHours) || next.cacheTtlHours < 0 || next.cacheTtlHours > 168) {
       throw new Error('缓存有效期必须介于 0 至 168 小时');

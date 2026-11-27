@@ -84,7 +84,24 @@ describe('App → 真正 CoreService → ACP 桩子进程', () => {
     });
   });
 
-  it.each(['[question]', '[closed choice]'])('模型通过表单收到用户改过的选项 %s', async marker => {
+  it('原生表单未改写选项时直接单次 typed accept 原值原类型', async () => {
+    const { core, sessions } = await setup();
+    const sessionId = sessions[0].sessionId;
+    let run!: Promise<void>;
+    await act(async () => { run = core.sendPrompt({ sessionId, text: '[question]' }); });
+    const form = await screen.findByTestId('question-bar');
+    fireEvent.click(within(form).getByRole('radio', { name: '青绿' }));
+    fireEvent.click(within(form).getByTestId('question-next'));
+    fireEvent.change(within(form).getByRole('textbox'), { target: { value: '原生补充' } });
+    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: /^发送回答/ })); await run; });
+    expect(screen.queryByTestId('question-followup-preview')).toBeNull();
+    expect(screen.queryByTestId('question-bar')).toBeNull();
+    const saved = (await core.getSessionMessagePage(sessionId)).messages;
+    expect(saved.find(m => m.content.includes('"action":"accept"'))?.content).toContain('"color":"teal"');
+    expect(saved.find(m => m.content.includes('"action":"accept"'))?.content).toContain('"freeform_response":"原生补充"');
+  });
+
+  it.each(['[question]', '[closed choice]'])('模型通过表单收到用户改过的选项 %s（v2 预览确认后走跟进）', async marker => {
     const { core, sessions } = await setup();
     const sessionId = sessions[0].sessionId;
     const request = vi.spyOn(core.client, 'request');
@@ -92,18 +109,30 @@ describe('App → 真正 CoreService → ACP 桩子进程', () => {
     await act(async () => { run = core.sendPrompt({ sessionId, text: marker }); });
     const form = await screen.findByTestId('question-bar');
     expect(screen.queryByTestId('inline-request-view')).toBeNull();
-    fireEvent.click(within(form).getByRole('button', { name: '青绿' }));
+    // v0.3.5：选中后不再自动出现重复输入框，改为点击选项右上角铅笔就地编辑
+    fireEvent.click(within(form).getByRole('radio', { name: '青绿' }));
+    expect(within(form).queryByRole('textbox', { name: '修改选项 青绿' })).toBeNull();
+    fireEvent.click(within(form).getByRole('button', { name: '编辑选项「青绿」' }));
     fireEvent.change(within(form).getByRole('textbox', { name: '修改选项 青绿' }), { target: { value: '海玻璃绿' } });
-    await act(async () => { fireEvent.click(within(form).getByRole('button', { name: '发送回答' })); await run; });
+    // v0.3.5 原生 v2：改写闭集 enum 选项先弹出逐题汇总预览，经用户二次确认后 1 次 decline + 1 条可见跟进消息
+    fireEvent.click(within(form).getByRole('button', { name: /^发送回答/ }));
+    const preview = await within(form).findByTestId('question-followup-preview');
+    expect(preview.textContent).toContain('海玻璃绿');
+    await act(async () => {
+      fireEvent.click(within(form).getByTestId('question-followup-confirm'));
+      await run;
+    });
     expect(screen.queryByTestId('question-bar')).toBeNull();
+    await waitFor(async () => {
+      const saved = (await core.getSessionMessagePage(sessionId)).messages;
+      expect(saved.some(m => m.role === 'assistant' && m.content.includes('"action":"decline"'))).toBe(true);
+      expect(saved.some(m => m.role === 'user' && m.content.includes('海玻璃绿'))).toBe(true);
+    });
     const saved = (await core.getSessionMessagePage(sessionId)).messages;
     expect(saved.find(m => m.question)?.question).toMatchObject({ state: 'answered', answer: expect.stringContaining('海玻璃绿') });
-    if (marker === '[question]') {
-      expect(saved.find(m => m.content.includes('"action":"accept"'))?.content).toContain('"freeform_response":"颜色 · 海玻璃绿"');
-    } else {
-      expect(saved.some(m => m.role === 'assistant' && m.content.includes('"action":"decline"'))).toBe(true);
-      expect(request.mock.calls.filter(([method]) => method === 'session/prompt').at(-1)?.[1]).toMatchObject({ prompt: expect.arrayContaining([{ type: 'text', text: '海玻璃绿' }]) });
-    }
+    expect(request.mock.calls.filter(([method]) => method === 'session/prompt').at(-1)?.[1]).toMatchObject({
+      prompt: expect.arrayContaining([{ type: 'text', text: expect.stringContaining('海玻璃绿') }]),
+    });
   });
 
   it('只在模型消息中组合批注，原对话和修改后的分支都呈现干净的原文与评论', async () => {

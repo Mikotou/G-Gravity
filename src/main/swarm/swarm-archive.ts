@@ -33,6 +33,16 @@ const schema = `
 `;
 export class SwarmArchive {
   private database?: DatabaseSync;
+  private busyTimeout = 3000;
+  withoutLockWait<T>(operation: () => T): T {
+    const previous = this.busyTimeout;
+    this.busyTimeout = 0;
+    try { this.database?.exec('PRAGMA busy_timeout=0'); return operation(); }
+    finally {
+      this.busyTimeout = previous;
+      this.database?.exec('PRAGMA busy_timeout=' + previous);
+    }
+  }
   private readonly file?: string;
   constructor(
     private store?: ClientStore,
@@ -53,7 +63,7 @@ export class SwarmArchive {
     if (!this.database) {
       const db = new DatabaseSync(this.file || ':memory:');
       try {
-        db.exec('PRAGMA busy_timeout=3000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON');
+        db.exec('PRAGMA busy_timeout=' + this.busyTimeout + '; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON');
         db.exec('BEGIN IMMEDIATE');
         try {
           db.exec(schema);

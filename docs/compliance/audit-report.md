@@ -1,8 +1,8 @@
-# Gravity (v0.3.4) — Google ToS 与账号安全合规终审报告
+# Gravity (v0.3.5) — Google ToS 与账号安全合规终审报告
 
 - **审计结论**：`COMPLIANCE_PASS`（零阻断项通过）
-- **最新终审版本**：`g-gravity@0.3.4`（在 v0.2.0 / v0.3.0 / v0.3.2 / v0.3.3 历史基线上完成三项防封号 P0 加固、第三方 API Key 零明文投影 `D4`、更新包 SHA-256 校验、Swarm 独立 Worker 线程、CSS/前端全量无障碍与双端合规终审，详见证章六）
-- **最新审计时间**：2026-11-26
+- **最新终审版本**：`g-gravity@0.3.5`（在 v0.2.0–v0.3.4 历史基线上完成自定义 Orchestrator 项合规放弃裁定、128 KiB 只读 `implementation_plan.md` 零写入边界、`AP-1`/`PL-1`/`AQ-1` 跨端凭据与限流加固、双轴 OKLCH 热力图与 0 非合成动效重构、双 Neon 独立攻防签收，详见证章七）
+- **最新审计时间**：2026-11-27
 - **历史基线记录**：原 Phase 2 `gravity@0.2.0` 全量逐行实审记录（2026-11-17）及 `v0.3.3` 终审记录完整保留于下文章节一至五。
 
 ---
@@ -202,3 +202,40 @@
 - 离线打包 E2E + 视觉走查 `tests/v034-offline-e2e-and-screenshots.cjs`：**PASS**（Windows `win-unpacked\Gravity.exe` + macOS `mac-inset` 2x DPI + 4 主题 `U-04` 7d/30d，17/17 截图全部逐张人工检视通过，0 `pageerrors`）
 - Windows 双目标打包冒烟 `npm run test:desktop`：**PASS**（`release\win-unpacked\Gravity.exe` 与便携版 `release\Gravity.exe` 均 100% 通过）
 - 低频在线官方实机冒烟 `tests/v034-online-lowfreq-smoke.cjs`：**PASS**（实连原版 `agy.EXE v1.5.18`，4 次出站请求最小间距 `15,402ms ≥ 15s`、60s 滑窗 `4/4`、并发峰值 `1/1`、`activeProfileId: "default"`、退出后 `QA-02` 核验 14 个观测后代进程 **0 孤儿残留**）
+
+---
+
+## 七、`v0.3.5` 合规终审裁定、只读产物边界与跨端加固（2026-11-27）
+
+- **终审结论**：**`COMPLIANCE_PASS`（Windows + macOS 双端零阻断项通过，双端 4 轮 Neon QA 独立攻防、6 主题 1.5x/2x Retina 实机视觉验收与双端打包冒烟全绿）**
+- **变更范围**：共享契约层 `src/shared/`（0 循环依赖）、主进程 `src/main/`（107 个 TS 文件、297 条内部静态边、0 循环依赖、0 `acp/ → services/` 反向边、最大单文件 `turn-stream.ts` 646 LOC、`core-service.ts` 372 LOC、`index.ts` 137 LOC、81/81 IPC 通道 1:1 对齐）、渲染层 `src/renderer/`（CSS 源码 ≤ 216 KiB / 产物 209.46 KiB、0 空 `var()`、0 死类、0 跨文件重复选择器、0 非合成属性动画、6 套预设与自定义主题 100% WCAG 2.1 AA）及全量自动化与视觉 E2E 套件（**0 改动任何官方 Antigravity 内置插件**）。
+
+### 7.1 `v0.3.5` 新增与收紧的合规防护项
+
+1. **自定义 Orchestrator Planner / Executor 设置项 — 正式判定：超规放弃（PASS）**
+   - 实测本机 `agy 1.5.18`：`agy acp --help` 不接受 `--settings` 亦不暴露 planner/executor 参数，ACP `session/new` `configOptions` 仅公开 `model`、`mode`、`thought_level`，官方仅在交互式 TUI `/model` 中持久化至 `~/.gemini/antigravity-cli/settings.json`。
+   - 坚守红线 #2（`~/.gemini` 严格 0 字节写入）、红线 #4（`validateAgyArgs()` 显式拒绝 `--settings` 与 `--settings=...`）及红线 #8（严禁覆写 `agy` 内部配置），在默认与隔离 Profile 设置中均不暴露该项配置；全仓静态扫描 `plannerModel` / `executorModel` / `plannerEffort` / `executorEffort` = **0 命中**。
+2. **受控只读 `implementation_plan.md` 产物边界（`SESSION_GET_PLAN_ARTIFACT` / `EVENT_PLAN_ARTIFACT_CHANGED`）— PASS**
+   - `src/main/session/plan-artifact-reader.ts` 严格校验当前 Profile 所属当前会话的 `brain/<sessionId>/implementation_plan.md` 或该会话明确引用的工作区内文件，执行 `lstat`（拦截软链与硬链 `nlink > 1`）+ `realpath` + TOCTOU 文件身份比对 + `isForbiddenCredentialOrStatePath()` 凭据黑名单 + Windows ADS / 保留设备名 / UNC 拦截；
+   - 有界流式读取至 4 MiB 校验严格 UTF-8（拦截二进制 NUL），预览超过 131,072 字节（128 KiB）按完整 UTF-8 字符边界安全截断并返回 `truncated: true`，超过 4 MiB 拒绝；前端 `PlanArtifactPanel.tsx` 0 `<img>` 渲染、0 外链资源请求；仅打开计划本体时携带 `planArtifactOwner` 复核，文档内嵌外链与工作区文件走常规受控 `openExternalTarget`（维持 `CORE-04` 危险扩展名降级）；对 `~/.gemini` 保持严格 **0 字节写入**。
+3. **跨端凭据、插件 CLI 与限流加固（`AP-1`, `PL-1`, `AQ-1`, `D-07`, `B01`）— PASS**
+   - **`AP-1`**：凡携带 API Key（或 `hasApiKey`）的外部复核与外部翻译模型发现/连通性测试，禁止输入防抖自动发起，统一显式点击触发并展示规范化目标 origin；仅无鉴权本机 Ollama `http://127.0.0.1` 保留自动发现。
+   - **`PL-1`**：移除 `PluginsPanel` 切语言（`dict`）与被动 `cwd` 变更触发的静默 CLI 刷新；隔离 Profile 明确标注 CLI 作用域并阻止跨号修改默认 CLI 配置。
+   - **`AQ-1` & `D-07`**：订阅 `EVENT_CONNECTION_UPDATED` 冷却窗口，在 `429`（≥60s）/ `403`（≥300s）冷却期自动暂停全部额度探测并禁用手动刷新钮配合每秒动态倒计时；主进程仅在冷却过期后手动刷新真正成功返回有效数据时才重新解锁后台自动轮询；`preload.js` 与 `CoreService.getAccountQuota` 省参统一为 `manual = false`。
+   - **`B01`**：隐藏标题会话 `session/new` 超时后迟到成功由同代际可靠关闭一次并在收到关闭确认后释槽，严守 4 路并发硬上限。
+4. **十大防封号红线终审结论**：红线 1–10 全部 **PASS**；真机运行全套后端与攻防测试前后核对用户 `antigravity-cli/settings.json` SHA-256 逐字节一致，且在合成 `~/.gemini` 目录中验证逐文件 SHA-256 **0 字节写入、0 文件增删**。
+
+### 7.2 `v0.3.5` 自动化、双 Neon 攻防与真机实测证据
+
+- `tests/security-baseline.test.ts`：**14/14 PASS**（含 81/81 IPC 1:1 对齐、`K1`、`U-01`、`D4`）
+- `tests/privacy-guard.test.ts`：**3/3 PASS**（零个人路径/机器信息/内网 IP/测试截图入库）
+- `tests/v035-backend-*.test.ts` + `tests/v035-qa-backend-adversarial.test.ts`：**74/74（Win: 73 passed | 1 macOS-only skipped；macOS: 全量激活 PASS）**（107 文件 0 环 0 `acp→services`、双轴热力图黄金样本/DST/增量、原生提问 v2 幂等与跟进恢复、Plan 重放/LRU/只读产物攻防、Swarm 真实持锁 32+8 恢复、Title 迟到槽、Updater Win/macOS x64+ARM64 架构分流、LocalTranslator 取消回收、macOS `/tmp`·APFS 大小写·NFC/NFD·`realpathSync.native` 路径边界）
+- `tests/v035-heatmap-ramp.test.ts` & `tests/v035-motion-guard.test.ts` & `tests/v034-css-and-bundle-guards.test.ts` & `tests/v034-theme-contrast.test.ts`：**26/26 PASS**（6 套预设 + 200 随机自定义主题 WCAG AA、0 非合成动画、0 空 `var()`、0 死类、0 跨文件重复选择器、构建 CSS 209.46 KiB）
+- `tests/v035-frontend-core.test.tsx` & `tests/v035-frontend-plugins-and-ux.test.tsx` & `tests/v035-qa-frontend-adversarial.test.tsx`：**58/58 PASS**（热力图、提问卡 v2、Plan 检视器、UI 精简与全部 P1/P2/键盘无障碍回归）
+- Windows 全量单元测试 `GRAVITY_REQUIRE_DIST=1 npx vitest run --maxWorkers 4`：**90 passed | 1 skipped（1,236 passed | 10 skipped / 1,246，0 failed）**（10 项跳过均为 9 项 macOS 专属测试 + 1 项需手工授权的官方在线冒烟）
+- `npm run test:layout`：**PASS**（`gv-tab-breathe` 0/0/100、`gv-activity-flow` 0/0/159、`prefers-reduced-motion` 0 流光）
+- `node tests/v035-visual-e2e.cjs`：**PASS**（M1–M6 覆盖全部 6 套真实预设主题、4 档检视器宽度、提问卡 v2、Plan 6 态与只读文档、设置 8 导航与 C1 徽章、MO-01 流式上浮菜单，42 张 PNG 逐张审图通过，`externalRequests: 0`, `pageErrors: 0`）
+- Windows 打包冒烟 `npm run dist:exe` & `npm run test:desktop`：**PASS**（`release/win-unpacked/Gravity.exe` 与便携版 `release/Gravity.exe` 双形态实机验收通过）
+- macOS Apple Silicon (`arm64`, APFS, Electron 35.7.5) 真机双 Neon QA 与 `npm run dist:mac`：**PASS**
+  - **后端 + 全部 Darwin/POSIX 专项**：10 套件 **145/145 PASS（0 failed / 0 skipped）**，Windows 端跳过的 8 项 Darwin/POSIX 真机测试（`/usr/bin/script` PTY 额度、POSIX 进程组清理、APFS 符号链接拦截）与新增 APFS `/tmp` 别名/大小写内联图片预览/NFC-NFD/Updater macOS 回归全部实机激活通过；`Gravity-0.3.5-mac-arm64.dmg`（`hdiutil verify VALID`）与 `.zip`（`unzip -tq` 0 错）资产分离洁净（`.ico`/`.ps1`/`.map`/`.d.ts` 均为 0），打包版 Electron 35.7.5 内嵌 Node 22.16.0 实机跑通 `node:sqlite` 写锁恢复、APFS 大小写图片预览与断网 Bergamot WASM 翻译；`~/.gemini` 严格 0 字节写入；
+  - **前端 + 2x Retina 视觉 + 原生 `mac-inset` 冒烟**：9 套件 **108/108 PASS**，`desktop-layout-smoke` 与 6 主题 `v035-visual-e2e` 全绿，2x Retina 实机验证 6 主题命中原生 `SF Pro Text` / `SF Mono`、280px 窄检视器 7d 读数与 5 按钮费用卡零裁切、`Ctrl+,` vs `⌘,` 隔离与 14 张 2x 截图目视通过，打包版 `Gravity.app` 验证交通灯安全区（82px ≥ 78px）、80%/100%/150% 缩放持久化、悬浮检视器与 Dock 常驻恢复全部通过。

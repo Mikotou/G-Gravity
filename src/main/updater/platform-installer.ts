@@ -139,8 +139,11 @@ export async function installDownloadedUpdate(
       return { launched: true, message: '正在替换 Gravity.app 并自动重启...' };
     }
     if (lower.endsWith('.dmg')) {
-      const openErr = await shell.openPath(filePath);
-      if (openErr) shell.showItemInFolder(filePath);
+      const openErr = await shell.openPath(filePath).catch(() => '无法打开镜像');
+      if (openErr) {
+        shell.showItemInFolder(filePath);
+        return { launched: false, message: '安装镜像未能打开，已在 Finder 显示 .dmg 文件，请手动打开。' };
+      }
       return { launched: false, message: '已打开新版 .dmg 安装镜像，请将 Gravity.app 拖入“应用程序”完成覆盖。' };
     }
     shell.showItemInFolder(filePath);

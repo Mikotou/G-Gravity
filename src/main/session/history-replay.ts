@@ -31,8 +31,8 @@ export class HistoryReplay {
         isStreaming: false, isTranslating: false, languageDetected: 'mixed', translationSource: 'pending' };
       block.originalText += update.content?.text || '';
     } else if (kind === 'plan') {
-      this.inspector.consume(this.sessionId, update);
-      m.todos = this.inspector.get(this.sessionId).todos;
+      const todos = this.inspector.consume(this.sessionId, { ...update, sessionUpdate: 'plan' });
+      if (todos) m.todos = todos;
     } else if (update.toolCallId) {
       const cards = m.toolCalls ||= [];
       const index = cards.findIndex(c => c.toolCallId === update.toolCallId);
