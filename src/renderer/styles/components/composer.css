@@ -1,10 +1,11 @@
 .btn-primary{border-color:transparent}
 @container pane (max-width: 720px) {
-  .pane .mode-pill-hint, .pane .approval-label, .pane .status-hint, .pane .pane-sub, .pane .status-line .gauge { display: none; }
+  .pane .mode-pill-hint, .pane .approval-label, .pane .status-hint, .pane .status-line .gauge { display: none; }
   .pane .composer-dock { padding: 0 12px 10px; }
 }
 @container pane (max-width: 460px) {
-  .pane .attach-btn, .pane .status-seg-rate { display: none; }
+  .pane .composer-inline-tools, .pane .status-seg-rate { display: none; }
+  .pane .composer-more { display: inline-flex; }
 }
 .cc-user-prompt{display:flex;gap:10px;color:var(--text-primary)}
 .md{flex:1;min-width:0;font-size:13.5px;color:var(--text-primary);word-break:break-word}
@@ -32,8 +33,8 @@
 .composer-notation-snippet{flex:1;min-width:0;color:var(--muted-text)}
 .composer-annotation-input{width:100%;min-height:24px;max-height:96px;padding:3px 6px;resize:vertical;border:1px solid var(--hairline);border-radius:var(--radius-xs);background:var(--studio-composer);font-size:12.5px;line-height:1.45}
 .composer-annotation-input:focus{border-color:var(--accent-border);outline:none}
-.composer-annotation-notice{padding:4px 12px 0;color:var(--accent-text);font-size:11.5px}
-.composer-annotation-divider{display:flex;align-items:center;gap:8px;padding:6px 12px 0;color:var(--muted-text);font-size:11px}
+.composer-annotation-notice, .composer-annotation-divider{display:flex;align-items:center;gap:8px;padding:5px 12px 0;color:var(--accent-text);font-size:11px}
+.composer-annotation-divider{color:var(--muted-text)}
 .composer-annotation-divider::after{content:'';flex:1;height:1px;background:var(--hairline)}
 .composer-notation-idx{flex-shrink:0;font-family:var(--font-mono);font-size:10.5px;font-weight:700;color:var(--accent-text)}
 .composer-image-tray{display:flex;align-items:flex-start;gap:10px;overflow-x:auto;padding:5px 3px}
@@ -90,7 +91,8 @@
 @container pane (max-width: 340px) {
   .pane .composer-dock { padding: 0 6px 8px; }
   .pane .composer-input { padding-inline: 10px; }
-  .pane .composer-bar { flex-wrap: wrap; justify-content: flex-end; row-gap: 4px; padding-inline: 6px; }
+  .pane .composer-bar { padding-inline: 6px; }
+  .pane .voice-status { max-width: 92px; }
   .pane .model-chip-name { max-width: 84px; }
   .pane .status-link > span { display: none; }
 }
@@ -153,3 +155,9 @@
 .mode-menu-item.mode-full-access .mode-menu-glyph{color:var(--on-warning);background:linear-gradient(135deg, var(--turbo-hi), var(--turbo))}
 .mode-menu-item.mode-full-access:hover{background:color-mix(in srgb, var(--turbo) 10%, transparent)}
 .composer-running-hint{margin-top:6px;padding:5px 10px;border-radius:var(--radius-sm);border:1px solid var(--hairline-strong);background:var(--bg-surface);color:var(--secondary-text);font-size:11.5px;line-height:1.4}
+.composer-inline-tools{display:inline-flex;gap:2px}
+.composer-more{display:none}
+.composer-more-menu{right:0;min-width:180px}
+.voice-status{display:inline-flex;flex-shrink:1;align-items:center;gap:5px;min-width:0;max-width:200px;height:24px;padding:0 8px;border-radius:99px;background:var(--hover);color:var(--secondary-text);font-size:11.5px;font-variant-numeric:tabular-nums}
+.voice-status.is-recording, .voice-btn.is-active, .composer-more > .is-active{color:var(--danger-text);background:var(--danger-soft)}
+.voice-dot{flex-shrink:0;width:7px;height:7px;border-radius:50%;background:var(--status-danger);animation:pulse var(--dur-loop) ease-in-out infinite}

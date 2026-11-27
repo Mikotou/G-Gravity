@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, Cpu, FolderGit2, FolderOpen, GitBranch, Info, ListTodo, Network, Plus, RotateCw, X } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, Cpu, FolderOpen, GitBranch, Info, ListTodo, Network, Plus, RotateCw, X } from 'lucide-react';
 import {
   buildDiagnosticBanner,
   computeConversationTreeTotalCost,
@@ -1276,14 +1276,9 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
     >
       <span className="pane-activity-rail" aria-hidden="true"><span /></span>
       <header className="pane-header">
-        {/* T2：单栏时顶部标签已显示同一状态点，窗格头不再重复 */}
-        {layoutMode !== 'single' && <span className={`status-dot is-${sessionApprovals.length ? 'waiting_approval' : session.status}`} />}
-        <span className="pane-title truncate" title={session.title}>
+        {/* v0.3.6：窗格头只保留标题 + 1 个状态 chip（状态点与工作目录不再重复，目录见标题悬停提示） */}
+        <span className="pane-title truncate" title={session.cwd ? `${session.title}\n${session.cwd}` : session.title}>
           {session.title}
-        </span>
-        <span className="pane-sub truncate" title={session.cwd}>
-          <Icon icon={FolderGit2} size="xs" />
-          <span className="truncate">{folderName(session.cwd)}</span>
         </span>
         <span className="spacer" />
         <PaneStatusChip
@@ -1597,6 +1592,7 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
         treeCost={computeConversationTreeTotalCost(session.sessionId, conversationTree, telemetryDashboard)}
         externalReviewerTelemetry={telemetryDashboard.externalReviewer}
         autoFocus={isFocused && sessionApprovals.length === 0}
+        paneFocused={isFocused}
         annotations={annotationItems}
         annotationFocus={annotationFocus}
         focusTrigger={composerFocusSeq}

@@ -51,6 +51,8 @@ import { setActiveAnnotation, toWireAnnotations, type AnnotationDraftItem } from
 import { useComposerDraft, type DraftAttachment } from '../lib/composer-draft';
 import { isImeComposing } from '../lib/platform-keys';
 import { Icon } from './ui/Icon';
+import { VoiceControls } from './VoiceControls';
+import { useVoiceCapture } from '../hooks/useVoiceCapture';
 import { EXECUTION_MODE_ICONS } from './ui/mode-icons';
 
 type Reference = { kind: 'file' | 'session'; label: string; value: string };
@@ -80,6 +82,8 @@ export interface ComposerProps {
   /** @deprecated v0.3.4：演示审批已移出生产界面（仅测试夹具可直接调用 fallback bridge），保留可选签名兼容调用方 */
   canTriggerDemoApproval?: boolean;
   autoFocus?: boolean;
+  /** v0.3.6：所在窗格是否为焦点窗格（F5 听写快捷键只作用于焦点窗格） */
+  paneFocused?: boolean;
   /** v0.3.6：单一有序引用/批注条目 */
   annotations?: AnnotationDraftItem[];
   /** 聚焦某条目的批注框（引用后或重复引用时） */
@@ -248,6 +252,7 @@ export function Composer({
   treeCost,
   externalReviewerTelemetry,
   autoFocus,
+  paneFocused,
   annotations: annotationItems = EMPTY_ANNOTATIONS,
   annotationFocus,
   focusTrigger = 0,
@@ -329,6 +334,22 @@ export function Composer({
       textareaRef.current?.focus();
     }
   }, [focusTrigger]);
+
+  // v0.3.6：合规语音听写（F5 / /voice / /record / 麦克风按钮）；停录只保留文本，绝不自动发送
+  const voice = useVoiceCapture({ profileId: session.profileId || 'default', sessionId: session.sessionId, textareaRef });
+  const voiceToggleRef = useRef(voice.toggle);
+  voiceToggleRef.current = voice.toggle;
+  useEffect(() => {
+    if (!paneFocused) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'F5' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat || isImeComposing(e)) return;
+      if (document.querySelector('dialog[open], [aria-modal="true"]')) return;
+      e.preventDefault();
+      voiceToggleRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [paneFocused]);
 
   // v0.3.6：引用后聚焦该条自己的批注框；重复引用时提示「已引用为 #n」
   const annotationInputs = useRef(new Map<string, HTMLTextAreaElement>());
@@ -595,6 +616,11 @@ export function Composer({
       }
       return;
     }
+    if ((text === '/voice' || text === '/record') && !hasQuotesOrNotations) {
+      setDraft('');
+      voice.toggle();
+      return;
+    }
     if (text === '/plan' && !hasQuotesOrNotations) {
       setDraft('');
       void onSetSessionMode(session.sessionId, 'plan').catch(reportError);
@@ -667,6 +693,20 @@ export function Composer({
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
     if (isImeComposing(e)) return;
+    if (voice.phase !== 'idle') {
+      // 听写中：Esc 仅回滚本次未编辑的听写（不中断 AI 生成）；Enter 停录保留文本，绝不发送
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        voice.abort();
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        voice.stop();
+        return;
+      }
+    }
     if (e.key === 'ArrowUp' && onEditLast && !draft && !menuItems.length && !references.length && !attachments.length &&
         !hasQuotesOrNotations && !sending && !turnActive &&
         !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
@@ -1294,16 +1334,13 @@ export function Composer({
                 if (files.length) void addFiles(files);
               }}
             />
-            <button
-              type="button"
-              className="icon-btn attach-btn"
-              title={`${dict.attachFileLabel} / ${dict.attachImageLabel}`}
-              aria-label={dict.attachFileLabel}
-              onClick={() => anyFileInputRef.current?.click()}
-              data-testid={`attach-file-btn-${session.sessionId}`}
-            >
-              <Icon icon={Paperclip} size="md" />
-            </button>
+            <VoiceControls
+              sessionId={session.sessionId}
+              voice={voice}
+              onAttach={() => anyFileInputRef.current?.click()}
+              attachLabel={dict.attachFileLabel}
+              attachTitle={`${dict.attachFileLabel} / ${dict.attachImageLabel}`}
+            />
 
             <div className="menu-anchor" ref={modelMenuRef}>
               <button

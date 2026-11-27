@@ -74,6 +74,7 @@ import { SwarmDrafts } from './components/SwarmPanel';
 import type { ContextInspectorViewMode } from './components/ContextCostInspectorView';
 import { SessionWorkspaceGrid } from './components/SessionWorkspaceGrid';
 import { SettingsView, type SettingsSection } from './components/SettingsView';
+import { holdActiveVoiceCaptures } from './lib/voice/controller';
 import type { ApprovalTab } from './components/settings/WorkspacePanels';
 import { TitleOrganizerModal } from './components/TitleOrganizerModal';
 import { TopBar } from './components/TopBar';
@@ -1449,6 +1450,10 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
 
   /* ---------------------------------------------------------------- 快捷键 */
   const overlayOpen = settingsSection !== null || newSessionOpen || organizeOpen;
+  // v0.3.6：切入设置中心被动停录——外部引擎 release-media(hold) 封存（0 finish / 0 HTTP），本地引擎正常转写
+  useEffect(() => {
+    if (settingsSection !== null) holdActiveVoiceCaptures();
+  }, [settingsSection]);
   const macShortcuts = document.documentElement.dataset.windowChrome === 'mac-inset';
   const applyZoomCommand = useCallback((command: UiScaleCommand) => {
     const current = zoomScale.current.pending?.value ?? zoomScale.current.confirmed;
@@ -1744,6 +1749,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
             approvalConfig={approvalConfig}
             approvalInitialTab={approvalSettingsTab}
             externalReviewerTelemetry={telemetry.externalReviewer}
+            voiceTelemetry={telemetry.externalVoice}
             translationConfig={translationConfig}
             externalTranslatorTelemetry={telemetry.externalTranslator}
             focusExternalTranslatorSeq={translationSettingsFocusSeq}

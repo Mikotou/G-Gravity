@@ -9,7 +9,7 @@
 .cc-text{display:flex;gap:10px;min-width:0}
 .cc-bullet{flex-shrink:0;width:14px;font-size:11px;user-select:none}
 .cc-bullet.is-streaming{color:var(--accent-text);animation:pulse var(--dur-loop) ease-in-out infinite}
-.cc-streaming-cursor::after{content:'';display:inline-block;width:2.5px;height:1.06em;margin-left:4px;vertical-align:-2px;border-radius:99px;background:var(--accent-primary);box-shadow:0 0 8px color-mix(in srgb, var(--accent-primary) 65%, transparent);animation:caret-sine-breathe var(--dur-loop) var(--ease-in-out) infinite}
+.cc-streaming-cursor::after, .md.cc-streaming-cursor:empty::after, .md.cc-streaming-cursor > p.cc-stream-glide-block::after, .md.cc-streaming-cursor > :is(h1, h2, h3, h4, h5, h6).cc-stream-glide-block::after, .md.cc-streaming-cursor > :is(ul, ol).cc-stream-glide-block > li:last-child > .md-li-body > span:last-child::after, .md.cc-streaming-cursor > :is(ul, ol) > li.cc-stream-glide-block > .md-li-body > span:last-child::after{content:'';display:inline-block;width:2.5px;height:1.06em;margin-left:3px;vertical-align:-2px;border-radius:99px;background:var(--accent-primary);box-shadow:0 0 8px color-mix(in srgb, var(--accent-primary) 65%, transparent);animation:caret-sine-breathe var(--dur-loop) var(--ease-in-out) infinite}
 .cc-thinking{display:flex;flex-direction:column;gap:4px;min-width:0}
 .cc-thinking-head{display:flex;align-items:center;gap:8px;min-height:24px;color:var(--muted-text);font-size:12px;cursor:pointer;user-select:none}
 .cc-thinking-head:hover{color:var(--text-secondary)}
@@ -133,8 +133,6 @@
 .stream-interrupted-banner{display:inline-flex;align-items:center;gap:8px;max-width:100%;padding:7px 11px;border-radius:10px;border:1px solid color-mix(in srgb, var(--status-warning) 36%, var(--hairline));background:color-mix(in srgb, var(--status-warning) 9%, var(--studio-card));color:var(--text-secondary);font-size:12.5px;line-height:1.45}
 .stream-interrupted-icon{flex-shrink:0;color:var(--warning-text)}
 .stream-interrupted-text{min-width:0}
-.stream-interrupted-retry{margin-left:4px;flex-shrink:0;height:24px;padding:0 9px;gap:5px;border-radius:7px;border-color:color-mix(in srgb, var(--status-warning) 44%, var(--hairline));background:color-mix(in srgb, var(--status-warning) 14%, var(--bg-surface));color:var(--text-primary);font-size:11.5px}
-.stream-interrupted-retry:hover{background:color-mix(in srgb, var(--status-warning) 24%, var(--bg-surface));border-color:var(--status-warning)}
 .update-progress-fill{height:100%;border-radius:999px;background:linear-gradient(90deg, var(--accent-primary), color-mix(in srgb, var(--accent-primary) 72%, var(--status-success)))}
 .branch-switcher{display:inline-flex;align-items:center;gap:3px;margin-top:6px;padding:2px 5px;border-radius:99px;border:1px solid var(--hairline);background:color-mix(in srgb, var(--bg-surface) 90%, transparent);font-size:11.5px;color:var(--text-secondary)}
 .branch-switch-btn{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;border:0;border-radius:99px;background:transparent;color:var(--text-secondary);cursor:pointer;transition:background var(--dur-1) ease, color var(--dur-1) ease}

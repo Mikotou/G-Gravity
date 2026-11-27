@@ -43,3 +43,20 @@ export function useComposerDraft(id: string) {
     setAttachments: (v: SetStateAction<DraftAttachment[]>) => store.set('attachments', v),
     setSending: (v: boolean) => store.set('sending', v) };
 }
+
+/** v0.3.6：语音听写在开始时捕获当前 Profile 的草稿表，切换窗格 / Profile 后仍写回原会话草稿（纯本地，0 上传）。 */
+export function useComposerDraftRegistry(): Map<string, ComposerDraft> | null {
+  return useContext(ComposerDrafts);
+}
+export function readComposerDraftText(drafts: Map<string, ComposerDraft> | null, id: string): string {
+  return drafts?.get(id)?.read().text ?? '';
+}
+export function writeComposerDraftText(drafts: Map<string, ComposerDraft> | null, id: string, change: SetStateAction<string>): void {
+  if (!drafts) return;
+  let store = drafts.get(id);
+  if (!store) {
+    store = new ComposerDraft();
+    drafts.set(id, store);
+  }
+  store.set('text', change);
+}

@@ -326,6 +326,7 @@ export function PlanDocument({
             key={i}
             className={task ? `plan-doc-task${task[1] !== ' ' ? ' is-done' : ''}` : undefined}
             data-indent={indent ? Math.min(4, Math.floor(indent / 2)) : undefined}
+            style={indent ? ({ '--indent': Math.min(4, Math.floor(indent / 2)) } as React.CSSProperties) : undefined}
           >
             {task && <Icon icon={task[1] !== ' ' ? CircleCheck : Circle} size="xs" className="plan-doc-check" />}
             {renderInline(task ? task[2] : raw, onOpenLink, `li${i}`)}

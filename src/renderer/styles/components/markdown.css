@@ -95,8 +95,7 @@
 .md:not(.md-compact) p, .md:not(.md-compact) li{color:color-mix(in srgb, var(--text-primary) 92%, var(--text-secondary))}
 .md h2{display:block;padding-bottom:5px;border-bottom:1px solid var(--hairline)}
 .message-image-wrap{position:relative;display:inline-flex;align-items:flex-start;max-width:min(100%, 420px, 66cqi);vertical-align:middle}
-.message-image-wrap > .message-image{max-width:100%}
-.composer-image-tray .message-image-wrap{max-width:100%}
+.message-image-wrap > .message-image, .composer-image-tray .message-image-wrap{max-width:100%}
 .composer-image-tray .message-image-copy{display:none}
 .message-image-copy{position:absolute;top:6px;right:6px;opacity:0;border-radius:7px;background:color-mix(in srgb, var(--bg-surface) 88%, transparent);backdrop-filter:blur(8px);border:1px solid var(--hairline-strong);color:var(--text-primary);box-shadow:var(--shadow-sm);transition:opacity var(--dur-1), background var(--dur-1), color var(--dur-1), transform var(--dur-1)}
 .message-image-wrap:hover .message-image-copy, .message-image-wrap:focus-within .message-image-copy, .message-image-copy.is-copied{opacity:1}
@@ -129,7 +128,6 @@
 .md-alert.is-caution .md-alert-title{color:var(--danger-text)}
 .cc-thinking-body .md.md-compact, .cc-thinking-body .md.md-compact p, .cc-thinking-body .md.md-compact li{color:inherit}
 .md.cc-streaming-cursor::after{content:none}
-.md.cc-streaming-cursor:empty::after, .md.cc-streaming-cursor > p.cc-stream-glide-block::after, .md.cc-streaming-cursor > :is(h1, h2, h3, h4, h5, h6).cc-stream-glide-block::after, .md.cc-streaming-cursor > :is(ul, ol).cc-stream-glide-block > li:last-child > .md-li-body > span:last-child::after, .md.cc-streaming-cursor > :is(ul, ol) > li.cc-stream-glide-block > .md-li-body > span:last-child::after{content:'';display:inline-block;width:2.5px;height:1.06em;margin-left:3px;vertical-align:-2px;border-radius:99px;background:var(--accent-primary);box-shadow:0 0 8px color-mix(in srgb, var(--accent-primary) 65%, transparent);animation:caret-sine-breathe var(--dur-loop) var(--ease-in-out) infinite}
 .md a.md-link-file{display:inline;padding:0.05em 0.42em 0.08em 0.36em;border-radius:5px;background:color-mix(in srgb, var(--accent-primary) 9%, transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent);color:var(--accent-text);font-family:inherit;font-size:inherit;text-decoration:none;overflow-wrap:anywhere;-webkit-box-decoration-break:clone;box-decoration-break:clone}
 .md a.md-link-file:hover{background:color-mix(in srgb, var(--accent-primary) 15%, transparent);text-decoration:none}
 .md a.md-link-file .md-link-label{font-family:var(--font-mono);font-size:0.9em}

@@ -4,7 +4,6 @@
 }
 .pane-header{display:flex;align-items:center;flex-shrink:0}
 .pane-title{font-size:13px;font-weight:600}
-.pane-sub{display:inline-flex;align-items:center;gap:4px;color:var(--muted-text);font-family:var(--font-mono);font-size:11px}
 .pane-switch{height:24px;max-width:160px;font-size:11.5px}
 .welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;overflow-y:auto;animation:gv-rise var(--dur-2) var(--ease-out)}
 .welcome-title{margin:0;text-align:center}
@@ -34,15 +33,13 @@
 .pane-header .pane-switch{min-width:72px}
 @container pane (max-width: 720px) {
   .pane .pane-switch { max-width: 96px; }
-  .pane [data-testid^='swarm-active-pill-'] span { display: none; }
-  .pane .pane-status-time { display: none; }
+  .pane [data-testid^='swarm-active-pill-'] span, .pane .pane-status-time { display: none; }
 }
 @container pane (max-width: 460px) {
   .pane .pane-switch { max-width: 84px; min-width: 56px; }
 }
 .pane-header{gap:8px;height:36px;padding:0 18px}
 .workspace.mode-single .pane-header .pane-title{display:none}
-.workspace.mode-single .pane-header .pane-sub{display:inline-flex;min-width:0;color:var(--text-secondary);font-size:var(--fs-xs)}
 .workspace.mode-split-2 .pane:not(.is-focused) .pane-header{transition:opacity var(--dur-2);opacity:0.56}
 .stream-inner, .composer-wrap{max-width:var(--stream-max)}
 .working-indicator{padding:2px 0}

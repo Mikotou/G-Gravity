@@ -120,10 +120,7 @@
 .plan-doc{min-width:0;color:var(--text-primary);font-size:12.5px;line-height:1.6;overflow-wrap:anywhere}
 .plan-doc :is(p, ul, ol, blockquote, pre){margin:0 0 8px}
 .plan-doc :is(ul, ol){padding-inline-start:18px}
-.plan-doc li[data-indent='1']{margin-inline-start:12px}
-.plan-doc li[data-indent='2']{margin-inline-start:24px}
-.plan-doc li[data-indent='3']{margin-inline-start:36px}
-.plan-doc li[data-indent='4']{margin-inline-start:48px}
+.plan-doc li[data-indent]{margin-inline-start:calc(var(--indent) * 12px)}
 .plan-doc .plan-doc-task{list-style:none;margin-inline-start:-16px}
 .plan-doc .plan-doc-task.is-done{color:var(--muted-text)}
 .plan-doc .plan-doc-h{margin:10px 0 6px;font-size:13px;font-weight:650}
