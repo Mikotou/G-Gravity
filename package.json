@@ -1,7 +1,7 @@
 {
   "name": "g-gravity",
   "productName": "Gravity",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "description": "Gravity — 基于官方 agy acp 协议的本地智能编码工作台",
   "main": "dist/main/index.js",
@@ -10,6 +10,7 @@
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "build": "npm run build:main && npm run build:renderer",
+    "voice:model:fetch": "node scripts/fetch-voice-model.mjs",
     "start": "npm run build && electron .",
     "start:electron": "electron .",
     "typecheck:shared": "tsc -p tsconfig.shared.json --noEmit",
@@ -37,6 +38,10 @@
       "!dist/**/*.map",
       "!dist/**/*.d.ts",
       "assets/local-translation/**/*",
+      "assets/local-voice/**/*",
+      "!assets/local-voice/build/**/*",
+      "!assets/local-voice/.gitignore",
+      "!assets/local-voice/.gitattributes",
       "package.json",
       "!node_modules/**/*"
     ],
@@ -58,6 +63,9 @@
       "category": "public.app-category.developer-tools",
       "icon": "assets/icons/gravity-claude-dark-mac.png",
       "identity": null,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Gravity uses the microphone only when you start voice dictation or microphone test."
+      },
       "files": [
         "assets/icons/*-mac.png",
         "assets/quota/read-quota-macos.sh",

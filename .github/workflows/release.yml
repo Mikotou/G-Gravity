@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish (defaults to current ref, e.g. v0.3.5)'
+        description: 'Release tag to publish (defaults to current ref, e.g. v0.3.6)'
         required: false
         type: string
 
@@ -39,6 +39,9 @@ jobs:
         env:
           GRAVITY_REQUIRE_DIST: '1'
         run: npm test
+
+      - name: Fetch and verify offline voice model
+        run: npm run voice:model:fetch
 
       - name: Package Windows portable executable
         run: npx electron-builder --win portable --publish never
@@ -78,6 +81,9 @@ jobs:
         env:
           GRAVITY_REQUIRE_DIST: '1'
         run: npm test
+
+      - name: Fetch and verify offline voice model
+        run: npm run voice:model:fetch
 
       - name: Package macOS arm64 & x64 (DMG + ZIP)
         env:
@@ -133,12 +139,11 @@ jobs:
           > - **macOS**：首次打开若提示“已损坏”或“无法验证开发者”，拖入「应用程序」后在终端执行一次：\`xattr -cr /Applications/Gravity.app\` 即可正常打开。
           > - **前置条件**：请先在本机安装并登录官方原版 \`agy\` CLI（终端运行 \`agy --version\` 正常可用）。
 
-          ### 本版亮点（v0.3.5）
-          - **OKLCH 双轴热力图与 7d 按日柱状图重构**：统一 24h / 7d / 30d 三视图的「绝对用量 × 窗口占比」双轴强度模型与 6 套预设 / 自定义主题 OKLCH 5 阶色阶（100% WCAG AA 对比度达标）；`7d` 全面升级为按日柱状图，复用与 `24h` 一致的左侧 Token 用量 Y 轴刻度（峰值 / 半值 / 0）与虚线网格并在下方对齐 7 日横轴（窄栏自动切单字星期 0 溢出）；`30d` 升级为 Mon–Sun Codex 周行方格，全面覆盖主 Context、外部复核与外部翻译三账本。
-          - **Plan 多题提问卡 v2 与只读 Plan 检视器**：支持多题编号解析、题号步进器、每项右上角小铅笔就地编辑、卡片内「自定义回答」扩展框与多题统一提交（交互过程 0 IPC，原生表单支持幂等回执与安全普通消息跟进）；右侧 `Plan` 页签支持 6 态权威待办、历史重放不丢计划、以及受控只读 128 KiB `implementation_plan.md` 预览（0 外链图片、0 写入 `~/.gemini`），无待办但计划文档就绪时不再显示矛盾空态。
-          - **审批体验与界面全面降噪**：移除“突发保护已开启/解除”等无用或冗余瞬态提示及胶囊闪烁点；命中账号安全底线（`tier_a_immutable`）且附带外部 AI 复核时，红框明确说明具体命中项及“不受 AI 评分与意图放行”，下方 AI 横幅清晰标示为「AI 风险参考（仅辅助人工）」并去除重复前缀，消除低分仍需审批的困惑。
-          - **工作台精简、分支稳定性与跨端加固**：修复历史 `layout.json` 遗留字段导致的分支修订/切换报错，补全回滚同步与分支树自愈；完成 TopBar / 设置 8 导航 / 外观 3 子页 / 检视器折叠与零非合成属性动效收口；强化 `AP-1`（API Key 显式点击发现）、`PL-1`（插件零被动 CLI 刷新与隔离 Profile 提示）、`AQ-1`（429/403 冷却窗暂停探测倒计时）、`B01`（标题会话迟到关闭释槽）与 macOS APFS `realpathSync.native` / 大小写 / NFC-NFD / 2x Retina 原生 SF 字体适配。
-          - **Windows + macOS 双端全量验收**：通过四端 `typecheck` 0 错、`src/main`（107 文件）与 `src/shared` 0 循环依赖、81/81 IPC 1:1 守卫、0 死 CSS 类守卫、Windows x64（1,240 项）与 macOS Apple Silicon ARM64（1,237 项）全量 Vitest 0 failed、Playwright 布局回归 0px 跳变、6 主题 × 4 宽度 2x Retina 视觉 E2E、以及双端打包实机冒烟（`~/.gemini` 严格零写入）。
+          ### 本版亮点（v0.3.6）
+          - **100% 合规语音听写（本地离线 Whisper WASM + 可选外部 API）**：支持 `F5`（macOS `fn F5`）、`/voice`、`/record` 与底栏麦克风按钮启动，随包内嵌经 SHA-256 强校验的离线多语模型 `ggml-base-q5_1.bin` 与主进程 `worker_threads` 纯 WASM 引擎（下载即断网可用，渲染层保持 `script-src 'self'` 零放宽）；支持 OpenAI 兼容与 Gemini Developer API 外部转写（独立 `SecretVault` 加密、独立 429/403 熔断与独立时长账本）；双权限 Handler 静息恒拒绝、仅有效短时音频租约放行纯音频；`Enter`/`F5`/3:30 停录保留绝不自动发送，`Esc` 精确回滚未编辑听写区间。
+          - **划词引用与批注全链路成对保序**：统一有序 `annotations[]`（`ann-<UUID>` + `originMessageId`），点「引用」聚焦该条独立批注框并支持「仅引用」、编号批注钉悬停高亮、旧草稿无缝迁移与发送失败按 ID 原序合并恢复；已发送气泡呈现独立编号配对卡片与分隔线「补充说明」，编辑表单卡片在上、正文在下且支持旧历史手工迁移。
+          - **Plan 四态实时时间线与严格会话私有隔离**：彻底移除跨会话同目录 `workspace-reference` 自动认领与历史扫描，自动 Plan 仅只读当前 Profile 自有会话 `brain/<sessionId>/implementation_plan.md`（131,072 B 物理读前硬上限、双根歧义拒绝、摘要/原文分视图独立修订号）；右侧 Plan 页签实现纯空态（DOM 零文件栏）、文档概要态（中性大纲无假百分比 + 按需抽屉折叠 Mermaid）、实时执行态（6 态时间线与 ≥3 已完成自动折叠）及显式清空态，正文内联 Todo 精简为最新消息单行 Plan chip。
+          - **后端精简与客户端/插件全量缺陷闭环**：`src/shared/` 拆瘦至 23 文件全 ≤ 650 行零环、`src/main/` 维持 5 层 0 环与 93/93 IPC 通道 1:1 对齐；落地 4 步可回退退出状态机（Windows 末窗保存失败可安全重试不死窗）、空闲 Swarm Worker 重建、MCP `--env` 密钥全量脱敏、可见 `session/new` 孤儿回收、403/429 冷却保序、首次 `session/load` 暂存防漏与 `U1–U6`/`B1–B17` 全套 UI/无障碍/窄窗格 `+` 溢出修复。
           EOF
 
           if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
