@@ -6,7 +6,7 @@
 .pane-title{font-size:13px;font-weight:600}
 .pane-sub{display:inline-flex;align-items:center;gap:4px;color:var(--muted-text);font-family:var(--font-mono);font-size:11px}
 .pane-switch{height:24px;max-width:160px;font-size:11.5px}
-.welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;overflow-y:auto;animation:gv-rise var(--dur-250) var(--ease)}
+.welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;overflow-y:auto;animation:gv-rise var(--dur-2) var(--ease-out)}
 .welcome-title{margin:0;text-align:center}
 .welcome-compact .welcome-logo{width:36px;height:36px}
 .recent-list{display:flex;flex-direction:column}
@@ -19,19 +19,16 @@
 .offline-conversation{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:10px;padding:12px;color:var(--muted-text)}
 .workspace-slot > .pane{flex:1}
 .pane-status-chip{--chip:var(--accent-primary);display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:99px;background:color-mix(in srgb, var(--chip) 14%, transparent);border:1px solid color-mix(in srgb, var(--chip) 30%, transparent);color:var(--chip);font-size:var(--fs-2xs);font-weight:620;flex-shrink:0;animation:gv-rise var(--dur-2) var(--ease-out) both}
-.pane-status-chip.is-waiting_approval{animation:gv-attention var(--dur-2200) var(--ease-in-out) infinite;--chip:var(--warning-text)}
+.pane-status-chip.is-waiting_approval{animation:gv-text-breathe var(--dur-loop-slow) var(--ease-in-out) infinite;--chip:var(--warning-text)}
 .pane-status-time{font-family:var(--font-mono);font-weight:500;opacity:0.85}
 .pane[data-pane-state='waiting_approval']::before{content:'';position:absolute;inset:0 0 auto 0;height:2px;z-index:3;background:linear-gradient(90deg, transparent, var(--status-warning), transparent);opacity:0.85}
 .stream-viewport{position:relative;display:flex;flex:1;flex-direction:column;min-height:0;min-width:0}
 .jump-latest{position:absolute;inset-inline:0;margin-inline:auto;width:max-content;bottom:10px;z-index:3;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 13px;border-radius:99px;border:1px solid var(--border-strong);color:var(--text-secondary);font-size:var(--fs-xs);font-weight:560;box-shadow:var(--shadow-md);animation:gv-rise var(--dur-2) var(--ease-spring) both;transition:color var(--dur-1), border-color var(--dur-1), background var(--dur-1)}
 .jump-latest:hover{color:var(--text-primary);border-color:var(--accent-border)}
-.tab[data-tab-state='streaming']::after{background:linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 18%, transparent), var(--accent-primary), color-mix(in srgb, var(--accent-primary) 18%, transparent));animation:gv-tab-breathe var(--dur-2600) var(--ease-in-out) infinite}
+.tab[data-tab-state='streaming']::after{background:linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 18%, transparent), var(--accent-primary), color-mix(in srgb, var(--accent-primary) 18%, transparent));animation:zh-rail-flow var(--dur-loop-slow) var(--ease-in-out) infinite}
 .pane-activity-rail{position:absolute;inset:0 0 auto 0;z-index:3;display:none;height:2px;overflow:hidden;pointer-events:none;background:color-mix(in srgb, var(--accent-primary) 18%, transparent);contain:strict}
 .pane[data-pane-state='streaming'] > .pane-activity-rail{display:block}
-.pane-activity-rail > span{position:absolute;inset:0 auto 0 0;width:40%;background:linear-gradient(90deg, transparent, var(--accent-primary), transparent);will-change:transform;animation:gv-activity-flow var(--dur-2600) linear infinite}
-@media (prefers-reduced-motion: reduce) {
-  .pane-activity-rail > span, .tab[data-tab-state='streaming']::after { animation: none; }
-}
+.pane-activity-rail > span{position:absolute;inset:0 auto 0 0;width:40%;background:linear-gradient(90deg, transparent, var(--accent-primary), transparent);will-change:transform;animation:gv-activity-flow var(--dur-loop-slow) linear infinite}
 .pane-title{min-width:72px;flex:0 1 auto}
 .pane-header .pane-switch, .pane-header .pane-status-chip, .pane-header [data-testid^='swarm-active-pill-']{flex-shrink:0}
 .pane-header .pane-switch{min-width:72px}
@@ -52,7 +49,7 @@
 .working-meta{display:inline-flex;align-items:center;gap:8px;margin-left:4px;color:var(--muted-text);font-family:var(--font-mono);font-size:var(--fs-2xs);font-style:normal}
 .working-hint{padding:0 6px;height:17px;line-height:15px;border-radius:4px;border:1px solid var(--hairline-strong)}
 .jump-latest{backdrop-filter:blur(6px);background:color-mix(in srgb, var(--surface-3) 88%, transparent)}
-.welcome-logo{animation:gv-pop var(--dur-4) var(--ease-spring) both;position:relative;width:56px;height:56px;border-radius:0;box-shadow:none;filter:var(--icon-shadow-lg, drop-shadow(0 8px 16px var(--pal-0-0-0-0_36)))}
+.welcome-logo{animation:gv-pop var(--dur-4) var(--ease-spring) both;position:relative;width:56px;height:56px;border-radius:0;box-shadow:none;filter:var(--icon-shadow-lg, drop-shadow(0 8px 16px color-mix(in srgb, var(--ink-black) 36%, transparent)))}
 .welcome{gap:24px;padding:40px 28px}
 .welcome-hero{display:flex;flex-direction:column;align-items:center;gap:14px}
 .welcome-logo-wrap{position:relative;display:inline-flex;align-items:center;justify-content:center}
@@ -113,7 +110,7 @@
 .welcome-compact .welcome-quick{width:min(520px, 100%);padding:9px 9px 6px 11px;border-radius:14px}
 .welcome-compact .welcome-quick-hint{display:none}
 [data-polarity='light'] .welcome-logo-wrap::before{background:radial-gradient(circle, color-mix(in srgb, var(--accent-primary) 14%, transparent) 0%, transparent 70%)}
-[data-polarity='light'] .welcome-logo{box-shadow:none;filter:var(--icon-shadow-lg, drop-shadow(0 6px 12px var(--pal-90-58-34-0_2)))}
+[data-polarity='light'] .welcome-logo{box-shadow:none;filter:var(--icon-shadow-lg, drop-shadow(0 6px 12px color-mix(in srgb, var(--ink-black) 20%, transparent)))}
 .welcome-cta-kbd{margin-left:4px;background:color-mix(in srgb, var(--on-accent, var(--ink-white)) 18%, transparent);border-color:color-mix(in srgb, var(--on-accent, var(--ink-white)) 28%, transparent);color:var(--on-accent, var(--ink-white))}
 .pane-status-chip.is-error{--chip:var(--danger-text)}
 .pane-status-chip.is-waiting_question{--chip:var(--info, var(--accent-primary))}

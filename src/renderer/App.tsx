@@ -1426,6 +1426,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile }: {
       openInspectorAt(id, 'context');
     },
     onInspectDiffFile: (id: string, fp: string) => openInspectorAt(id, 'diff', fp),
+    onOpenPlanInspector: (id: string) => openInspectorAt(id, 'plan'),
   });
   const sidebarHandlers = useStableCallbacks({
     onToggleCollapse: () => void patchLayout({ leftSidebarCollapsed: true }),

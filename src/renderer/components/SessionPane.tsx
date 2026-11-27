@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, Cpu, FolderGit2, FolderOpen, GitBranch, Info, Network, Plus, RotateCw, X } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowRight, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, Cpu, FolderGit2, FolderOpen, GitBranch, Info, ListTodo, Network, Plus, RotateCw, X } from 'lucide-react';
 import {
   buildDiagnosticBanner,
   computeConversationTreeTotalCost,
@@ -64,6 +64,7 @@ import { ThinkingBlock } from './ThinkingBlock';
 import { AccountQuotaFooter } from './AccountQuotaView';
 import { PaneStatusChip, ToolActivityStream, TurnOutcomeBar, TurnSettledStrip } from './TurnActivity';
 import { isTurnUnconfirmed } from '../lib/turn-insights';
+import { currentPlanStep, latestTodoMessageId } from '../lib/plan-view';
 import { WorkingIndicator } from './WorkingIndicator';
 import { TurnDiagnosticCard, type DiagnosticHandlers } from './TurnDiagnosticCard';
 import { Icon } from './ui/Icon';
@@ -121,6 +122,8 @@ export interface SessionPaneProps {
   onOpenSwarmInspector: (sessionId: string) => void;
   onOpenContextInspector: (sessionId: string) => void;
   onInspectDiffFile: (sessionId: string, filePath: string) => void;
+  /** v0.3.6：正文 Plan chip 点击跳转 Plan 页签 */
+  onOpenPlanInspector?: (sessionId: string) => void;
   /** @deprecated v0.3.4：演示审批已移出生产界面 */
   onTriggerDemoApproval?: (sessionId: string) => void;
   /** Stage 2 Guardian 正在复核的请求（全部会话，窗格内按会话过滤） */
@@ -551,8 +554,13 @@ const MessageTurn = React.memo(function MessageTurn({
   sessionStatus,
   dismissedDiagnostics,
   suppressDiagnostic,
+  showPlanChip,
+  onOpenPlan,
 }: {
   message: ChatMessageItem;
+  /** v0.3.6：仅最新一条含待办的助手消息显示单行 Plan chip */
+  showPlanChip?: boolean;
+  onOpenPlan?: () => void;
   defaultThoughtTrack: ThoughtDisplayTrack;
   turnStartedAt?: string;
   latest?: boolean; editRequest?: number;
@@ -723,27 +731,8 @@ const MessageTurn = React.memo(function MessageTurn({
           unconfirmed={unconfirmedTurn}
         />
       )}
-      {todos.length > 0 && (
-        <div className="cc-todos" data-testid={`inline-todos-${message.id}`}>
-          <div className="cc-todos-head">
-            <span className="cc-tool-dot status-completed">⏺</span>
-            <span>Update Todos</span>
-            <span className="cc-todos-progress" aria-hidden="true">
-              <span style={{ '--fill': doneTodos / todos.length } as React.CSSProperties} />
-            </span>
-            <span className="muted" style={{ fontWeight: 400 }}>
-              {doneTodos}/{todos.length}
-            </span>
-          </div>
-          {todos.map((td) => (
-            <div key={td.id} className={`cc-todo is-${td.status}`}>
-              <span className="cc-todo-box">
-                {td.status === 'completed' ? '☒' : td.status === 'in_progress' ? '◼' : '☐'}
-              </span>
-              <span>{td.content}</span>
-            </div>
-          ))}
-        </div>
+      {showPlanChip && todos.length > 0 && (
+        <PlanChip todos={todos} done={doneTodos} messageId={message.id} onOpen={onOpenPlan} />
       )}
       {(cleanContent || message.attachments?.length) ? (
         <div className="cc-text" data-message-body="true" data-testid={`assistant-body-${message.id}`}>
@@ -1162,6 +1151,7 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
   const showWorking =
     session.status === 'streaming' && !(last && last.role === 'assistant' && last.isStreaming);
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
+  const latestTodoMessage = useMemo(() => latestTodoMessageId(messages), [messages]);
   const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user' && !m.sendFailed);
   const paneBusy = session.status === 'streaming' || session.status === 'waiting_approval' || stopping;
   const continueText = dict.ui.v031.continuePrompt;
@@ -1430,6 +1420,8 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
                   defaultThoughtTrack={defaultThoughtTrack}
                   turnStartedAt={turnStartById.get(msg.id)}
                   onInspectDiff={(fp) => onInspectDiffFile(session.sessionId, fp)}
+                  showPlanChip={msg.id === latestTodoMessage}
+                  onOpenPlan={props.onOpenPlanInspector ? () => props.onOpenPlanInspector?.(session.sessionId) : undefined}
                 /></ImageWorkspace.Provider></ImageSessionContext.Provider>
               );
               return (
@@ -1624,3 +1616,40 @@ function areSessionPanePropsEqual(prev: SessionPaneProps, next: SessionPaneProps
 
 /** F-08：浅比较 props，其它会话流式更新时本窗格跳过提交（父级已稳定回调与派生数组）。 */
 export const SessionPane = React.memo(SessionPaneImpl, areSessionPanePropsEqual);
+
+/** v0.3.6：正文单行 Plan chip（`Plan 3/7 · 正在：xxx →`），点击跳转 Plan 页签。 */
+function PlanChip({
+  todos,
+  done,
+  messageId,
+  onOpen,
+}: {
+  todos: NonNullable<ChatMessageItem['todos']>;
+  done: number;
+  messageId: string;
+  onOpen?: () => void;
+}): React.ReactElement {
+  const { dict } = useI18n();
+  const t6 = dict.ui.v036;
+  const current = currentPlanStep(todos)?.content;
+  const content = (
+    <>
+      <Icon icon={ListTodo} size="xs" />
+      <span className="plan-chip-count">{t6.planChip(done, todos.length)}</span>
+      <span className="plan-chip-bar" aria-hidden="true">
+        <span style={{ '--fill': todos.length ? done / todos.length : 0 } as React.CSSProperties} />
+      </span>
+      {current && <span className="plan-chip-now truncate">{t6.planChipNow(current)}</span>}
+      {onOpen && <Icon icon={ArrowRight} size="xs" />}
+    </>
+  );
+  return onOpen ? (
+    <button type="button" className="plan-chip" onClick={onOpen} title={t6.planChipOpen} aria-label={`${t6.planChip(done, todos.length)}${current ? ` · ${t6.planChipNow(current)}` : ''} · ${t6.planChipOpen}`} data-testid={`plan-chip-${messageId}`}>
+      {content}
+    </button>
+  ) : (
+    <div className="plan-chip" data-testid={`plan-chip-${messageId}`}>
+      {content}
+    </div>
+  );
+}

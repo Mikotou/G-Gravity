@@ -4,12 +4,6 @@ import {
   BarChart3,
   ChevronLeft,
   ChevronRight,
-  Square,
-  SquareCheck,
-  SquareDashed,
-  SquareDot,
-  SquareMinus,
-  SquareX,
   FileCode2,
   FileDiff,
   GitBranch,
@@ -27,7 +21,6 @@ import type {
   RightInspectorTab,
   SessionInspectorData,
   SessionTerminalEntry,
-  SessionTodoItem,
   SwarmTopologyState,
   SwarmHistoryCursor,
   TelemetryDashboardSnapshot,
@@ -42,7 +35,8 @@ import { UnifiedDiffBlock } from './UnifiedDiffBlock';
 import { terminalCommand } from '../../shared/session-contract';
 import { Icon as UiIcon } from './ui/Icon';
 import { handleTablistKeyDown } from '../hooks/useRovingTabs';
-import { PlanArtifactPanel } from './PlanArtifactPanel';
+import { PlanTimeline } from './PlanTimeline';
+import { resolveAuthoritativeTodos } from '../lib/plan-view';
 
 export interface RightInspectorProps {
   collapsed: boolean;
@@ -258,15 +252,10 @@ function RightInspectorImpl({
   // v0.3.5：`inspectorData.plan` 是权威 Plan 摘要。存在时只认快照（`empty` 绝不复活旧消息待办）；
   // 仅当旧快照缺省 `plan` 时，才按历史兼容从最近的消息向前回溯已有的待办列表。
   const planMeta = inspectorData?.plan;
-  const todos = useMemo<SessionTodoItem[]>(() => {
-    if (planMeta) return planMeta.state === 'present' ? (inspectorData?.todos ?? []) : [];
-    if (inspectorData?.todos?.length) return inspectorData.todos;
-    for (let i = sessionMessages.length - 1; i >= 0; i -= 1) {
-      const list = sessionMessages[i].todos;
-      if (list?.length) return list;
-    }
-    return [];
-  }, [inspectorData?.todos, planMeta, sessionMessages]);
+  const todos = useMemo(
+    () => resolveAuthoritativeTodos(planMeta, inspectorData?.todos, sessionMessages),
+    [inspectorData?.todos, planMeta, sessionMessages]
+  );
 
   const terminals = useMemo<SessionTerminalEntry[]>(() => {
     // 用现有终端快照中的工具调用号识别已收录条目，再从消息中的 Bash 输出补齐缺项。
@@ -333,9 +322,7 @@ function RightInspectorImpl({
   const totalAdded = diffs.reduce((s, d) => s + d.addedLines, 0);
   const totalRemoved = diffs.reduce((s, d) => s + d.removedLines, 0);
 
-  const doneTodos = planMeta?.state === 'present' ? planMeta.completedCount : todos.filter((t) => t.status === 'completed').length;
   const totalTodos = planMeta?.state === 'present' ? Math.max(planMeta.totalCount, todos.length) : todos.length;
-  const failedTodos = planMeta?.state === 'present' ? planMeta.failedCount : todos.filter((t) => t.status === 'failed').length;
   // 标签徽标各自表示不同数量。终端有失败时优先显示失败数，协作面板显示正在工作的成员数，分支树在存在分叉时显示分支总数。
   const counts: Partial<Record<RightInspectorTab, number>> = {
     diff: diffs.length,
@@ -355,11 +342,6 @@ function RightInspectorImpl({
   // D1：分支树是 Context 的二级视图；外部以 'tree' 打开时自动选中 Context 一级页签。
   const isContextGroup = activeTab === 'context' || activeTab === 'tree';
   const treeBranchCount = conversationTree && conversationTree.totalBranches > 1 ? conversationTree.totalBranches : 0;
-  const [planArtifactStatus, setPlanArtifactStatus] = useState<'loading' | 'ready' | 'missing' | 'unavailable' | 'unchanged'>('loading');
-  useEffect(() => {
-    setPlanArtifactStatus('loading');
-  }, [profileId, sessionId]);
-  const planHasReadyArtifact = Boolean(sessionId && planArtifactStatus === 'ready');
 
   const bodyViewKey = `${sessionId ?? ''}:${activeTab}`;
   useLayoutEffect(() => {
@@ -622,48 +604,15 @@ function RightInspectorImpl({
           )}
 
           {activeTab === 'plan' && (
-            <div className="inspector-stack plan-stack" data-testid="inspector-view-plan">
-              {todos.length === 0 ? (
-                !planHasReadyArtifact && <div className="empty-state">{dict.planEmpty}</div>
-              ) : (
-                <>
-                  <div className="plan-progress">
-                    <span>{dict.planProgress(doneTodos, totalTodos)}</span>
-                    {failedTodos > 0 && (
-                      <span className="badge badge-danger plan-failed-count">{ui.v035.planFailedCount(failedTodos)}</span>
-                    )}
-                    <span
-                      className="gauge"
-                      role="progressbar"
-                      aria-label={ui.v035.planProgressAria(doneTodos, totalTodos)}
-                      aria-valuemin={0}
-                      aria-valuemax={totalTodos}
-                      aria-valuenow={doneTodos}
-                      data-testid="plan-progressbar"
-                    >
-                      <span style={{ '--fill': totalTodos ? doneTodos / totalTodos : 0 } as React.CSSProperties} />
-                    </span>
-                  </div>
-                  {todos.map((td) => (
-                    <PlanTodoRow key={td.id} item={td} />
-                  ))}
-                  {planMeta?.truncated && (
-                    <div className="plan-truncated" role="note" data-testid="plan-truncated-hint">
-                      {ui.v035.planTruncated}
-                    </div>
-                  )}
-                </>
-              )}
-              {sessionId && (
-                <PlanArtifactPanel
-                  key={`${profileId}:${sessionId}`}
-                  profileId={profileId}
-                  sessionId={sessionId}
-                  cwd={sessionCwd}
-                  onStatusChange={setPlanArtifactStatus}
-                />
-              )}
-            </div>
+            <PlanTimeline
+              key={`${profileId}:${sessionId ?? ''}`}
+              profileId={profileId ?? ''}
+              sessionId={sessionId}
+              epoch={inspectorData?.owner?.epoch ?? inspectorData?.epoch}
+              cwd={sessionCwd}
+              plan={planMeta}
+              todos={todos}
+            />
           )}
 
           {activeTab === 'terminal' && (
@@ -742,34 +691,6 @@ function RightInspectorImpl({
 
 /** F-08：浅比较 props，未改动检视数据与当前会话消息引用时跳过提交。 */
 export const RightInspector = React.memo(RightInspectorImpl);
-
-const PLAN_STATUS_ICON = {
-  pending: Square,
-  in_progress: SquareDot,
-  completed: SquareCheck,
-  skipped: SquareMinus,
-  failed: SquareX,
-  unknown: SquareDashed,
-} as const;
-
-/** v0.3.5：6 态 SessionTodoStatus + 原始状态标签；长路径在行内断行（min-width: 0 + overflow-wrap: anywhere）。 */
-function PlanTodoRow({ item }: { item: SessionTodoItem }): React.ReactElement {
-  const { dict } = useI18n();
-  const v035 = dict.ui.v035;
-  const status = (item.status in PLAN_STATUS_ICON ? item.status : 'unknown') as keyof typeof PLAN_STATUS_ICON;
-  const label = v035.planStatus[status];
-  return (
-    <div className={`plan-item is-${status.replace('_', '-')}`} data-status={status} data-testid={`plan-item-${item.id}`}>
-      <UiIcon icon={PLAN_STATUS_ICON[status]} size="sm" className={`plan-item-icon is-${status.replace('_', '-')}`} label={label} />
-      <span className="plan-item-text">{item.content}</span>
-      {item.rawStatus && (status === 'unknown' || item.rawStatus !== item.status) && (
-        <span className="badge badge-mono plan-item-raw" title={v035.planRawStatus(item.rawStatus)}>
-          {item.rawStatus}
-        </span>
-      )}
-    </div>
-  );
-}
 
 function TerminalRow({ term }: { term: SessionTerminalEntry }): React.ReactElement {
   const { dict } = useI18n();

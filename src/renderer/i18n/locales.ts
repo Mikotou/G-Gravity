@@ -1,5 +1,6 @@
 import { V034_EN, V034_ZH, type V034Strings } from './domains/v034';
 import { V035_EN, V035_ZH, type V035Strings } from './domains/v035';
+import { V036_EN, V036_ZH, type V036Strings } from './domains/v036';
 import { COPY_EN, COPY_ZH, type ComponentCopyStrings } from './domains/copy';
 import type {
   AgentExecutionMode,
@@ -567,6 +568,8 @@ export interface WorkbenchStrings {
   v034: V034Strings;
   /* ---- v0.3.5 热力图 / Plan 提问与检视器 / UI 精简（见 i18n/domains/v035.ts） ---- */
   v035: V035Strings;
+  /* ---- v0.3.6 Plan 四态 / 划词标注 / 语音听写 / 信息精简（见 i18n/domains/v036.ts） ---- */
+  v036: V036Strings;
   copy: ComponentCopyStrings;
 }
 
@@ -904,6 +907,7 @@ const WORKBENCH_ZH: WorkbenchStrings = {
   },
   v034: V034_ZH,
   v035: V035_ZH,
+  v036: V036_ZH,
   copy: COPY_ZH,
 };
 
@@ -1135,6 +1139,7 @@ const WORKBENCH_EN: WorkbenchStrings = {
   },
   v034: V034_EN,
   v035: V035_EN,
+  v036: V036_EN,
   copy: COPY_EN,
 };
 

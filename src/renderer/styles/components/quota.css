@@ -2,7 +2,7 @@
 .quota-weekly{flex:0 0 auto;min-height:22px;white-space:nowrap;margin-inline-start:auto;font-variant-numeric:tabular-nums}
 .quota-weekly strong{color:var(--text-secondary);font-weight:600}
 .quota-view{position:absolute;z-index:20;overflow-y:auto;overscroll-behavior:contain;color:var(--text-primary);font-size:var(--fs-sm)}
-@container pane (max-width: 440px) {
+@container pane (max-width: 460px) {
   .quota-footer { padding-inline: 0; }
 }
 .quota-view header{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -25,12 +25,12 @@
 .quota-weekly-pct{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--text-primary);font-variant-numeric:tabular-nums}
 .quota-weekly-pct.level-low{color:var(--quota-fill-low)}
 .quota-weekly-pct.level-empty{color:var(--quota-fill-empty)}
-@container pane (max-width: 440px) {
+@container pane (max-width: 460px) {
   .quota-weekly-label { display: none; }
   .quota-mini-bar { width: 34px; }
 }
 .quota-footer[data-quota-open='true']::after{content:"";position:absolute;z-index:20;inset-inline-end:0;bottom:100%;width:min(420px, 100%);height:8px}
-.quota-view{inset-inline:auto 0;bottom:calc(100% + 8px);width:min(420px, 100%);padding:14px 15px 15px;border:1px solid var(--hairline-strong);border-radius:16px;background:color-mix(in srgb, var(--bg-surface) 95%, transparent);backdrop-filter:blur(16px) saturate(1.18);box-shadow:var(--studio-float-shadow), inset 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent);animation:gv-pop var(--dur-180) var(--ease-out);transform-origin:bottom right;max-height:min(440px, 64dvh)}
+.quota-view{inset-inline:auto 0;bottom:calc(100% + 8px);width:min(420px, 100%);padding:14px 15px 15px;border:1px solid var(--hairline-strong);border-radius:16px;background:color-mix(in srgb, var(--bg-surface) 95%, transparent);backdrop-filter:blur(16px) saturate(1.18);box-shadow:var(--studio-float-shadow), inset 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent);animation:gv-pop var(--dur-2) var(--ease-out);transform-origin:bottom right;max-height:min(440px, 64dvh)}
 .quota-view-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
 .quota-view-title-wrap{display:flex;align-items:center;gap:9px;min-width:0}
 .quota-view-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9px;background:color-mix(in srgb, var(--quota-fill) 14%, var(--bg-app));border:1px solid color-mix(in srgb, var(--quota-fill) 28%, var(--hairline));color:var(--quota-fill);flex-shrink:0}
@@ -59,13 +59,10 @@
 .quota-view progress.quota-progress.level-empty::-webkit-progress-bar{background:color-mix(in srgb, var(--quota-fill-empty) 18%, var(--active))}
 .quota-view progress.quota-progress.level-empty::-webkit-progress-value{background:var(--quota-fill-empty)}
 .quota-reset{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--muted-text);font-variant-numeric:tabular-nums}
-.cc-thinking.is-zh-track.is-translating .cc-thinking-body::before, .cc-thinking.is-zh-track.is-zh-morphing .cc-thinking-body::before{content:'';position:absolute;left:-2px;top:0;bottom:0;width:2px;border-radius:2px;background:linear-gradient(180deg, transparent 0%, var(--accent-primary) 35%, color-mix(in srgb, var(--quota-fill) 65%, var(--accent-primary)) 65%, transparent 100%);animation:zh-rail-flow var(--dur-1600) ease-in-out infinite;pointer-events:none}
-.cc-thinking.is-zh-reveal .cc-thinking-body{animation:zh-silk-reveal var(--dur-260) var(--ease-out)}
-.cc-thinking.is-zh-reveal .cc-thinking-preview{animation:zh-silk-reveal var(--dur-panel) var(--ease-out)}
-@media (prefers-reduced-motion: reduce) {
-  .quota-view, .cc-thinking.is-zh-track.is-translating .cc-thinking-body::before, .cc-thinking.is-zh-track.is-zh-morphing .cc-thinking-body::before, .cc-thinking.is-zh-reveal .cc-thinking-body, .cc-thinking.is-zh-reveal .cc-thinking-preview { animation: none; }
-}
-@container pane (max-width: 400px) {
+.cc-thinking.is-zh-track.is-translating .cc-thinking-body::before, .cc-thinking.is-zh-track.is-zh-morphing .cc-thinking-body::before{content:'';position:absolute;left:-2px;top:0;bottom:0;width:2px;border-radius:2px;background:linear-gradient(180deg, transparent 0%, var(--accent-primary) 35%, color-mix(in srgb, var(--quota-fill) 65%, var(--accent-primary)) 65%, transparent 100%);animation:zh-rail-flow var(--dur-loop) ease-in-out infinite;pointer-events:none}
+.cc-thinking.is-zh-reveal .cc-thinking-body{animation:gv-rise var(--dur-2) var(--ease-out)}
+.cc-thinking.is-zh-reveal .cc-thinking-preview{animation:gv-rise var(--dur-2) var(--ease-out)}
+@container pane (max-width: 460px) {
   .quota-buckets { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
   .quota-view article.quota-bucket-card { gap: 6px; padding: 9px 10px; }
 }
