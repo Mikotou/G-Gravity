@@ -427,7 +427,7 @@ describe('v0.2.0 正文图片复制（openLinkOrFileTarget copy-image）', () =>
     const core = new CoreService({ dataDir: mkDir('gravity-v020-img-data-'), openTargetHandler: handler });
     disposers.push(() => core.dispose());
 
-    const expectedImgPath = realpathSync(imgPath);
+    const expectedImgPath = realpathSync.native(imgPath);
     const resLocal = await core.openLinkOrFileTarget({ target: 'render.png', action: 'copy-image', cwd: dir });
     expect(resLocal).toEqual({ opened: true, modeUsed: 'copy-image', resolvedTarget: expectedImgPath });
     expect(handler).toHaveBeenCalledWith(expectedImgPath, 'copy-image', false);

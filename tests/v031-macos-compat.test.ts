@@ -404,7 +404,7 @@ describe('v0.3.1 POSIX 真实文件系统媒体探测、可执行权限与符号
         kind: 'image',
         exists: true,
         fileName: '重力 图标 01.png',
-        resolvedPath: realpathSync(iconPngPath),
+        resolvedPath: realpathSync.native(iconPngPath),
         ext: 'png',
         width: 256,
         height: 256,
@@ -416,7 +416,7 @@ describe('v0.3.1 POSIX 真实文件系统媒体探测、可执行权限与符号
         kind: 'image',
         exists: true,
         fileName: 'banner wide.png',
-        resolvedPath: realpathSync(bannerPngPath),
+        resolvedPath: realpathSync.native(bannerPngPath),
         width: 1600,
         height: 900,
       });
@@ -458,7 +458,7 @@ describe('v0.3.1 POSIX 真实文件系统媒体探测、可执行权限与符号
         { openTargetHandler: openHandler }
       );
       expect(openSh.modeUsed).toBe('reveal-in-folder');
-      expect(openHandler).toHaveBeenCalledWith(realpathSync(shPath), 'reveal-in-folder', false);
+      expect(openHandler).toHaveBeenCalledWith(realpathSync.native(shPath), 'reveal-in-folder', false);
 
       const openModeBit = await openExternalTarget(
         { target: 'run-helper.txt', action: 'browser', cwd: workspace },

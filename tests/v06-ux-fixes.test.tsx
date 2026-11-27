@@ -58,7 +58,7 @@ describe('v0.6 右击真实点击链路、Reactive 子个体收口、Swarm 折�
     const resDefault = await openFn({ target: fileUriWithHash, action: 'default-app' });
     expect(resDefault.opened).toBe(true);
     expect(resDefault.modeUsed).toBe('default-app');
-    expect(resDefault.resolvedTarget).toBe(realpathSync(sheetFile));
+    expect(resDefault.resolvedTarget).toBe(realpathSync.native(sheetFile));
 
     const resCopy = await openFn({ target: fileUriWithHash, action: 'copy' });
     expect(resCopy.modeUsed).toBe('copy');

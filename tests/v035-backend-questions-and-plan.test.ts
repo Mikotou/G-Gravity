@@ -19,7 +19,7 @@ import type { QuestionSubmission } from '../src/shared/user-question';
 const cleanup: Array<() => unknown> = [];
 afterEach(async () => { try { while (cleanup.length) await cleanup.pop()!(); } finally { vi.restoreAllMocks(); } });
 function directory() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'gravity-v035-plan-')));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'gravity-v035-plan-')));
   cleanup.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
   return dir;
 }

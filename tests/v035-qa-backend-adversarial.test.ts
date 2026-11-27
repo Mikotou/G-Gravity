@@ -64,7 +64,7 @@ afterEach(async () => {
 });
 
 function tempDir(prefix = 'gravity-v035-qa-'): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
   cleanup.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5 }));
   return dir;
 }
