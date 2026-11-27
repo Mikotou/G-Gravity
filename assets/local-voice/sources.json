@@ -20,7 +20,7 @@
       "Copy build-voice/whisper.js as whisper.cjs and build-voice/whisper.wasm as whisper.wasm."
     ],
     "wasmSha256": "3370566d07260b63b7fc0d912c4ac70767a7ceb357bc07c47c2ad4098f808c79",
-    "jsSha256": "3ed7a89dc018a4ea7ca28dbe112d27ea9eddfb28186a575c8b9e8e73c6568f4f",
+    "jsSha256": "d7d8e00bfde58aaa0c089f6ea9b4bc2121f77710fa4ff9c94127cfc6ceb76651",
     "licenses": [
       "licenses/whisper-cpp.txt",
       "licenses/emscripten.txt",

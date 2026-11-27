@@ -15,7 +15,10 @@ function literalPath(path) {
   return full;
 }
 
-const sameIdentity = (a, b) => a.ino !== 0n && a.dev === b.dev && a.ino === b.ino;
+const sameIdentity = (a, b) =>
+  a.ino !== 0n &&
+  a.ino === b.ino &&
+  (a.dev === b.dev || (process.platform === 'win32' && (a.dev === 0n || b.dev === 0n)));
 function checkedPath(path) {
   const full = literalPath(path);
   const root = parse(full).root;
