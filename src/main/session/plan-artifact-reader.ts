@@ -28,6 +28,7 @@ interface Observation {
   watchers: Map<string, FSWatcher>;
   directories: Map<string, string>;
   timer?: NodeJS.Timeout;
+  settleTimer?: NodeJS.Timeout;
   reading?: Promise<PlanArtifactSnapshot>;
 }
 
@@ -88,6 +89,8 @@ export class PlanArtifactReader {
 
   private forget(entry: Observation): void {
     clearTimeout(entry.timer);
+    clearTimeout(entry.settleTimer);
+    entry.settleTimer = undefined;
     for (const watcher of entry.watchers.values()) watcher.close();
     entry.watchers.clear();
     if (this.entries.get(entry.owner.sessionId) === entry) this.entries.delete(entry.owner.sessionId);
@@ -128,8 +131,8 @@ export class PlanArtifactReader {
     }, 60);
     entry.timer.unref();
   }
-  private watch(entry: Observation, key: string, dir: string, child: string): void {
-    if (entry.watchers.has(key)) return;
+  private watch(entry: Observation, key: string, dir: string, child: string): boolean {
+    if (entry.watchers.has(key)) return false;
     const notice = () => {
       if (this.entries.get(entry.owner.sessionId) === entry) this.notice(entry.owner.sessionId);
     };
@@ -151,7 +154,8 @@ export class PlanArtifactReader {
         if (entry.watchers.get(key) === watcher) { entry.watchers.delete(key); notice(); }
       });
       entry.watchers.set(key, watcher);
-    } catch { /* A force refresh always rechecks the actual file. */ }
+      return true;
+    } catch { return false; /* A force refresh always rechecks the actual file. */ }
   }
 
   async get(input: GetSessionPlanArtifactInput & Pick<Owner, 'epoch'>): Promise<PlanArtifactSnapshot> {
@@ -193,13 +197,14 @@ export class PlanArtifactReader {
     const result: PlanArtifactSnapshot = { status: 'missing', view, owner, epoch: owner.epoch, revision: 0 };
     const targets = new Set<string>();
     const directories = new Map<string, string>();
+    let addedWatcher = false;
     const observe = (dir: string, child: string) => {
       // A directory replaced at the same pathname needs a watcher on its new inode.
       const stat = lstatSync(dir, { bigint: true });
       const key = JSON.stringify([join(dir, child), String(stat.dev), String(stat.ino)]);
       targets.add(key);
       // Subscribe before probing the child, including when it has yet to be created.
-      this.watch(entry, key, dir, child);
+      if (this.watch(entry, key, dir, child)) addedWatcher = true;
       if (entry.watchers.has(key)) directories.set(dir, directoryIdentity(stat));
     };
     const locate = () => {
@@ -238,6 +243,15 @@ export class PlanArtifactReader {
         entry.directories = directories;
         for (const [key, watcher] of entry.watchers) {
           if (!targets.has(key)) { watcher.close(); entry.watchers.delete(key); }
+        }
+        // Darwin's FSEvents stream can miss writes immediately after fs.watch returns.
+        if (process.platform === 'darwin' && addedWatcher) {
+          clearTimeout(entry.settleTimer);
+          entry.settleTimer = setTimeout(() => {
+            entry.settleTimer = undefined;
+            if (this.entries.get(owner.sessionId) === entry) void this.get(entry.owner).catch(() => {});
+          }, 120);
+          entry.settleTimer.unref();
         }
       }
     }
