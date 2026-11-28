@@ -197,11 +197,8 @@ export class CoreService extends EventEmitter {
     });
     this.client.on('connected', () => this.publishConnection());
     this.client.on('connection-changed', () => this.publishConnection());
-    this.client.on('disconnected', () => {
-      this.voice.revoke('session-closed');
-      this.planArtifacts.clear();
-      this.sessionEpochs.clear();
-    });
+    // Offline tabs keep their local plan owner and watchers across transport disconnects.
+    this.client.on('disconnected', () => this.voice.revoke('session-closed'));
     this.sessions.on('closed', (id: string) => this.retireSession(id));
     this.turns.bindEvents();
   }
