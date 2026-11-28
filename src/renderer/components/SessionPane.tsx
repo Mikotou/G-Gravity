@@ -64,7 +64,8 @@ import { ThinkingBlock } from './ThinkingBlock';
 import { AccountQuotaFooter } from './AccountQuotaView';
 import { PaneStatusChip, ToolActivityStream, TurnOutcomeBar, TurnSettledStrip } from './TurnActivity';
 import { isTurnUnconfirmed } from '../lib/turn-insights';
-import { latestTodoMessageId, resolveAuthoritativeTodos, derivePlanViewKind, computePlanProgress } from '../lib/plan-view';
+import { latestTodoMessageId, resolveAuthoritativeTodos, derivePlanViewKind } from '../lib/plan-view';
+import { usePlanArtifact } from '../hooks/usePlanArtifact';
 import { WorkingIndicator } from './WorkingIndicator';
 import { InlinePlanCard } from './PlanTimeline';
 import { TurnDiagnosticCard, type DiagnosticHandlers } from './TurnDiagnosticCard';
@@ -830,6 +831,19 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
   const [hasUnseen, setHasUnseen] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [dismissedDiagnostics, setDismissedDiagnostics] = useState<Set<string>>(() => new Set());
+  const [planSourceOpen, setPlanSourceOpen] = useState(false);
+  const planProfileId = session?.profileId || 'default';
+  const planSessionId = session?.sessionId ?? null;
+  const planEpoch = props.inspectorData?.owner?.epoch ?? props.inspectorData?.epoch;
+  useEffect(() => {
+    setPlanSourceOpen(false);
+  }, [planProfileId, planSessionId]);
+  const planArtifact = usePlanArtifact({
+    profileId: planProfileId,
+    sessionId: planSessionId,
+    epoch: planEpoch,
+    contentOpen: planSourceOpen,
+  });
   const beforePrepend = useRef<{ height: number; top: number; count: number } | null>(null);
   const skipFollow = useRef(false);
   const restoringScroll = useRef(false);
@@ -1187,30 +1201,35 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
   const latestTodoMessage = useMemo(() => latestTodoMessageId(messages), [messages]);
 
-  // v0.3.6：内联 Plan 卡片数据
+  // v0.3.6：内联 Plan 卡片数据（结合 usePlanArtifact 真实摘要，确保 outline / unavailable 态在 0 todos 时也能渲染）
   const planMeta = props.inspectorData?.plan;
   const planTodos = useMemo(
     () => resolveAuthoritativeTodos(planMeta, props.inspectorData?.todos, messages),
     [planMeta, props.inspectorData?.todos, messages]
   );
+  const planSummary = planArtifact.summary;
+  const planOutline = planSummary?.status === 'ready' ? planSummary.outline : undefined;
   const planKind = derivePlanViewKind({
     plan: planMeta,
     todos: planTodos,
-    hasOutline: false, // outline 在 InlinePlanCard 内部通过 usePlanArtifact 计算
+    artifactStatus: planArtifact.error ? 'error' : planSummary?.status,
+    hasOutline: Boolean(planOutline),
   });
-  const planProgress = useMemo(() => computePlanProgress(planMeta, planTodos), [planMeta, planTodos]);
-  // 宿主消息：execution 优先 latestTodoMessage，其余 lastAssistantId
+  // 宿主消息：execution 优先 latestTodoMessage，其余 lastAssistantId；无助手消息时于流底部兜底渲染
   const planHostMessageId = planKind === 'empty' ? undefined
     : planKind === 'execution' ? (latestTodoMessage || lastAssistantId)
     : lastAssistantId;
   const inlinePlanNode = planKind !== 'empty' ? (
     <InlinePlanCard
-      profileId={session.profileId || 'default'}
+      profileId={planProfileId}
       sessionId={session.sessionId}
-      epoch={props.inspectorData?.owner?.epoch ?? props.inspectorData?.epoch}
+      epoch={planEpoch}
       cwd={session.cwd}
       plan={planMeta}
       todos={planTodos}
+      artifact={planArtifact}
+      sourceOpen={planSourceOpen}
+      onSourceOpenChange={setPlanSourceOpen}
     />
   ) : null;
 

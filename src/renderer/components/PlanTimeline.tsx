@@ -16,7 +16,7 @@ import type { SessionPlanSummary, SessionTodoItem } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { stripIpcErrorPrefix } from '../i18n/locales';
 import { isImeComposing } from '../lib/platform-keys';
-import { usePlanArtifact } from '../hooks/usePlanArtifact';
+import { usePlanArtifact, type UsePlanArtifactResult } from '../hooks/usePlanArtifact';
 import {
   computePlanProgress,
   derivePlanViewKind,
@@ -24,7 +24,7 @@ import {
   normalizeTodoStatus,
   type PlanTimelineEntry,
 } from '../lib/plan-view';
-import { PlanDocument, PlanSourceDrawer, formatPlanTime, openPlanArtifactExternally } from './PlanArtifactPanel';
+import { PlanDocument, PlanSourceDrawer, formatPlanTime, isPlanArtifactSelfTarget, openPlanArtifactExternally, planHeadingSlug } from './PlanArtifactPanel';
 import { scrollBehavior } from '../lib/motion';
 import { getDesktopBridge } from '../services/desktop-bridge';
 import { Icon } from './ui/Icon';
@@ -297,6 +297,9 @@ export function InlinePlanCard({
   cwd,
   plan,
   todos,
+  artifact: artifactProp,
+  sourceOpen: sourceOpenProp,
+  onSourceOpenChange,
 }: {
   profileId: string;
   sessionId: string;
@@ -304,6 +307,9 @@ export function InlinePlanCard({
   cwd?: string;
   plan: SessionPlanSummary | undefined;
   todos: SessionTodoItem[];
+  artifact?: UsePlanArtifactResult;
+  sourceOpen?: boolean;
+  onSourceOpenChange?: (open: boolean) => void;
 }): React.ReactElement | null {
   const { dict } = useI18n();
   const t5 = dict.ui.v035;
@@ -311,20 +317,32 @@ export function InlinePlanCard({
   const uid = useId();
 
   const [expanded, setExpanded] = useState(true);
-  const [sourceOpen, setSourceOpen] = useState(false);
+  const [ownSourceOpen, setOwnSourceOpen] = useState(false);
+  const sourceOpen = sourceOpenProp ?? ownSourceOpen;
+  const setSourceOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      const value = typeof next === 'function' ? next(sourceOpen) : next;
+      if (onSourceOpenChange) onSourceOpenChange(value);
+      else setOwnSourceOpen(value);
+    },
+    [onSourceOpenChange, sourceOpen]
+  );
   const [openError, setOpenError] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const docRef = React.useRef<HTMLDivElement | null>(null);
 
   // 归属切换复位
   useEffect(() => {
-    setSourceOpen(false);
+    setOwnSourceOpen(false);
+    onSourceOpenChange?.(false);
     setOpenError('');
     setExpandedGroups({});
     setExpanded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileId, sessionId]);
 
-  const artifact = usePlanArtifact({ profileId, sessionId, epoch, contentOpen: sourceOpen });
+  const ownArtifact = usePlanArtifact({ profileId, sessionId: artifactProp ? null : sessionId, epoch, contentOpen: sourceOpen });
+  const artifact = artifactProp ?? ownArtifact;
   const summary = artifact.summary;
   const outline = summary?.status === 'ready' ? summary.outline : undefined;
   const hasDoc = summary?.status === 'ready';
@@ -338,9 +356,16 @@ export function InlinePlanCard({
 
   const progress = useMemo(() => computePlanProgress(plan, todos), [plan, todos]);
   const timeline = useMemo(() => groupPlanTimeline(todos), [todos]);
-  const updated = formatPlanTime(summary?.updatedAt);
+  const updated = formatPlanTime(artifact.content?.updatedAt ?? summary?.updatedAt);
   const owner = sessionId
-    ? { profileId, sessionId, ...(epoch !== undefined ? { epoch } : {}), revision: summary?.revision, summaryRevision: summary?.revision }
+    ? {
+        profileId,
+        sessionId,
+        ...(epoch !== undefined ? { epoch } : {}),
+        revision: sourceOpen && artifact.content?.revision !== undefined ? artifact.content.revision : summary?.revision,
+        ...(summary?.revision !== undefined ? { summaryRevision: summary.revision } : {}),
+        ...(artifact.content?.revision !== undefined ? { contentRevision: artifact.content.revision } : {}),
+      }
     : null;
 
   // Esc handler：sourceOpen 时捕获阶段关闭原文
@@ -355,7 +380,7 @@ export function InlinePlanCard({
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [sourceOpen]);
+  }, [setSourceOpen, sourceOpen]);
 
   const openExternal = useCallback(() => {
     if (!summary?.filePath || !owner || !sessionId) return;
@@ -364,7 +389,7 @@ export function InlinePlanCard({
       setOpenError(`${t5.planArtifactOpenError}：${stripIpcErrorPrefix(reason)}`)
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, summary?.filePath, sessionId, profileId, epoch, summary?.revision, t5.planArtifactOpenError]);
+  }, [cwd, summary?.filePath, sessionId, profileId, epoch, summary?.revision, artifact.content?.revision, sourceOpen, t5.planArtifactOpenError]);
 
   const openLink = useCallback(
     async (target: string) => {
@@ -373,25 +398,31 @@ export function InlinePlanCard({
         let raw = target.slice(1);
         try { raw = decodeURIComponent(raw); } catch { /* keep raw */ }
         const normalizedRaw = raw.trim().toLowerCase();
+        const slug = planHeadingSlug(raw);
         const headings = docRef.current?.querySelectorAll<HTMLElement>('[data-anchor]');
-        const match = headings ? Array.from(headings).find((el) => el.dataset.anchor === normalizedRaw) : null;
+        const match = headings
+          ? Array.from(headings).find((el) => el.dataset.anchor === normalizedRaw || el.dataset.anchor === slug)
+          : null;
         if (match && typeof match.scrollIntoView === 'function') {
           match.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
         }
         return;
       }
+      const isSelf = isPlanArtifactSelfTarget(target, summary?.filePath);
       try {
         await getDesktopBridge().openLinkOrFileTarget({
           target,
           action: /^https?:/i.test(target) ? 'browser' : 'default-app',
           ...(cwd ? { cwd } : {}),
           sessionId,
+          ...(isSelf && owner ? { planArtifactOwner: owner } : {}),
         });
       } catch (reason) {
         setOpenError(`${t5.planArtifactOpenError}：${stripIpcErrorPrefix(reason)}`);
       }
     },
-    [cwd, sessionId, t5.planArtifactOpenError]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cwd, sessionId, summary?.filePath, profileId, epoch, summary?.revision, artifact.content?.revision, sourceOpen, t5.planArtifactOpenError]
   );
 
   if (kind === 'empty') return null;
@@ -400,10 +431,9 @@ export function InlinePlanCard({
 
   const handleToggle = () => setExpanded((v) => !v);
   const handleSourceToggle = () => {
-    setSourceOpen((v) => {
-      if (!v) setExpanded(true); // opening source forces card expansion
-      return !v;
-    });
+    const next = !sourceOpen;
+    if (next) setExpanded(true);
+    setSourceOpen(next);
   };
 
   // --- header summary text ---
@@ -412,18 +442,12 @@ export function InlinePlanCard({
     headerLabel = (
       <>
         <span className="inline-plan-label">{dict.planProgress(progress.done, progress.total)}</span>
-        <span
-          className="plan-progressbar inline-plan-bar"
-          role="progressbar"
-          aria-label={t5.planProgressAria(progress.done, progress.total)}
-          aria-valuemin={0}
-          aria-valuemax={progress.total}
-          aria-valuenow={progress.done}
-          data-testid="plan-progressbar"
-        >
-          <span style={{ '--fill': progress.total ? progress.done / progress.total : 0 } as React.CSSProperties} />
-        </span>
-        {progress.failed > 0 && (
+        {!expanded && (
+          <span className="plan-progressbar inline-plan-bar" aria-hidden="true">
+            <span style={{ '--fill': progress.total ? progress.done / progress.total : 0 } as React.CSSProperties} />
+          </span>
+        )}
+        {!expanded && progress.failed > 0 && (
           <span className="badge badge-danger inline-plan-fail">{t5.planFailedCount(progress.failed)}</span>
         )}
         {!expanded && progress.current && (
@@ -434,7 +458,7 @@ export function InlinePlanCard({
   } else if (kind === 'outline') {
     headerLabel = (
       <>
-        <span className="inline-plan-label">{outline?.title || t6.inlinePlanLabel}</span>
+        <span className="inline-plan-label">{!expanded && outline?.title ? outline.title : t6.inlinePlanLabel}</span>
         {outline && outline.sectionCount > 0 && (
           <span className="badge inline-plan-sections">{t6.inlinePlanSectionsBadge(outline.sectionCount)}</span>
         )}
@@ -443,7 +467,7 @@ export function InlinePlanCard({
   } else if (kind === 'cleared') {
     headerLabel = <span className="inline-plan-label">{t6.planCleared}</span>;
   } else {
-    headerLabel = <span className="inline-plan-label">{t6.planUnavailable('')}</span>;
+    headerLabel = <span className="inline-plan-label">{t6.inlinePlanLabel}</span>;
   }
 
   return (

@@ -29,7 +29,7 @@ function normalizeLocalPathForCompare(raw: string): string {
   return /^[a-zA-Z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
-function isPlanArtifactSelfTarget(target: string, filePath?: string): boolean {
+export function isPlanArtifactSelfTarget(target: string, filePath?: string): boolean {
   if (!filePath || !target || target.startsWith('#') || /^https?:/i.test(target)) return false;
   const a = normalizeLocalPathForCompare(target);
   const b = normalizeLocalPathForCompare(filePath);
