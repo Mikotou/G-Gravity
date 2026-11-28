@@ -28,6 +28,12 @@ export interface V036Strings {
   planLoadingSource: string;
   planSectionsMore: (n: number) => string;
 
+  /* ---- Inline Plan Card (v0.3.6) ---- */
+  inlinePlanLabel: string;
+  inlinePlanViewSource: string;
+  inlinePlanHideSource: string;
+  inlinePlanSectionsBadge: (n: number) => string;
+
   /* ---- 划词标注 ---- */
   annQuote: string;
   annQuoteOnly: string;
@@ -142,6 +148,11 @@ export const V036_ZH: V036Strings = {
   planMermaid: (n) => `流程图（${n} 行）`,
   planLoadingSource: '正在读取原文…',
   planSectionsMore: (n) => `另有 ${n} 个章节`,
+
+  inlinePlanLabel: '执行计划',
+  inlinePlanViewSource: '查看原文',
+  inlinePlanHideSource: '收起原文',
+  inlinePlanSectionsBadge: (n) => `${n} 节`,
 
   annQuote: '引用',
   annQuoteOnly: '仅引用',
@@ -266,6 +277,11 @@ export const V036_EN: V036Strings = {
   planMermaid: (n) => `Diagram (${n} lines)`,
   planLoadingSource: 'Loading source…',
   planSectionsMore: (n) => `${n} more ${n === 1 ? 'section' : 'sections'}`,
+
+  inlinePlanLabel: 'Execution plan',
+  inlinePlanViewSource: 'View source',
+  inlinePlanHideSource: 'Hide source',
+  inlinePlanSectionsBadge: (n) => `${n} ${n === 1 ? 'section' : 'sections'}`,
 
   annQuote: 'Quote',
   annQuoteOnly: 'Quote only',

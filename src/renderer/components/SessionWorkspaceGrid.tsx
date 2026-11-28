@@ -9,6 +9,7 @@ import type {
   ConversationTreeState,
   ManagedSessionSummary,
   MessagePagePosition,
+  SessionInspectorData,
   SwarmTopologyState,
   WorkspaceLayoutState,
 } from '@shared';
@@ -30,6 +31,7 @@ export interface SessionWorkspaceGridProps extends Omit<SharedPaneProps, 'availa
   auditLog: ApprovalAuditEntry[];
   swarmBySession: Record<string, SwarmTopologyState>;
   treeByRoot?: Record<string, ConversationTreeState>;
+  inspectorBySession?: Record<string, SessionInspectorData>;
   onCommitSplitRatio?: (ratio: number) => void;
 }
 
@@ -46,6 +48,7 @@ export function SessionWorkspaceGrid({
   historyIds = [], renderHistory,
   swarmBySession,
   treeByRoot,
+  inspectorBySession,
   onCommitSplitRatio,
   ...paneProps
 }: SessionWorkspaceGridProps): React.ReactElement {
@@ -103,6 +106,7 @@ export function SessionWorkspaceGrid({
           latestAudit={slot ? auditLog.find((entry) => entry.sessionId === slot.sessionId) : undefined}
           swarmState={slot ? swarmBySession[slot.sessionId] : undefined}
           conversationTree={slot && treeByRoot ? treeByRoot[slot.rootSessionId || slot.sessionId] : undefined}
+          inspectorData={slot && inspectorBySession ? inspectorBySession[slot.sessionId] : undefined}
         />}
         {split && idx === 0 && onCommitSplitRatio && (
           // 分隔条挂在左栏右缘，网格仍只有两个子节点。

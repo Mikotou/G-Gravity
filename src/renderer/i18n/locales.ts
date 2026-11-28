@@ -1203,7 +1203,6 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
     inspectorTabs: {
       diff: 'Diff',
       files: 'Files',
-      plan: 'Plan',
       terminal: 'Terminal',
       context: 'Context',
       tree: '分支树',
@@ -1629,7 +1628,6 @@ export const UI_DICTIONARIES: Record<ClientLocale, UiDictionary> = {
     inspectorTabs: {
       diff: 'Diff',
       files: 'Files',
-      plan: 'Plan',
       terminal: 'Terminal',
       context: 'Context',
       tree: 'Tree',

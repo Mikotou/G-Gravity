@@ -8,7 +8,6 @@ import {
   FileDiff,
   GitBranch,
   Layers,
-  ListTodo,
   Network,
   PanelRight,
   PanelRightClose,
@@ -35,8 +34,7 @@ import { UnifiedDiffBlock } from './UnifiedDiffBlock';
 import { terminalCommand } from '../../shared/session-contract';
 import { Icon as UiIcon } from './ui/Icon';
 import { handleTablistKeyDown } from '../hooks/useRovingTabs';
-import { PlanTimeline } from './PlanTimeline';
-import { resolveAuthoritativeTodos } from '../lib/plan-view';
+
 
 export interface RightInspectorProps {
   collapsed: boolean;
@@ -90,7 +88,6 @@ function saveInspectorFloating(floating: boolean): void {
 
 const TABS: ReadonlyArray<{ id: RightInspectorTab; Icon: typeof FileDiff }> = [
   { id: 'diff', Icon: FileDiff },
-  { id: 'plan', Icon: ListTodo },
   { id: 'terminal', Icon: SquareTerminal },
   { id: 'context', Icon: BarChart3 },
   { id: 'swarm', Icon: Network },
@@ -249,14 +246,6 @@ function RightInspectorImpl({
     return Array.from(map.values());
   }, [inspectorData?.diffs, sessionMessages]);
 
-  // v0.3.5：`inspectorData.plan` 是权威 Plan 摘要。存在时只认快照（`empty` 绝不复活旧消息待办）；
-  // 仅当旧快照缺省 `plan` 时，才按历史兼容从最近的消息向前回溯已有的待办列表。
-  const planMeta = inspectorData?.plan;
-  const todos = useMemo(
-    () => resolveAuthoritativeTodos(planMeta, inspectorData?.todos, sessionMessages),
-    [inspectorData?.todos, planMeta, sessionMessages]
-  );
-
   const terminals = useMemo<SessionTerminalEntry[]>(() => {
     // 用现有终端快照中的工具调用号识别已收录条目，再从消息中的 Bash 输出补齐缺项。
     const list: SessionTerminalEntry[] = [...(inspectorData?.terminals ?? [])];
@@ -322,17 +311,14 @@ function RightInspectorImpl({
   const totalAdded = diffs.reduce((s, d) => s + d.addedLines, 0);
   const totalRemoved = diffs.reduce((s, d) => s + d.removedLines, 0);
 
-  const totalTodos = planMeta?.state === 'present' ? Math.max(planMeta.totalCount, todos.length) : todos.length;
   // 标签徽标各自表示不同数量。终端有失败时优先显示失败数，协作面板显示正在工作的成员数，分支树在存在分叉时显示分支总数。
   const counts: Partial<Record<RightInspectorTab, number>> = {
     diff: diffs.length,
-    plan: totalTodos,
     terminal: unread.length,
     swarm: swarmTopology?.isActive ? swarmTopology.stats.working : 0,
   };
   const countTone: Partial<Record<RightInspectorTab, 'danger' | 'accent' | 'muted'>> = {
     diff: 'accent',
-    plan: 'muted',
     terminal: failedTerminals ? 'danger' : 'muted',
     swarm: 'accent',
   };
@@ -601,18 +587,6 @@ function RightInspectorImpl({
                 </>
               )}
             </div>
-          )}
-
-          {activeTab === 'plan' && (
-            <PlanTimeline
-              key={`${profileId}:${sessionId ?? ''}`}
-              profileId={profileId ?? ''}
-              sessionId={sessionId}
-              epoch={inspectorData?.owner?.epoch ?? inspectorData?.epoch}
-              cwd={sessionCwd}
-              plan={planMeta}
-              todos={todos}
-            />
           )}
 
           {activeTab === 'terminal' && (

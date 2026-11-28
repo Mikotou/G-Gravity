@@ -1461,7 +1461,6 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile, getPro
       openInspectorAt(id, 'context');
     },
     onInspectDiffFile: (id: string, fp: string) => openInspectorAt(id, 'diff', fp),
-    onOpenPlanInspector: (id: string) => openInspectorAt(id, 'plan'),
   });
   const sidebarHandlers = useStableCallbacks({
     onToggleCollapse: () => void patchLayout({ leftSidebarCollapsed: true }),
@@ -1725,6 +1724,7 @@ function ProfileWorkspace({ reopenAccounts, initialNotice, reloadProfile, getPro
               telemetryDashboard={telemetry}
               swarmBySession={swarmBySession}
               treeByRoot={treeByRoot}
+              inspectorBySession={inspectorBySession}
               switchingBranch={switchingBranch}
               scrollMemoryRef={scrollMemoryRef}
               appIcon={preferences.appIcon}

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import {
   ChevronRight,
   Circle,
@@ -10,10 +10,12 @@ import {
   ExternalLink,
   FileText,
   ListTodo,
+  RefreshCw,
 } from 'lucide-react';
 import type { SessionPlanSummary, SessionTodoItem } from '@shared';
 import { useI18n } from '../i18n/I18nContext';
 import { stripIpcErrorPrefix } from '../i18n/locales';
+import { isImeComposing } from '../lib/platform-keys';
 import { usePlanArtifact } from '../hooks/usePlanArtifact';
 import {
   computePlanProgress,
@@ -22,7 +24,9 @@ import {
   normalizeTodoStatus,
   type PlanTimelineEntry,
 } from '../lib/plan-view';
-import { PlanSourceDrawer, formatPlanTime, openPlanArtifactExternally } from './PlanArtifactPanel';
+import { PlanDocument, PlanSourceDrawer, formatPlanTime, openPlanArtifactExternally } from './PlanArtifactPanel';
+import { scrollBehavior } from '../lib/motion';
+import { getDesktopBridge } from '../services/desktop-bridge';
 import { Icon } from './ui/Icon';
 
 /** 6 态：图标 / 颜色（CSS `is-*`）/ 文案三者一致 */
@@ -116,8 +120,8 @@ export function PlanTimeline({
   // QA1-FE-13 / TC-PLAN-01：仅状态 ②（概要）与状态 ③（实时执行）展示底部文件入口；① 纯空与 ④ 显式清空 DOM 严格 0 文件栏
   const showSourceFooter = hasDoc && (kind === 'outline' || kind === 'execution');
   const sourceFooter = showSourceFooter ? (
-    <div className="plan-source-line" data-testid="plan-source-line">
-      <button type="button" className="plan-source-open" onClick={() => setDrawerOpen(true)} data-testid="plan-source-open">
+    <div className="plan-src-footer" data-testid="plan-source-line">
+      <button type="button" className="inline-plan-src-btn" onClick={() => setDrawerOpen(true)} data-testid="plan-source-open">
         <Icon icon={FileText} size="xs" />
         <span>
           {kind === 'execution'
@@ -127,7 +131,7 @@ export function PlanTimeline({
             : t6.planViewSource}
         </span>
       </button>
-      {updated && <span className="plan-source-meta truncate">{t6.planUpdated(updated)}</span>}
+      {updated && <span className="plan-drawer-meta truncate">{t6.planUpdated(updated)}</span>}
       {summary?.filePath && (
         <button
           type="button"
@@ -277,5 +281,355 @@ export function PlanTodoRow({ item }: { item: SessionTodoItem }): React.ReactEle
         </span>
       )}
     </li>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * v0.3.6 InlinePlanCard：宽幅内联卡片，渲染在主对话流内 MessageTurn 中。
+ * 五态：empty → null（0 DOM），execution / outline / cleared / unavailable。
+ * 内部管理 usePlanArtifact 与 source drawer 的展开/折叠/Esc/会话切换复位。
+ * ------------------------------------------------------------------------- */
+
+export function InlinePlanCard({
+  profileId,
+  sessionId,
+  epoch,
+  cwd,
+  plan,
+  todos,
+}: {
+  profileId: string;
+  sessionId: string;
+  epoch?: number;
+  cwd?: string;
+  plan: SessionPlanSummary | undefined;
+  todos: SessionTodoItem[];
+}): React.ReactElement | null {
+  const { dict } = useI18n();
+  const t5 = dict.ui.v035;
+  const t6 = dict.ui.v036;
+  const uid = useId();
+
+  const [expanded, setExpanded] = useState(true);
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [openError, setOpenError] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const docRef = React.useRef<HTMLDivElement | null>(null);
+
+  // 归属切换复位
+  useEffect(() => {
+    setSourceOpen(false);
+    setOpenError('');
+    setExpandedGroups({});
+    setExpanded(true);
+  }, [profileId, sessionId]);
+
+  const artifact = usePlanArtifact({ profileId, sessionId, epoch, contentOpen: sourceOpen });
+  const summary = artifact.summary;
+  const outline = summary?.status === 'ready' ? summary.outline : undefined;
+  const hasDoc = summary?.status === 'ready';
+
+  const kind = derivePlanViewKind({
+    plan,
+    todos,
+    artifactStatus: artifact.error ? 'error' : summary?.status,
+    hasOutline: Boolean(outline),
+  });
+
+  const progress = useMemo(() => computePlanProgress(plan, todos), [plan, todos]);
+  const timeline = useMemo(() => groupPlanTimeline(todos), [todos]);
+  const updated = formatPlanTime(summary?.updatedAt);
+  const owner = sessionId
+    ? { profileId, sessionId, ...(epoch !== undefined ? { epoch } : {}), revision: summary?.revision, summaryRevision: summary?.revision }
+    : null;
+
+  // Esc handler：sourceOpen 时捕获阶段关闭原文
+  useEffect(() => {
+    if (!sourceOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || isImeComposing(e)) return;
+      if (document.querySelector('dialog[open], [aria-modal="true"], .target-context-menu, .selection-floating-bar')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setSourceOpen(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [sourceOpen]);
+
+  const openExternal = useCallback(() => {
+    if (!summary?.filePath || !owner || !sessionId) return;
+    setOpenError('');
+    void openPlanArtifactExternally({ filePath: summary.filePath, cwd, sessionId, owner }).catch((reason) =>
+      setOpenError(`${t5.planArtifactOpenError}：${stripIpcErrorPrefix(reason)}`)
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cwd, summary?.filePath, sessionId, profileId, epoch, summary?.revision, t5.planArtifactOpenError]);
+
+  const openLink = useCallback(
+    async (target: string) => {
+      setOpenError('');
+      if (target.startsWith('#')) {
+        let raw = target.slice(1);
+        try { raw = decodeURIComponent(raw); } catch { /* keep raw */ }
+        const normalizedRaw = raw.trim().toLowerCase();
+        const headings = docRef.current?.querySelectorAll<HTMLElement>('[data-anchor]');
+        const match = headings ? Array.from(headings).find((el) => el.dataset.anchor === normalizedRaw) : null;
+        if (match && typeof match.scrollIntoView === 'function') {
+          match.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+        }
+        return;
+      }
+      try {
+        await getDesktopBridge().openLinkOrFileTarget({
+          target,
+          action: /^https?:/i.test(target) ? 'browser' : 'default-app',
+          ...(cwd ? { cwd } : {}),
+          sessionId,
+        });
+      } catch (reason) {
+        setOpenError(`${t5.planArtifactOpenError}：${stripIpcErrorPrefix(reason)}`);
+      }
+    },
+    [cwd, sessionId, t5.planArtifactOpenError]
+  );
+
+  if (kind === 'empty') return null;
+
+  const showFileButtons = hasDoc && (kind === 'outline' || kind === 'execution');
+
+  const handleToggle = () => setExpanded((v) => !v);
+  const handleSourceToggle = () => {
+    setSourceOpen((v) => {
+      if (!v) setExpanded(true); // opening source forces card expansion
+      return !v;
+    });
+  };
+
+  // --- header summary text ---
+  let headerLabel: React.ReactNode;
+  if (kind === 'execution') {
+    headerLabel = (
+      <>
+        <span className="inline-plan-label">{dict.planProgress(progress.done, progress.total)}</span>
+        <span
+          className="plan-progressbar inline-plan-bar"
+          role="progressbar"
+          aria-label={t5.planProgressAria(progress.done, progress.total)}
+          aria-valuemin={0}
+          aria-valuemax={progress.total}
+          aria-valuenow={progress.done}
+          data-testid="plan-progressbar"
+        >
+          <span style={{ '--fill': progress.total ? progress.done / progress.total : 0 } as React.CSSProperties} />
+        </span>
+        {progress.failed > 0 && (
+          <span className="badge badge-danger inline-plan-fail">{t5.planFailedCount(progress.failed)}</span>
+        )}
+        {!expanded && progress.current && (
+          <span className="inline-plan-now truncate">{t6.planNow(progress.current)}</span>
+        )}
+      </>
+    );
+  } else if (kind === 'outline') {
+    headerLabel = (
+      <>
+        <span className="inline-plan-label">{outline?.title || t6.inlinePlanLabel}</span>
+        {outline && outline.sectionCount > 0 && (
+          <span className="badge inline-plan-sections">{t6.inlinePlanSectionsBadge(outline.sectionCount)}</span>
+        )}
+      </>
+    );
+  } else if (kind === 'cleared') {
+    headerLabel = <span className="inline-plan-label">{t6.planCleared}</span>;
+  } else {
+    headerLabel = <span className="inline-plan-label">{t6.planUnavailable('')}</span>;
+  }
+
+  return (
+    <section
+      className="inline-plan-card"
+      data-testid="inline-plan-card"
+      data-plan-view={kind}
+      data-annotation-skip=""
+      aria-label={t6.inlinePlanLabel}
+    >
+      {/* -- header bar -- */}
+      <div className="inline-plan-head">
+        <button
+          type="button"
+          className="inline-plan-toggle"
+          onClick={handleToggle}
+          aria-expanded={expanded}
+          data-testid="inline-plan-toggle"
+        >
+          <Icon icon={ChevronRight} size="xs" className={`inline-plan-chev${expanded ? ' is-open' : ''}`} />
+          <Icon icon={ListTodo} size="sm" className="inline-plan-icon" />
+          {headerLabel}
+        </button>
+        {showFileButtons && (
+          <span className="inline-plan-actions">
+            <button
+              type="button"
+              className="inline-plan-src-btn"
+              onClick={handleSourceToggle}
+              data-testid={sourceOpen ? 'plan-source-close' : 'plan-source-open'}
+            >
+              <Icon icon={FileText} size="xs" />
+              <span>{sourceOpen ? t6.inlinePlanHideSource : t6.inlinePlanViewSource}</span>
+            </button>
+            {sourceOpen && (
+              <button
+                type="button"
+                className="icon-btn icon-btn-sm"
+                onClick={artifact.refresh}
+                disabled={artifact.loadingContent || artifact.loadingSummary}
+                aria-label={t5.planArtifactRefresh}
+                title={t5.planArtifactRefresh}
+                data-testid="plan-artifact-refresh"
+              >
+                <Icon icon={RefreshCw} size="xs" className={artifact.loadingContent ? 'spin' : undefined} />
+              </button>
+            )}
+            {summary?.filePath && (
+              <button
+                type="button"
+                className="icon-btn icon-btn-sm"
+                onClick={openExternal}
+                aria-label={t6.planOpenExternal}
+                title={t6.planOpenExternal}
+                data-testid="plan-artifact-open-file"
+              >
+                <Icon icon={ExternalLink} size="xs" />
+              </button>
+            )}
+          </span>
+        )}
+      </div>
+
+      {/* -- body -- */}
+      {expanded && (
+        <div className="inline-plan-body">
+          {kind === 'execution' && (
+            <>
+              <div className="plan-summary" data-testid="plan-summary">
+                <div className="plan-summary-row">
+                  <span className="plan-summary-count">{dict.planProgress(progress.done, progress.total)}</span>
+                  {progress.failed > 0 && (
+                    <span className="badge badge-danger plan-failed-count">{t5.planFailedCount(progress.failed)}</span>
+                  )}
+                </div>
+                <span
+                  className="plan-progressbar"
+                  role="progressbar"
+                  aria-label={t5.planProgressAria(progress.done, progress.total)}
+                  aria-valuemin={0}
+                  aria-valuemax={progress.total}
+                  aria-valuenow={progress.done}
+                  data-testid="plan-progressbar"
+                >
+                  <span style={{ '--fill': progress.total ? progress.done / progress.total : 0 } as React.CSSProperties} />
+                </span>
+                {progress.current && (
+                  <span className="plan-summary-now truncate" data-testid="plan-current-step" title={progress.current}>
+                    {t6.planNow(progress.current)}
+                  </span>
+                )}
+              </div>
+              <ol className="plan-timeline" data-testid="plan-timeline">
+                {timeline.map((entry: PlanTimelineEntry) =>
+                  entry.kind === 'item' ? (
+                    <PlanTodoRow key={entry.item.id} item={entry.item} />
+                  ) : expandedGroups[entry.key] ? (
+                    entry.items.map((item) => <PlanTodoRow key={item.id} item={item} />)
+                  ) : (
+                    <li key={entry.key} className="plan-item is-completed is-group">
+                      <button
+                        type="button"
+                        className="plan-group-toggle"
+                        aria-expanded={false}
+                        onClick={() => setExpandedGroups((prev) => ({ ...prev, [entry.key]: true }))}
+                        data-testid={`plan-done-group-${entry.items[0].id}`}
+                      >
+                        <Icon icon={CircleCheck} size="sm" className="plan-item-icon is-completed" />
+                        <span className="plan-item-text">{t6.planDoneGroup(entry.items.length)}</span>
+                        <Icon icon={ChevronRight} size="xs" />
+                      </button>
+                    </li>
+                  )
+                )}
+              </ol>
+              {progress.truncated && (
+                <div className="plan-truncated" role="note" data-testid="plan-truncated-hint">
+                  {t5.planTruncated}
+                </div>
+              )}
+            </>
+          )}
+
+          {kind === 'outline' && outline && (
+            <section className="plan-outline" data-testid="plan-outline">
+              {outline.title && <h3 className="plan-outline-title">{outline.title}</h3>}
+              {outline.goal && (
+                <p className="plan-outline-goal" data-testid="plan-outline-goal">
+                  {outline.goal}
+                </p>
+              )}
+              {outline.sections.length > 0 && (
+                <ol className="plan-outline-sections" aria-label={t6.planSections(outline.sectionCount)}>
+                  {outline.sections.map((section) => (
+                    <li key={section.id} className="plan-outline-section" data-testid={`plan-outline-section-${section.id}`}>
+                      <span className="plan-outline-dot" aria-hidden="true" />
+                      <span className="plan-outline-text">
+                        <span className="plan-outline-heading">{section.heading}</span>
+                        {section.summary && <span className="plan-outline-summary">{section.summary}</span>}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {outline.sectionCount > outline.sections.length && (
+                <p className="plan-note">{t6.planSectionsMore(outline.sectionCount - outline.sections.length)}</p>
+              )}
+              <p className="plan-note">{t6.planOutlineFooterHint}</p>
+            </section>
+          )}
+
+          {kind === 'cleared' && (
+            <p className="plan-note" role="status" data-testid="plan-cleared">
+              {t6.planCleared}
+            </p>
+          )}
+
+          {kind === 'unavailable' && (
+            <p className="plan-note" role="status" data-testid="plan-unavailable">
+              {t6.planUnavailable(artifact.error || summary?.reason || '')}
+            </p>
+          )}
+
+          {/* inline source drawer */}
+          {sourceOpen && sessionId && hasDoc && (
+            <div className="inline-plan-source" data-testid="plan-source-drawer">
+              <div className="inline-plan-source-sep" />
+              {updated && <p className="plan-drawer-meta">{t6.planUpdated(updated)}</p>}
+              {artifact.error ? (
+                <p role="alert" className="plan-drawer-msg is-error">{t5.planArtifactUnavailable(artifact.error)}</p>
+              ) : artifact.content?.content === undefined || artifact.content?.content === null ? (
+                <p className="plan-drawer-msg">{t6.planLoadingSource}</p>
+              ) : (
+                <PlanDocument text={artifact.content.content} onOpenLink={openLink} idPrefix={uid} docRef={docRef} />
+              )}
+              {artifact.content?.truncated && <p className="plan-drawer-msg is-warn">{t5.planArtifactTruncated}</p>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {openError && (
+        <p role="alert" className="plan-drawer-msg is-error">
+          {openError}
+        </p>
+      )}
+    </section>
   );
 }
