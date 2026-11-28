@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { getCanonicalToolName, isToolCallFailure } from '@shared';
+import { getCanonicalToolName, isToolCallFailure, isRightInspectorTab } from '@shared';
 import {
   BarChart3,
   ChevronLeft,
@@ -135,6 +135,8 @@ function RightInspectorImpl({
   onOpenRateCardsSettings,
 }: RightInspectorProps): React.ReactElement {
   const { dict } = useI18n();
+  // P1-5：外部传入的 activeTab 可能是已移除的 'plan'，防御性回退到 'diff'
+  const effectiveTab = isRightInspectorTab(activeTab) ? activeTab : ('diff' as RightInspectorTab);
   const panelBase = `insp-${React.useId().replace(/:/g, '')}`;
   const localSwarmDrafts = useMemo(() => new SwarmDrafts(), [profileId]);
   const ui = dict.ui;
@@ -212,7 +214,7 @@ function RightInspectorImpl({
       activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
     syncTabScroll();
-  }, [activeTab, syncTabScroll]);
+  }, [effectiveTab, syncTabScroll]);
 
   useEffect(() => {
     if (width) setLiveWidth(width);
@@ -279,7 +281,7 @@ function RightInspectorImpl({
     try { return new Set<string>(JSON.parse(localStorage.getItem(readKey) || '[]')); }
     catch { return new Set<string>(); }
   }, [readKey]);
-  const visibleTerminal = !collapsed && activeTab === 'terminal';
+  const visibleTerminal = !collapsed && effectiveTab === 'terminal';
   const terminalKeys = useMemo(() => terminals.map(entry => {
     // K4：后端提供单调递增修订号时直接使用，避免逐字符哈希大段输出。
     if (typeof entry.revision === 'number') {
@@ -323,13 +325,13 @@ function RightInspectorImpl({
     swarm: 'accent',
   };
   // “变更”是一级页签，差异与文件清单是它的二级视图，共用同一份统计与焦点文件。
-  const changesView = activeTab === 'files' ? 'files' : 'diff';
-  const isChanges = activeTab === 'diff' || activeTab === 'files';
+  const changesView = effectiveTab === 'files' ? 'files' : 'diff';
+  const isChanges = effectiveTab === 'diff' || effectiveTab === 'files';
   // D1：分支树是 Context 的二级视图；外部以 'tree' 打开时自动选中 Context 一级页签。
-  const isContextGroup = activeTab === 'context' || activeTab === 'tree';
+  const isContextGroup = effectiveTab === 'context' || effectiveTab === 'tree';
   const treeBranchCount = conversationTree && conversationTree.totalBranches > 1 ? conversationTree.totalBranches : 0;
 
-  const bodyViewKey = `${sessionId ?? ''}:${activeTab}`;
+  const bodyViewKey = `${sessionId ?? ''}:${effectiveTab}`;
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (el) el.scrollTop = bodyScrollRef.current[bodyViewKey] ?? 0;
@@ -383,10 +385,10 @@ function RightInspectorImpl({
         type="button"
         role="tab"
         id={`${panelBase}-sub-context`}
-        aria-selected={activeTab === 'context'}
+        aria-selected={effectiveTab === 'context'}
         aria-controls={`${panelBase}-panel`}
-        tabIndex={activeTab === 'context' ? 0 : -1}
-        className={`segmented-btn ${activeTab === 'context' ? 'is-active' : ''}`}
+        tabIndex={effectiveTab === 'context' ? 0 : -1}
+        className={`segmented-btn ${effectiveTab === 'context' ? 'is-active' : ''}`}
         onClick={() => onSelectTab('context')}
         data-testid="inspector-subtab-context"
       >
@@ -397,10 +399,10 @@ function RightInspectorImpl({
         type="button"
         role="tab"
         id={`${panelBase}-sub-tree`}
-        aria-selected={activeTab === 'tree'}
+        aria-selected={effectiveTab === 'tree'}
         aria-controls={`${panelBase}-panel`}
-        tabIndex={activeTab === 'tree' ? 0 : -1}
-        className={`segmented-btn ${activeTab === 'tree' ? 'is-active' : ''}`}
+        tabIndex={effectiveTab === 'tree' ? 0 : -1}
+        className={`segmented-btn ${effectiveTab === 'tree' ? 'is-active' : ''}`}
         onClick={() => onSelectTab('tree')}
         data-testid="inspector-tab-tree"
       >
@@ -463,7 +465,7 @@ function RightInspectorImpl({
               onKeyDown={(e) => handleTablistKeyDown(e)}
             >
               {TABS.map(({ id, Icon }) => {
-                const selected = id === 'diff' ? isChanges : id === 'context' ? isContextGroup : activeTab === id;
+                const selected = id === 'diff' ? isChanges : id === 'context' ? isContextGroup : effectiveTab === id;
                 const label = id === 'diff' ? ui.changesTab : dict.inspectorTabs[id];
                 return (
                   <button
@@ -477,7 +479,7 @@ function RightInspectorImpl({
                     className={`inspector-tab ${selected ? 'is-active' : ''}`}
                     onClick={() =>
                       // Changes 记住二级视图；Context 一级页签始终回到「用量与费用」主视图，分支树经二级切换进入。
-                      onSelectTab(id === 'diff' && isChanges ? activeTab : id)
+                      onSelectTab(id === 'diff' && isChanges ? effectiveTab : id)
                     }
                     aria-label={label}
                     title={label}
@@ -536,13 +538,13 @@ function RightInspectorImpl({
           className="inspector-body"
           id={`${panelBase}-panel`}
           role="tabpanel"
-          aria-labelledby={`${panelBase}-tab-${isChanges ? 'diff' : isContextGroup ? 'context' : activeTab}`}
+          aria-labelledby={`${panelBase}-tab-${isChanges ? 'diff' : isContextGroup ? 'context' : effectiveTab}`}
           ref={bodyRef}
           onScroll={(e) => { bodyScrollRef.current[bodyViewKey] = e.currentTarget.scrollTop; }}
         >
           {isChanges && <div className="inspector-toolbar">{changesSwitch}</div>}
 
-          {activeTab === 'diff' && (
+          {effectiveTab === 'diff' && (
             <div className="inspector-stack" data-testid="inspector-view-diff">
               {diffs.length === 0 ? (
                 <div className="empty-state">{dict.diffEmpty}</div>
@@ -557,7 +559,7 @@ function RightInspectorImpl({
             </div>
           )}
 
-          {activeTab === 'files' && (
+          {effectiveTab === 'files' && (
             <div className="inspector-stack is-tight" data-testid="inspector-view-files">
               {diffs.length === 0 ? (
                 <div className="empty-state">{dict.filesChangedEmpty}</div>
@@ -589,7 +591,7 @@ function RightInspectorImpl({
             </div>
           )}
 
-          {activeTab === 'terminal' && (
+          {effectiveTab === 'terminal' && (
             <div className="inspector-stack" data-testid="inspector-view-terminal">
               {terminals.length === 0 ? (
                 <div className="empty-state">{dict.terminalEmpty}</div>
@@ -601,7 +603,7 @@ function RightInspectorImpl({
 
           {isContextGroup && <div className="inspector-toolbar">{contextSwitch}</div>}
 
-          {activeTab === 'context' && (
+          {effectiveTab === 'context' && (
             <>
               {conversationTree && conversationTree.totalBranches > 1 && sessionId && (
                 <div className="ctx-branch-banner" data-testid="context-branch-banner">
@@ -633,7 +635,7 @@ function RightInspectorImpl({
             </>
           )}
 
-          {activeTab === 'tree' && (
+          {effectiveTab === 'tree' && (
             <ConversationTreePanel
               sessionId={sessionId}
               tree={conversationTree}
@@ -645,7 +647,7 @@ function RightInspectorImpl({
             />
           )}
 
-          {activeTab === 'swarm' && (
+          {effectiveTab === 'swarm' && (
             <SwarmPanel
               key={profileId}
               sessionId={sessionId}

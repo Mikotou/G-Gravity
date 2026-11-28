@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ChevronRight,
   Circle,
@@ -300,6 +300,11 @@ export function InlinePlanCard({
   artifact: artifactProp,
   sourceOpen: sourceOpenProp,
   onSourceOpenChange,
+  expanded: expandedProp,
+  onExpandedChange,
+  expandedGroups: expandedGroupsProp,
+  onExpandedGroupsChange,
+  isFocused = true,
 }: {
   profileId: string;
   sessionId: string;
@@ -310,13 +315,28 @@ export function InlinePlanCard({
   artifact?: UsePlanArtifactResult;
   sourceOpen?: boolean;
   onSourceOpenChange?: (open: boolean) => void;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  expandedGroups?: Record<string, boolean>;
+  onExpandedGroupsChange?: (groups: Record<string, boolean>) => void;
+  isFocused?: boolean;
 }): React.ReactElement | null {
   const { dict } = useI18n();
   const t5 = dict.ui.v035;
   const t6 = dict.ui.v036;
   const uid = useId();
+  const cardRef = useRef<HTMLElement>(null);
 
-  const [expanded, setExpanded] = useState(true);
+  const [ownExpanded, setOwnExpanded] = useState(true);
+  const expanded = expandedProp ?? ownExpanded;
+  const setExpanded = useCallback(
+    (next: boolean) => {
+      if (onExpandedChange) onExpandedChange(next);
+      else setOwnExpanded(next);
+    },
+    [onExpandedChange]
+  );
+
   const [ownSourceOpen, setOwnSourceOpen] = useState(false);
   const sourceOpen = sourceOpenProp ?? ownSourceOpen;
   const setSourceOpen = useCallback(
@@ -327,17 +347,36 @@ export function InlinePlanCard({
     },
     [onSourceOpenChange, sourceOpen]
   );
+
+  const [ownExpandedGroups, setOwnExpandedGroups] = useState<Record<string, boolean>>({});
+  const expandedGroups = expandedGroupsProp ?? ownExpandedGroups;
+  const setExpandedGroups = useCallback(
+    (updater: (prev: Record<string, boolean>) => Record<string, boolean>) => {
+      if (onExpandedGroupsChange) {
+        onExpandedGroupsChange(updater(expandedGroups));
+      } else {
+        setOwnExpandedGroups(updater);
+      }
+    },
+    [onExpandedGroupsChange, expandedGroups]
+  );
+
   const [openError, setOpenError] = useState('');
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const docRef = React.useRef<HTMLDivElement | null>(null);
 
-  // 归属切换复位
+  // 归属切换复位：仅当 (profileId, sessionId) 真实变更时触发，首次挂载不 fire
+  const prevOwnerRef = useRef(`${profileId}:${sessionId}`);
   useEffect(() => {
+    const key = `${profileId}:${sessionId}`;
+    if (prevOwnerRef.current === key) return;
+    prevOwnerRef.current = key;
     setOwnSourceOpen(false);
     onSourceOpenChange?.(false);
     setOpenError('');
-    setExpandedGroups({});
-    setExpanded(true);
+    setOwnExpandedGroups({});
+    if (onExpandedGroupsChange) onExpandedGroupsChange({});
+    setOwnExpanded(true);
+    if (onExpandedChange) onExpandedChange(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileId, sessionId]);
 
@@ -364,23 +403,34 @@ export function InlinePlanCard({
         ...(epoch !== undefined ? { epoch } : {}),
         revision: sourceOpen && artifact.content?.revision !== undefined ? artifact.content.revision : summary?.revision,
         ...(summary?.revision !== undefined ? { summaryRevision: summary.revision } : {}),
-        ...(artifact.content?.revision !== undefined ? { contentRevision: artifact.content.revision } : {}),
+        ...(sourceOpen && artifact.content?.revision !== undefined ? { contentRevision: artifact.content.revision } : {}),
       }
     : null;
 
-  // Esc handler：sourceOpen 时捕获阶段关闭原文
+  // Esc handler：sourceOpen && expanded && isFocused 时捕获阶段关闭原文
   useEffect(() => {
-    if (!sourceOpen) return;
+    if (!sourceOpen || !expanded || !isFocused) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented || isImeComposing(e)) return;
       if (document.querySelector('dialog[open], [aria-modal="true"], .target-context-menu, .selection-floating-bar')) return;
+      // 同窗格菜单 / 语音听写守卫
+      const cardPane = cardRef.current?.closest('.pane');
+      if (cardPane?.querySelector('.popover, [role="menu"], .voice-status')) return;
+      // 焦点落在其它窗格时让路
+      const target = e.target instanceof Element ? e.target : null;
+      const targetPane = target?.closest('.pane');
+      if (targetPane && cardPane && targetPane !== cardPane) return;
+      // 可编辑元素让路
+      if (target?.closest('.composer-input, .question-bar, .message-editor, .turn-notation-edit-row, .pane-switch, .feedback-box')) return;
+      const editable = target instanceof HTMLElement && (/^(?:INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable);
+      if (editable) return;
       e.preventDefault();
       e.stopPropagation();
       setSourceOpen(false);
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [setSourceOpen, sourceOpen]);
+  }, [expanded, isFocused, setSourceOpen, sourceOpen]);
 
   const openExternal = useCallback(() => {
     if (!summary?.filePath || !owner || !sessionId) return;
@@ -429,7 +479,12 @@ export function InlinePlanCard({
 
   const showFileButtons = hasDoc && (kind === 'outline' || kind === 'execution');
 
-  const handleToggle = () => setExpanded((v) => !v);
+  const handleToggle = () => {
+    const next = !expanded;
+    setExpanded(next);
+    // 折叠时同步关闭原文抽屉，避免折叠态残留幽灵 Esc
+    if (!next) setSourceOpen(false);
+  };
   const handleSourceToggle = () => {
     const next = !sourceOpen;
     if (next) setExpanded(true);
@@ -441,7 +496,7 @@ export function InlinePlanCard({
   if (kind === 'execution') {
     headerLabel = (
       <>
-        <span className="inline-plan-label">{dict.planProgress(progress.done, progress.total)}</span>
+        <span className="inline-plan-label truncate">{expanded ? t6.inlinePlanLabel : dict.planProgress(progress.done, progress.total)}</span>
         {!expanded && (
           <span className="plan-progressbar inline-plan-bar" aria-hidden="true">
             <span style={{ '--fill': progress.total ? progress.done / progress.total : 0 } as React.CSSProperties} />
@@ -458,20 +513,21 @@ export function InlinePlanCard({
   } else if (kind === 'outline') {
     headerLabel = (
       <>
-        <span className="inline-plan-label">{!expanded && outline?.title ? outline.title : t6.inlinePlanLabel}</span>
+        <span className="inline-plan-label truncate">{!expanded && outline?.title ? outline.title : t6.inlinePlanLabel}</span>
         {outline && outline.sectionCount > 0 && (
           <span className="badge inline-plan-sections">{t6.inlinePlanSectionsBadge(outline.sectionCount)}</span>
         )}
       </>
     );
   } else if (kind === 'cleared') {
-    headerLabel = <span className="inline-plan-label">{t6.planCleared}</span>;
+    headerLabel = <span className="inline-plan-label truncate">{t6.planCleared}</span>;
   } else {
-    headerLabel = <span className="inline-plan-label">{t6.inlinePlanLabel}</span>;
+    headerLabel = <span className="inline-plan-label truncate">{t6.inlinePlanLabel}</span>;
   }
 
   return (
     <section
+      ref={cardRef}
       className="inline-plan-card"
       data-testid="inline-plan-card"
       data-plan-view={kind}
@@ -485,6 +541,7 @@ export function InlinePlanCard({
           className="inline-plan-toggle"
           onClick={handleToggle}
           aria-expanded={expanded}
+          aria-controls={`${uid}-body`}
           data-testid="inline-plan-toggle"
         >
           <Icon icon={ChevronRight} size="xs" className={`inline-plan-chev${expanded ? ' is-open' : ''}`} />
@@ -497,6 +554,8 @@ export function InlinePlanCard({
               type="button"
               className="inline-plan-src-btn"
               onClick={handleSourceToggle}
+              aria-expanded={sourceOpen}
+              aria-controls={`${uid}-source`}
               data-testid={sourceOpen ? 'plan-source-close' : 'plan-source-open'}
             >
               <Icon icon={FileText} size="xs" />
@@ -533,7 +592,7 @@ export function InlinePlanCard({
 
       {/* -- body -- */}
       {expanded && (
-        <div className="inline-plan-body">
+        <div className="inline-plan-body" id={`${uid}-body`}>
           {kind === 'execution' && (
             <>
               <div className="plan-summary" data-testid="plan-summary">
@@ -633,7 +692,7 @@ export function InlinePlanCard({
 
           {/* inline source drawer */}
           {sourceOpen && sessionId && hasDoc && (
-            <div className="inline-plan-source" data-testid="plan-source-drawer">
+            <div className="inline-plan-source" id={`${uid}-source`} data-testid="plan-source-drawer">
               <div className="inline-plan-source-sep" />
               {updated && <p className="plan-drawer-meta">{t6.planUpdated(updated)}</p>}
               {artifact.error ? (

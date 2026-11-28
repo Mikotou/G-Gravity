@@ -19,9 +19,6 @@ export interface V036Strings {
   planDocLine: string;
   planDocWithSections: (n: number) => string;
   planOutlineFooterHint: string;
-  planChip: (done: number, total: number) => string;
-  planChipNow: (step: string) => string;
-  planChipOpen: string;
   planDrawerTitle: string;
   planDrawerClose: string;
   planMermaid: (n: number) => string;
@@ -140,9 +137,6 @@ export const V036_ZH: V036Strings = {
   planDocLine: '计划文档',
   planDocWithSections: (n) => `计划文档 · ${n} 个章节`,
   planOutlineFooterHint: '执行开始后显示实时进度',
-  planChip: (d, t) => `Plan ${d}/${t}`,
-  planChipNow: (s) => `正在：${s}`,
-  planChipOpen: '在 Plan 页签查看',
   planDrawerTitle: '计划原文',
   planDrawerClose: '返回概要',
   planMermaid: (n) => `流程图（${n} 行）`,
@@ -269,9 +263,6 @@ export const V036_EN: V036Strings = {
   planDocLine: 'Plan document',
   planDocWithSections: (n) => `Plan document · ${n} ${n === 1 ? 'section' : 'sections'}`,
   planOutlineFooterHint: 'Live progress will appear once execution begins.',
-  planChip: (d, t) => `Plan ${d}/${t}`,
-  planChipNow: (s) => `Now: ${s}`,
-  planChipOpen: 'Open in the Plan tab',
   planDrawerTitle: 'Plan source',
   planDrawerClose: 'Back to summary',
   planMermaid: (n) => `Diagram (${n} lines)`,

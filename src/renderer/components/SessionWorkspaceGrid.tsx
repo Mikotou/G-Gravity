@@ -17,7 +17,7 @@ import { SessionPane, type SessionPaneProps } from './SessionPane';
 
 type SharedPaneProps = Omit<
   SessionPaneProps,
-  'slotIndex' | 'layoutMode' | 'isFocused' | 'session' | 'messages' | 'messagePosition' | 'latestAudit' | 'swarmState' | 'conversationTree'
+  'slotIndex' | 'layoutMode' | 'isFocused' | 'session' | 'messages' | 'messagePosition' | 'latestAudit' | 'swarmState' | 'conversationTree' | 'inspectorData'
 >;
 
 export interface SessionWorkspaceGridProps extends Omit<SharedPaneProps, 'availableSessions'> {

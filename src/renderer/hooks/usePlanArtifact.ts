@@ -214,6 +214,7 @@ export function usePlanArtifact({
       const gen = ++contentGenRef.current;
       const stale = () => keyRef.current !== myKey || contentGenRef.current !== gen;
       const known = force || contentStaleRef.current ? undefined : contentRef.current?.revision;
+      setError('');
       setLoadingContent(true);
       try {
         const result = await fetcher({

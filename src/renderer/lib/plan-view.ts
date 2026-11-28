@@ -118,11 +118,11 @@ export function groupPlanTimeline(todos: readonly SessionTodoItem[], minRun = 3)
   return out;
 }
 
-/** 消息流中仅最新一条含待办的助手消息显示 Plan chip。 */
+/** 消息流中仅最新一条含待办的助手消息显示 Plan chip（跳过 question 消息）。 */
 export function latestTodoMessageId(messages: readonly ChatMessageItem[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m.role === 'assistant' && m.todos && m.todos.length > 0) return m.id;
+    if (m.role === 'assistant' && !m.question && m.todos && m.todos.length > 0) return m.id;
   }
   return undefined;
 }

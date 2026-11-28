@@ -832,11 +832,15 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
   const [stopping, setStopping] = useState(false);
   const [dismissedDiagnostics, setDismissedDiagnostics] = useState<Set<string>>(() => new Set());
   const [planSourceOpen, setPlanSourceOpen] = useState(false);
+  const [planExpanded, setPlanExpanded] = useState(true);
+  const [planExpandedGroups, setPlanExpandedGroups] = useState<Record<string, boolean>>({});
   const planProfileId = session?.profileId || 'default';
   const planSessionId = session?.sessionId ?? null;
   const planEpoch = props.inspectorData?.owner?.epoch ?? props.inspectorData?.epoch;
   useEffect(() => {
     setPlanSourceOpen(false);
+    setPlanExpanded(true);
+    setPlanExpandedGroups({});
   }, [planProfileId, planSessionId]);
   const planArtifact = usePlanArtifact({
     profileId: planProfileId,
@@ -1199,6 +1203,8 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
   const showWorking =
     session.status === 'streaming' && !(last && last.role === 'assistant' && last.isStreaming);
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
+  // P0-1：question 消息不能承载 InlinePlanCard
+  const lastPlanHostId = [...messages].reverse().find((m) => m.role === 'assistant' && !m.question)?.id;
   const latestTodoMessage = useMemo(() => latestTodoMessageId(messages), [messages]);
 
   // v0.3.6：内联 Plan 卡片数据（结合 usePlanArtifact 真实摘要，确保 outline / unavailable 态在 0 todos 时也能渲染）
@@ -1215,10 +1221,10 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
     artifactStatus: planArtifact.error ? 'error' : planSummary?.status,
     hasOutline: Boolean(planOutline),
   });
-  // 宿主消息：execution 优先 latestTodoMessage，其余 lastAssistantId；无助手消息时于流底部兜底渲染
+  // 宿主消息：execution 优先 latestTodoMessage，其余 lastPlanHostId；无助手消息时于流底部兜底渲染
   const planHostMessageId = planKind === 'empty' ? undefined
-    : planKind === 'execution' ? (latestTodoMessage || lastAssistantId)
-    : lastAssistantId;
+    : planKind === 'execution' ? (latestTodoMessage || lastPlanHostId)
+    : lastPlanHostId;
   const inlinePlanNode = planKind !== 'empty' ? (
     <InlinePlanCard
       profileId={planProfileId}
@@ -1230,6 +1236,11 @@ function SessionPaneImpl(props: SessionPaneProps): React.ReactElement {
       artifact={planArtifact}
       sourceOpen={planSourceOpen}
       onSourceOpenChange={setPlanSourceOpen}
+      expanded={planExpanded}
+      onExpandedChange={setPlanExpanded}
+      expandedGroups={planExpandedGroups}
+      onExpandedGroupsChange={setPlanExpandedGroups}
+      isFocused={isFocused}
     />
   ) : null;
 
@@ -1689,6 +1700,12 @@ function areSessionPanePropsEqual(prev: SessionPaneProps, next: SessionPaneProps
     if (Object.is(a, b)) continue;
     // Empty inline arrays (e.g. `availableModels={[]}` / `pendingApprovals={[]}`) carry identical semantics.
     if (Array.isArray(a) && Array.isArray(b) && a.length === 0 && b.length === 0) continue;
+    // inspectorData 只关心 plan / todos / epoch 三段，其余字段变化不触发重渲染
+    if (key === 'inspectorData') {
+      const ia = a as SessionInspectorData | undefined;
+      const ib = b as SessionInspectorData | undefined;
+      if (ia?.plan === ib?.plan && ia?.todos === ib?.todos && (ia?.owner?.epoch ?? ia?.epoch) === (ib?.owner?.epoch ?? ib?.epoch)) continue;
+    }
     return false;
   }
   return true;
