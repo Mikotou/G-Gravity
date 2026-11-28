@@ -17,8 +17,7 @@ import type {
   GetSessionPlanArtifactInput, ManagedSessionSummary, PlanArtifactSnapshot, SessionAction, TitleOrganizeRequest, WorkspaceLayoutState,
 } from '../shared/session-contract';
 import { MAX_PARALLEL_ACTIVE_SESSIONS } from '../shared/session-contract';
-import type { ClientPreferences, GravityIconPreference } from '../shared/theme-i18n-contract';
-import { APP_BRAND } from '../shared/theme-i18n-contract';
+import { APP_BRAND, type ClientPreferences, type GravityIconPreference } from '../shared/theme-i18n-contract';
 import type { ExternalTranslatorConfig, TranslationConfigPatch } from '../shared/translation-contract';
 import type { ModelRateCard } from '../shared/telemetry-contract';
 import type { CreateAccountProfileInput } from '../shared/accounts-history-contract';
@@ -81,7 +80,8 @@ export class CoreService extends EventEmitter {
         this.sessions.profileId !== owner.profileId) return;
     let epoch = this.profileEpoch;
     if (owner.sessionId !== undefined) {
-      if (!this.sessions.ownsSession(owner.sessionId) || this.sessions.sessions.get(owner.sessionId)?.profileId !== owner.profileId) return;
+      const session = this.sessions.sessions.get(owner.sessionId);
+      if (!this.sessions.ownsSession(owner.sessionId) || !session || session.profileId !== owner.profileId || session.archivedAt) return;
       epoch = this.sessionEpochs.get(owner.sessionId) ?? ++this.sequence;
       this.sessionEpochs.set(owner.sessionId, epoch);
     }
@@ -343,7 +343,6 @@ export class CoreService extends EventEmitter {
     if (this.disposed) throw new Error('客户端正在退出。');
     return this.swarm.readState(sessionId, before);
   }
-
   private async flushSwarm(): Promise<void> {
     const failed = await this.swarm.flush();
     if (failed.length) throw new Error('Swarm 未能保存以下会话，请重试：' + failed.join(', '));
@@ -373,6 +372,8 @@ export class CoreService extends EventEmitter {
         await stopDesktop?.();
         await this.voice.dispose();
         await this.client.stop();
+        this.planArtifacts.clear();
+        this.sessionEpochs.clear();
         this.turns.releaseProfile();
         this.thoughts.dispose();
         this.translation.dispose();
@@ -390,7 +391,6 @@ export class CoreService extends EventEmitter {
     }
     this.disposed = true;
     this.monitor.dispose();
-    this.planArtifacts.clear();
     clearTimeout(this.autoUpdateTimer);
     this.telemetry.dispose(false);
   }

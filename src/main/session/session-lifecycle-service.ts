@@ -259,7 +259,6 @@ export class SessionLifecycleService {
       if (action !== 'restore') {
         for (const bid of branchIds) {
           if (this.app.sessions.isActive(bid)) await this.closeSession(bid);
-          else if (action === 'archive') this.app.retireSession(bid);
         }
       }
       if (action === 'delete') {
@@ -275,6 +274,7 @@ export class SessionLifecycleService {
           if (!existing) continue;
           const updated = { ...existing, archivedAt: action === 'archive' ? existing.archivedAt || archiveStamp : undefined };
           this.app.sessions.updateSessionRecord(updated);
+          if (action === 'archive') this.app.retireSession(bid);
           this.app.emit('session-updated', this.enrichSession(updated));
         }
         if (action === 'archive') this.app.store.write('layout.json', this.settings.layout);

@@ -77,7 +77,7 @@ function expectedArtifactRoot({ root, anchor }: ArtifactScope): string {
 function artifactMember(scope: ArtifactScope, target: string): string | undefined {
   const expected = expectedArtifactRoot(scope);
   const actual = realpathSync.native(scope.root);
-  if (!sameLocalPath(expected, actual)) return;
+  if (!sameLocalPath(expected, actual) || basename(actual) !== basename(scope.root)) return;
   let root = realpathSync.native(scope.anchor);
   for (const part of relative(scope.anchor, scope.root).split(sep)) {
     root = join(root, part);

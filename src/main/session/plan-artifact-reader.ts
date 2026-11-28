@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, realpathSync, watch, type FSWatcher } from 'node:fs';
+import { lstatSync, realpathSync, watch, type BigIntStats, type FSWatcher } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { PLAN_ARTIFACT_FILENAME, PLAN_ARTIFACT_MAX_BYTES, type PlanArtifactView } from '../../shared/plan-contract';
@@ -26,6 +26,7 @@ interface Observation {
   contentRevision: number;
   summaryRevision: number;
   watchers: Map<string, FSWatcher>;
+  directories: Map<string, string>;
   timer?: NodeJS.Timeout;
   reading?: Promise<PlanArtifactSnapshot>;
 }
@@ -59,7 +60,8 @@ function inspect(candidate: Candidate, observe: (dir: string, child: string) => 
   const real = realpathSync.native(cursor);
   if (!sameLocalPath(cursor, real) || localPathMember(root, real) === undefined || isUnsafeLocalFile(real)) throw Error('产物路径不可用');
   // Session IDs are opaque even on filesystems that resolve paths case-insensitively.
-  if (basename(directory ? real : dirname(real)) !== basename(directory ? path : dirname(path))) throw Error('产物会话目录不匹配');
+  if (directory && basename(real) !== basename(path)) return;
+  if (!directory && basename(dirname(real)) !== basename(dirname(path))) throw Error('产物会话目录不匹配');
   observe(dirname(real), basename(real));
   const stat = lstatSync(real);
   if (directory) {
@@ -75,6 +77,10 @@ function fileStamp(path: string): string {
   return [path, s.dev, s.ino, s.size, s.ctimeNs, s.mtimeNs].join('\0');
 }
 
+function directoryIdentity(stat: BigIntStats): string {
+  return [stat.dev, stat.ino, stat.mode].join(':');
+}
+
 export class PlanArtifactReader {
   private entries = new Map<string, Observation>();
   private revision = 0;
@@ -84,7 +90,7 @@ export class PlanArtifactReader {
     clearTimeout(entry.timer);
     for (const watcher of entry.watchers.values()) watcher.close();
     entry.watchers.clear();
-    this.entries.delete(entry.owner.sessionId);
+    if (this.entries.get(entry.owner.sessionId) === entry) this.entries.delete(entry.owner.sessionId);
   }
   remove(id: string): void {
     const entry = this.entries.get(id);
@@ -97,7 +103,7 @@ export class PlanArtifactReader {
     if (entry && (entry.owner.profileId !== owner.profileId || entry.owner.epoch !== owner.epoch)) { this.forget(entry); entry = undefined; }
     if (!entry) {
       if (this.entries.size >= 256) this.forget(this.entries.values().next().value!);
-      entry = { owner, contentRevision: 0, summaryRevision: 0, watchers: new Map() };
+      entry = { owner, contentRevision: 0, summaryRevision: 0, watchers: new Map(), directories: new Map() };
     }
     this.entries.delete(owner.sessionId);
     this.entries.set(owner.sessionId, entry);
@@ -128,8 +134,17 @@ export class PlanArtifactReader {
       if (this.entries.get(entry.owner.sessionId) === entry) this.notice(entry.owner.sessionId);
     };
     try {
-      const watcher = watch(dir, { persistent: false }, (_event, filename) => {
-        if (!filename || filename.toLowerCase() === child.toLowerCase()) notice();
+      const sessionDirectory = child === entry.owner.sessionId && basename(dir).toLowerCase() === 'brain';
+      const childPath = join(dir, child);
+      const watcher = watch(dir, { persistent: false }, (event, filename) => {
+        if (filename && (sessionDirectory ? filename !== child : filename.toLowerCase() !== child.toLowerCase())) return;
+        // NTFS also signals directory mtime changes to parents. The child watcher covers its contents.
+        const identity = filename && event === 'change' && entry.directories.get(childPath);
+        if (identity) {
+          try { if (directoryIdentity(lstatSync(childPath, { bigint: true })) === identity) return; }
+          catch { /* Recheck a removed or inaccessible directory. */ }
+        }
+        notice();
       });
       watcher.on('error', () => {
         watcher.close();
@@ -147,12 +162,16 @@ export class PlanArtifactReader {
     if (!/^[a-z0-9_-]{1,100}$/i.test(owner.sessionId ?? '') || typeof owner.sessionId !== 'string' ||
         !['summary', 'content'].includes(view)) return denied();
     const context = this.context(owner);
-    if (!context || (owner.epoch !== undefined && owner.epoch !== context.epoch)) return denied();
+    if (!context || (owner.epoch !== undefined && owner.epoch !== context.epoch)) {
+      const existing = this.entries.get(owner.sessionId);
+      if (existing && this.context(existing.owner)?.epoch !== existing.owner.epoch) this.forget(existing);
+      return denied();
+    }
     owner.epoch = context.epoch;
     const entry = this.observation(owner);
     while (entry.reading) await entry.reading;
     const current = () => this.entries.get(owner.sessionId) === entry && this.context(owner)?.epoch === context.epoch;
-    if (!current()) return denied();
+    if (!current()) { this.forget(entry); return denied(); }
     // An explicit read supersedes any queued observe/debounce timer armed before this read began.
     clearTimeout(entry.timer);
     entry.timer = undefined;
@@ -160,7 +179,7 @@ export class PlanArtifactReader {
     entry.reading = reading;
     try {
       const result = await reading;
-      if (!current()) return denied();
+      if (!current()) { this.forget(entry); return denied(); }
       if (result.revision && result.revision === input.knownRevision) {
         const { content, outline, ...metadata } = result;
         return { ...metadata, status: 'unchanged' };
@@ -173,13 +192,15 @@ export class PlanArtifactReader {
     const owner = entry.owner;
     const result: PlanArtifactSnapshot = { status: 'missing', view, owner, epoch: owner.epoch, revision: 0 };
     const targets = new Set<string>();
+    const directories = new Map<string, string>();
     const observe = (dir: string, child: string) => {
       // A directory replaced at the same pathname needs a watcher on its new inode.
-      const { dev, ino } = lstatSync(dir, { bigint: true });
-      const key = JSON.stringify([join(dir, child), String(dev), String(ino)]);
+      const stat = lstatSync(dir, { bigint: true });
+      const key = JSON.stringify([join(dir, child), String(stat.dev), String(stat.ino)]);
       targets.add(key);
       // Subscribe before probing the child, including when it has yet to be created.
       this.watch(entry, key, dir, child);
+      if (entry.watchers.has(key)) directories.set(dir, directoryIdentity(stat));
     };
     const locate = () => {
       const files = candidates(context, owner.sessionId);
@@ -212,8 +233,12 @@ export class PlanArtifactReader {
       result.status = 'unavailable';
       result.reason = '产物归属不唯一、无法安全读取或超过 128 KiB UTF-8 限制';
     } finally {
-      for (const [key, watcher] of entry.watchers) {
-        if (!targets.has(key)) { watcher.close(); entry.watchers.delete(key); }
+      if (!current()) this.forget(entry);
+      else {
+        entry.directories = directories;
+        for (const [key, watcher] of entry.watchers) {
+          if (!targets.has(key)) { watcher.close(); entry.watchers.delete(key); }
+        }
       }
     }
     if (!current()) return { status: 'unavailable', owner, revision: 0 };
