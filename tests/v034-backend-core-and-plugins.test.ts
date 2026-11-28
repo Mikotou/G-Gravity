@@ -1550,7 +1550,7 @@ describe('R11 · BR-01（修订失败回滚不丢无关布局）与 MED-01（等
     await vi.waitFor(() => expect(holdCreate).toBeDefined());
 
     // While branch creation is in flight, user resizes sidebar & switches inspector tab
-    await core.saveWorkspaceLayout({ leftSidebarWidth: 410, activeInspectorTab: 'plan' });
+    await core.saveWorkspaceLayout({ leftSidebarWidth: 410, activeInspectorTab: 'terminal' });
 
     // Complete session/new with full matching configOptions -> recordBranch throws -> rollback runs
     holdCreate({
@@ -1585,7 +1585,7 @@ describe('R11 · BR-01（修订失败回滚不丢无关布局）与 MED-01（等
     // Unrelated layout adjustments MUST be preserved after rollback!
     const boot = await core.getBootstrap();
     expect(boot.layout.leftSidebarWidth, 'BR-01: 回滚失败分支不得覆盖用户期间调整的侧栏宽度').toBe(410);
-    expect(boot.layout.activeInspectorTab, 'BR-01: 回滚失败分支不得覆盖用户期间切换的检视器页签').toBe('plan');
+    expect(boot.layout.activeInspectorTab, 'BR-01: 回滚失败分支不得覆盖用户期间切换的检视器页签').toBe('terminal');
     expect(boot.layout.openTabSessionIds).toContain(origin.sessionId);
   });
 

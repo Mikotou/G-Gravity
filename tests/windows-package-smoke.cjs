@@ -43,6 +43,20 @@ async function seedRecordedSession(profile, cwd) {
   await save('owned-sessions-default.json', { [recordedId]: { sessionId: recordedId, cwd, rawCwd: cwd, title: '记录交互测试', updatedAt: date,
     profileId: 'default', modelId: '', executionMode: 'default', reasoningEffort: 'high', status: 'closed', pinned: false, isLegacyApprovalPollution: false } });
   await save('layout.json', { openTabSessionIds: [], activePrimarySessionId: null, activeInspectorTab: 'plan' });
+  const seededTodos = [
+    { id: 'qa-todo-1', content: '核验旧布局 plan 回落 context', status: 'completed' },
+    { id: 'qa-todo-2', content: '检查内联计划卡片与原文展开', status: 'in_progress' },
+    { id: 'qa-todo-3', content: '确认脑目录运行期零字节写入', status: 'pending' },
+  ];
+  await save('inspector-states-default.json', {
+    [recordedId]: {
+      sessionId: recordedId,
+      diffs: [],
+      terminals: [],
+      todos: seededTodos,
+      plan: { state: 'present', revision: 1, truncated: false, totalCount: 3, completedCount: 1, failedCount: 0 },
+    },
+  });
   await save('swarm-states-default.json', { [recordedId]: {
     sessionId: recordedId, swarmTitle: '便携版协作样例', workers: [], actionTimeline: [], updatedAt: date,
     boardMessages: Array.from({ length: 54 }, (_, index) => ({
@@ -55,6 +69,7 @@ async function seedRecordedSession(profile, cwd) {
     { id: 'qa-agent', sessionId: recordedId, role: 'assistant', createdAt: date, completedAt: date,
       content: '配图见 ![本地图片](<./本地 示意图.png>)。\n\n这是正文的最后一段。',
       thoughts: [{ id: 'qa-thought', originalText: 'The image is ready.', translatedZhText: '图片准备好了。', translationSource: 'local-model', languageDetected: 'en', isStreaming: false }],
+      todos: seededTodos,
       toolCalls: [card('qa-read', 'Read', 'sample.txt'), card('qa-command', 'Bash', longCommand)] },
   ] });
 }
@@ -390,9 +405,41 @@ async function checkRecordedSession(page, firstLaunch) {
   assert.doesNotMatch(await scale.innerText(), /\$/);
   assert.match(await scale.locator('[title]').first().getAttribute('title'), /Token/i);
   assert.match(await page.getByTestId('heatmap-24h-bars').locator('[title]').first().getAttribute('title'), /\$/);
-  await page.getByTestId('inspector-tab-plan').click();
-  console.log('Packaged built-ins: migrated 54 board messages, navigated oldest and newest pages without members, and checked the Token chart and dollar tooltip.');
-  console.log('Recorded desktop session — persistent thought and terminal state, complete command, grouped operations, real local PNG and zoom OK');
+  assert.equal(await page.locator('[data-testid="inspector-tab-plan"]').count(), 0, 'Deprecated inspector-tab-plan must not be rendered');
+  const pane = page.getByTestId('session-pane-' + recordedId);
+  const inlinePlan = pane.getByTestId('inline-plan-card');
+  await inlinePlan.waitFor({ timeout: 10000 });
+  assert.equal(await inlinePlan.getAttribute('data-plan-view'), 'execution');
+  await inlinePlan.getByTestId('plan-timeline').waitFor();
+  const sourceOpenBtn = inlinePlan.getByTestId('plan-source-open');
+  await sourceOpenBtn.waitFor({ timeout: 10000 });
+  await sourceOpenBtn.scrollIntoViewIfNeeded();
+  await sourceOpenBtn.click();
+  const sourceDrawer = inlinePlan.getByTestId('plan-source-drawer');
+  await sourceDrawer.waitFor({ timeout: 10000 });
+  const planDoc = sourceDrawer.getByTestId('plan-artifact-document');
+  await planDoc.waitFor({ timeout: 10000 }).catch(async error => {
+    const diag = await page.evaluate(async id => ({
+      drawerHtml: document.querySelector('[data-testid="plan-source-drawer"]')?.innerHTML?.slice(0, 1000),
+      summary: await window.gravityDesktop.getSessionPlanArtifact({ profileId: 'default', sessionId: id, view: 'summary' }),
+      content: await window.gravityDesktop.getSessionPlanArtifact({ profileId: 'default', sessionId: id, view: 'content' }),
+      inspector: await window.gravityDesktop.getSessionInspector(id),
+    }), recordedId);
+    throw new Error('Plan artifact document missing: ' + JSON.stringify(diag), { cause: error });
+  });
+  const docText = await planDoc.innerText();
+  assert.match(docText, /便携版内联计划样例/);
+  assert.match(docText, /只读核验/);
+  await page.keyboard.press('Escape');
+  await sourceDrawer.waitFor({ state: 'detached', timeout: 10000 });
+  await sourceOpenBtn.waitFor();
+  const planToggle = inlinePlan.getByTestId('inline-plan-toggle');
+  assert.equal(await planToggle.getAttribute('aria-expanded'), 'true');
+  await planToggle.click();
+  assert.equal(await planToggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(await inlinePlan.getByTestId('plan-timeline').count(), 0);
+  console.log('Packaged built-ins: migrated 54 board messages, navigated oldest and newest pages without members, checked Token chart/dollar tooltip, and verified InlinePlanCard source drawer -> Escape -> collapse.');
+  console.log('Recorded desktop session — persistent thought and terminal state, complete command, grouped operations, inline plan card, real local PNG and zoom OK');
 }
 
 async function checkReviewerActivation(page, profile, endpoint, requests) {
@@ -738,9 +785,15 @@ async function prepareSyntheticGeminiHome(baseDir) {
   const temp = path.join(local, 'Temp');
   const cliDir = path.join(home, '.gemini', 'antigravity-cli');
   const brainDir = path.join(cliDir, 'brain', 'qa-untouched-session');
-  await Promise.all([roaming, temp, brainDir].map(d => mkdir(d, { recursive: true })));
+  const recordedBrainDir = path.join(cliDir, 'brain', recordedId);
+  await Promise.all([roaming, temp, brainDir, recordedBrainDir].map(d => mkdir(d, { recursive: true })));
   await writeFile(path.join(cliDir, 'settings.json'), '{"model":"official-untouched"}\n', 'utf8');
   await writeFile(path.join(brainDir, 'implementation_plan.md'), '# Untouched Plan\nDo not modify.\n', 'utf8');
+  await writeFile(
+    path.join(recordedBrainDir, 'implementation_plan.md'),
+    '# 便携版内联计划样例\n验证主对话流内联卡片与按需原文展开。\n\n## 第一阶段：布局迁移\n确认旧版 plan 页签回落 context。\n\n## 第二阶段：只读核验\n运行期间脑目录保持零字节写入。\n',
+    'utf8'
+  );
   const geminiDir = path.join(home, '.gemini');
   const baselineHashes = await hashTree(geminiDir);
   return {
@@ -1071,6 +1124,30 @@ async function inspectPackage(executable, profile, firstLaunch, liveWorkspace, f
     const welcome = page.getByTestId('empty-pane-0');
     await welcome.getByRole('heading').waitFor();
     assert.equal(await page.locator('[data-testid^="session-pane-"]').count(), 0);
+    if (!liveWorkspace) {
+      const layoutCheck = await page.evaluate(async () => {
+        const boot = await window.gravityDesktop.getBootstrap();
+        const planRejected = await window.gravityDesktop
+          .saveWorkspaceLayout({ activeInspectorTab: 'plan' })
+          .then(() => false, () => true);
+        return { activeInspectorTab: boot.layout.activeInspectorTab, planRejected };
+      });
+      assert.equal(
+        layoutCheck.activeInspectorTab,
+        'context',
+        'Legacy layout.json activeInspectorTab:"plan" must fall back to "context" on launch'
+      );
+      assert.equal(
+        layoutCheck.planRejected,
+        true,
+        'Real IPC saveWorkspaceLayout({ activeInspectorTab: "plan" }) must be rejected'
+      );
+      assert.equal(
+        await page.locator('[data-testid="inspector-tab-plan"]').count(),
+        0,
+        'Deprecated inspector-tab-plan must not be rendered on launch'
+      );
+    }
     // PKG-V1: Track idle mediaDevices calls across startup settle and opening Settings -> General
     if (!liveWorkspace) {
       await page.evaluate(() => {

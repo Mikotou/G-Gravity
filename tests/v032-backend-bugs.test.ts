@@ -730,21 +730,22 @@ describe('BE-08: isPlausibleLocalFileCandidate allows POSIX paths with spaces wh
  * BE-09: LocalMediaInspector Case-Insensitive artifact.root & >64KB Full Image Read
  * ========================================================================== */
 
-describe('BE-09: LocalMediaInspector case-insensitive artifact.root & >64KB offset-0 image preview', () => {
+describe('BE-09: LocalMediaInspector case-insensitive ancestor vs exact sessionId & >64KB offset-0 image preview', () => {
   it.runIf(process.platform === 'win32' || process.platform === 'darwin')(
-    'does not falsely mark session brain artifact as forbidden when directory casing differs from sessionId',
+    'tolerates ancestor directory casing while rejecting mismatched sessionId directory casing (DEF-BE-IP-01)',
     async () => {
       const root = makeTempDir('gravity-v032-be09-case-');
-      const homeDir = path.join(root, 'home');
-      const brainDir = path.join(homeDir, '.gemini', 'antigravity-cli', 'brain', 'SESS-MIXED-99');
-      mkdirSync(brainDir, { recursive: true });
-      const imgPath = path.join(brainDir, 'preview.png');
+      const homeDirOnDisk = path.join(root, 'HomeMixed');
+      const homeDirLower = path.join(root, 'homemixed');
+      const ownBrainDir = path.join(homeDirOnDisk, '.gemini', 'antigravity-cli', 'brain', 'sess-mixed-99');
+      mkdirSync(ownBrainDir, { recursive: true });
+      const imgPath = path.join(ownBrainDir, 'preview.png');
       writeFileSync(imgPath, createValidPng(32, 24));
 
-      // Query with lowercase sessionId while directory on disk has uppercase SESS-MIXED-99 (authorized via owns)
+      // Ancestor directory casing differs (HomeMixed vs homemixed) while sessionId dir matches exact case -> allowed
       const result = await inspectLocalTargets(
         { targets: ['preview.png'], sessionId: 'sess-mixed-99', includePreviewData: true },
-        { homeDir, profileId: 'default', owns: (o) => o.profileId === 'default' && o.sessionId === 'sess-mixed-99' }
+        { homeDir: homeDirLower, profileId: 'default', owns: (o) => o.profileId === 'default' && o.sessionId === 'sess-mixed-99' }
       );
 
       expect(result.items['preview.png']).toMatchObject({
@@ -754,10 +755,24 @@ describe('BE-09: LocalMediaInspector case-insensitive artifact.root & >64KB offs
         height: 24,
       });
 
+      // DEF-BE-IP-01: sibling session directory whose casing differs from sessionId MUST be rejected as forbidden
+      const siblingBrainDir = path.join(homeDirOnDisk, '.gemini', 'antigravity-cli', 'brain', 'SESS-SIBLING-99');
+      mkdirSync(siblingBrainDir, { recursive: true });
+      const siblingImg = path.join(siblingBrainDir, 'preview.png');
+      writeFileSync(siblingImg, createValidPng(32, 24));
+      const mismatchedSession = await inspectLocalTargets(
+        { targets: ['preview.png', siblingImg], sessionId: 'sess-sibling-99', includePreviewData: true },
+        { homeDir: homeDirOnDisk, profileId: 'default', owns: (o) => o.profileId === 'default' && o.sessionId === 'sess-sibling-99' }
+      );
+      expect(mismatchedSession.items['preview.png']).toMatchObject({ kind: 'forbidden', exists: false });
+      expect(mismatchedSession.items['preview.png'].previewDataUrl).toBeUndefined();
+      expect(mismatchedSession.items[siblingImg]).toMatchObject({ kind: 'forbidden', exists: false });
+      expect(mismatchedSession.items[siblingImg].previewDataUrl).toBeUndefined();
+
       // v0.3.6 security guard: brain access MUST be denied when `owns` is absent or denies ownership
       const withoutOwns = await inspectLocalTargets(
         { targets: ['preview.png', imgPath], sessionId: 'sess-mixed-99', includePreviewData: true },
-        { homeDir }
+        { homeDir: homeDirOnDisk }
       );
       expect(withoutOwns.items['preview.png'].exists).toBe(false);
       expect(withoutOwns.items[imgPath].exists).toBe(false);
@@ -765,7 +780,7 @@ describe('BE-09: LocalMediaInspector case-insensitive artifact.root & >64KB offs
 
       const foreignOwns = await inspectLocalTargets(
         { targets: ['preview.png', imgPath], sessionId: 'sess-mixed-99', includePreviewData: true },
-        { homeDir, profileId: 'default', owns: (o) => o.sessionId === 'other-session' }
+        { homeDir: homeDirOnDisk, profileId: 'default', owns: (o) => o.sessionId === 'other-session' }
       );
       expect(foreignOwns.items['preview.png'].exists).toBe(false);
       expect(foreignOwns.items[imgPath].exists).toBe(false);

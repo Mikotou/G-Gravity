@@ -231,9 +231,17 @@ async function run() {
       await diagCard.waitFor({ timeout: 10_000 });
       assert.ok(((await diagCard.textContent()) || '').includes(expectedDiagTitle));
       assert.doesNotMatch((await diagCard.textContent()) || '', /\bCtrl\s*\+/i);
+      assert.equal(await page.locator('[data-testid="inspector-tab-plan"]').count(), 0, 'Deprecated inspector-tab-plan must not render');
     }
 
     const first = await launch();
+    const firstBootstrap = await first.evaluate(() => window.gravityDesktop.getBootstrap());
+    assert.equal(
+      firstBootstrap.layout.activeInspectorTab,
+      'context',
+      'Legacy layout.json activeInspectorTab:"plan" must fall back to "context" on launch'
+    );
+    assert.equal(await first.locator('[data-testid="inspector-tab-plan"]').count(), 0, 'Deprecated inspector-tab-plan must not render on launch');
     await checkView('视图');
     assert.match(await first.getByTestId('sidebar-new-session-btn').getAttribute('title'), /⌘N/);
     await checkV031RecordedUi(first, 'zh-CN');

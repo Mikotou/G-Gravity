@@ -44,11 +44,42 @@ describe('v0.1.5 布局与缩放契约', () => {
       preferences: { uiScale: 7 },
     });
     try {
-      const layout = await core.saveWorkspaceLayout({ activeInspectorTab: 'plan' });
+      const layout = await core.saveWorkspaceLayout({ activeInspectorTab: 'diff' });
       expect(layout.leftSidebarWidth).toBe(LAYOUT_LIMITS.leftSidebarWidth.max);
       expect(layout.rightInspectorWidth).toBe(LAYOUT_LIMITS.rightInspectorWidth.min);
       expect(layout.splitRatio).toBe(LAYOUT_LIMITS.splitRatio.max);
+      expect(layout.activeInspectorTab).toBe('diff');
       expect(core.getPreferences().uiScale).toBe(UI_SCALE_LIMITS.max);
+    } finally { await cleanup(); }
+  });
+
+  it('旧 layout.json 含废弃 activeInspectorTab: plan 启动回落 context 并保留栏宽/分屏比例，显式保存 plan 被拒', async () => {
+    const { core, cleanup } = setup({
+      layout: {
+        activeInspectorTab: 'plan',
+        leftSidebarWidth: 312,
+        rightInspectorWidth: 420,
+        splitRatio: 0.63,
+        layoutMode: 'split-2',
+      },
+    });
+    try {
+      await expect(
+        core.saveWorkspaceLayout({ activeInspectorTab: 'plan' as unknown as 'context' })
+      ).rejects.toThrow(/Inspector 布局或栏宽无效/);
+      const layout = await core.saveWorkspaceLayout({});
+      expect(layout.activeInspectorTab).toBe('context');
+      expect(layout.leftSidebarWidth).toBe(312);
+      expect(layout.rightInspectorWidth).toBe(420);
+      expect(layout.splitRatio).toBe(0.63);
+      expect(layout.layoutMode).toBe('split-2');
+      expect(core.store.read('layout.json', {})).toMatchObject({
+        activeInspectorTab: 'context',
+        leftSidebarWidth: 312,
+        rightInspectorWidth: 420,
+        splitRatio: 0.63,
+        layoutMode: 'split-2',
+      });
     } finally { await cleanup(); }
   });
 

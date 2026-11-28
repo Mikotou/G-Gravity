@@ -42,9 +42,9 @@ it('an unsuccessful layout write cannot leak into the next unrelated patch', asy
   const initial = await core.saveWorkspaceLayout({ leftSidebarWidth: 300 });
   failNextWrite('layout.json');
   await expect(core.saveWorkspaceLayout({ leftSidebarWidth: 420 })).rejects.toThrow('disk failure');
-  const next = await core.saveWorkspaceLayout({ activeInspectorTab: 'plan' });
+  const next = await core.saveWorkspaceLayout({ activeInspectorTab: 'diff' });
   expect(next.leftSidebarWidth).toBe(initial.leftSidebarWidth);
-  expect(core.store.read('layout.json', {})).toMatchObject({ leftSidebarWidth: 300, activeInspectorTab: 'plan' });
+  expect(core.store.read('layout.json', {})).toMatchObject({ leftSidebarWidth: 300, activeInspectorTab: 'diff' });
 });
 
 it('rolls back a failed preference write including the window effect', async () => {
