@@ -69,9 +69,10 @@ describe('v0.1.6 Claude Code Studio 前端架构', () => {
     expect(inspector.getAttribute('data-inspector-mode')).toBe('docked');
     expect(inspector.className).not.toContain('is-floating');
 
-    // D1 (v0.3.4)：验证 tablist 内部严格 5 个一级页签（Changes / Plan / Terminal / Context / Swarm，分支树收敛至 Context 二级视图），操作按钮位于独立的 inspector-head-actions 中
+    // v0.3.6 Inline Plan：验证 tablist 内部严格 4 个一级页签（Changes / Terminal / Context / Swarm，Plan 内联至主对话流、分支树位于 Context 二级视图），操作按钮位于独立的 inspector-head-actions 中
     const head = inspector.querySelector('.inspector-head') as HTMLElement;
-    expect(within(head).getAllByRole('tab')).toHaveLength(5);
+    expect(within(head).getAllByRole('tab')).toHaveLength(4);
+    expect(within(head).queryByTestId('inspector-tab-plan')).toBeNull();
     expect(within(head).queryAllByRole('button')).toHaveLength(0);
 
     const floatBtn = screen.getByTestId('inspector-float-toggle');

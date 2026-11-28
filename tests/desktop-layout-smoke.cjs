@@ -307,9 +307,10 @@ async function checkActivitySeam(page) {
     await page.goto(pathToFileURL(path.join(dir, 'index.html')).href + '?keyboard-workspace');
     const welcome = page.getByTestId('empty-pane-0');
     await welcome.getByRole('heading').waitFor();
-    // D1 (v0.3.4)：一级页签收敛为 5 个（Changes / Plan / Terminal / Context / Swarm），分支树移至 Context 二级；变更下二级视图为 2 个页签。
+    // v0.3.6 Inline Plan：一级页签收敛为 4 个（Changes / Terminal / Context / Swarm），Plan 内联至主对话流、分支树位于 Context 二级；变更下二级视图为 2 个页签。
     const inspectorHead = page.getByTestId('right-inspector').locator('.inspector-head');
-    assert.equal(await inspectorHead.getByRole('tab').count(), 5);
+    assert.equal(await inspectorHead.getByRole('tab').count(), 4);
+    assert.equal(await inspectorHead.getByTestId('inspector-tab-plan').count(), 0);
     assert.equal(await inspectorHead.getByRole('button').count(), 0);
     assert.equal(await page.getByTestId('right-inspector').locator('.inspector-subnav').getByRole('tab').count(), 2);
     await page.getByTestId('toggle-right-inspector-btn').press('Enter');

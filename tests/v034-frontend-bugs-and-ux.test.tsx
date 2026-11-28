@@ -1384,7 +1384,7 @@ describe('Gravity v0.3.4 前端功能、图标主题动效、缺陷清零与用�
     ).toBeTruthy();
     appView.unmount();
 
-    // 2) D1：RightInspector 严格 5 个一级 tab（0 button），inspector-tab-tree 位于 Context 二级视图切换区
+    // 2) v0.3.6 Inline Plan：RightInspector 严格 4 个一级 tab（0 button），inspector-tab-tree 位于 Context 二级视图切换区
     const tree: ConversationTreeState = {
       rootSessionId: 'sess-d1',
       rootTitle: 'D1 主对话',
@@ -1469,9 +1469,10 @@ describe('Gravity v0.3.4 前端功能、图标主题动效、缺陷清零与用�
       )
     );
     const inspHead = inspView.container.querySelector('.inspector-head') as HTMLElement;
-    expect(within(inspHead).getAllByRole('tab')).toHaveLength(5);
+    expect(within(inspHead).getAllByRole('tab')).toHaveLength(4);
     expect(within(inspHead).queryAllByRole('button')).toHaveLength(0);
     expect(within(inspHead).queryByTestId('inspector-tab-tree')).toBeNull();
+    expect(within(inspHead).queryByTestId('inspector-tab-plan')).toBeNull();
 
     const treeSubBtn = screen.getByTestId('inspector-tab-tree');
     expect(inspHead.contains(treeSubBtn)).toBe(false);
@@ -1497,12 +1498,12 @@ describe('Gravity v0.3.4 前端功能、图标主题动效、缺陷清零与用�
   });
 
   /* ------------------------------------------------------------------ UT-14 */
-  it('UT-14：核心工作台集成冒烟（ActivityRail + TopBar + 5-tab RightInspector 协同无报错）', async () => {
+  it('UT-14：核心工作台集成冒烟（ActivityRail + TopBar + 4-tab RightInspector 协同无报错）', async () => {
     render(<App />);
     await screen.findByTestId('agy-app-root');
 
     const head = screen.getByTestId('right-inspector').querySelector('.inspector-head') as HTMLElement;
-    expect(within(head).getAllByRole('tab')).toHaveLength(5);
+    expect(within(head).getAllByRole('tab')).toHaveLength(4);
     expect(screen.queryByTestId('topbar-new-session-btn')).toBeNull();
     expect(screen.getByTestId('sidebar-new-session-btn')).toBeTruthy();
 

@@ -1323,14 +1323,17 @@ async function main() {
     console.log('[M3] Passed Plan QuestionBar v2 & narrow <420px stepper collapse');
 
     /* =====================================================================
-     * M4: 右侧 Plan 页 6 态待办 + 截断横幅 + 长路径折行 + 按需只读原文抽屉 implementation_plan.md
+     * M4: 主对话流内联 Plan 6 态待办 + 截断横幅 + 长路径折行 + 原地展开只读原文 implementation_plan.md
      * =================================================================== */
     await setInspectorWidth(page, 380);
-    await page.getByTestId('inspector-tab-plan').click();
-    await page.getByTestId('plan-timeline').waitFor({ timeout: 10000 });
-    await page.getByTestId('plan-source-open').waitFor({ timeout: 10000 });
+    assert.equal(await page.locator('[data-testid="right-inspector"] .inspector-head [role="tab"]').count(), 4, '[M4] expected 4 inspector tabs');
+    assert.equal(await page.getByTestId('inspector-tab-plan').count(), 0, '[M4] inspector-tab-plan must not exist');
+    const planView = page.locator('[data-testid="session-pane-sess-plan-qa"] [data-testid="inline-plan-card"]');
+    await planView.waitFor({ timeout: 10000 });
+    await planView.scrollIntoViewIfNeeded();
+    await planView.getByTestId('plan-timeline').waitFor({ timeout: 10000 });
+    await planView.getByTestId('plan-source-open').waitFor({ timeout: 10000 });
     await delay(150);
-    const planView = page.getByTestId('inspector-view-plan');
     const timelineCheck = await planView.evaluate((el) => {
       const items = Array.from(el.querySelectorAll('[data-testid^="plan-item-"]')).map((n) => n.dataset.status);
       const bar = el.querySelector('[data-testid="plan-progressbar"]');
@@ -1342,14 +1345,14 @@ async function main() {
     });
     assert.deepEqual(timelineCheck.items, ['completed', 'in_progress', 'pending', 'skipped', 'failed', 'unknown']);
     assert.ok(timelineCheck.barWidth > 40, `[M4] progressbar width too small: ${timelineCheck.barWidth}`);
-    assert.ok(timelineCheck.overflow <= 1, `[M4] plan view horizontal overflow: ${timelineCheck.overflow}`);
+    assert.ok(timelineCheck.overflow <= 1, `[M4] inline plan card horizontal overflow: ${timelineCheck.overflow}`);
     assert.equal(timelineCheck.truncatedHint, true);
-    assert.equal(timelineCheck.docInline, false, '[M4] v0.3.6 Plan source should open on demand, not inline');
-    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'm4-plan-tab-and-artifact.png') });
+    assert.equal(timelineCheck.docInline, false, '[M4] v0.3.6 Plan source should open on demand, not inline by default');
+    await planView.screenshot({ path: path.join(SCREENSHOT_DIR, 'm4-plan-tab-and-artifact.png') });
 
-    // v0.3.6：点击底部文档入口按需展开只读原文抽屉
-    await page.getByTestId('plan-source-open').click();
-    await page.getByTestId('plan-artifact-document').waitFor({ timeout: 10000 });
+    // v0.3.6：点击卡片头「查看原文」原地展开只读原文抽屉
+    await planView.getByTestId('plan-source-open').click();
+    await planView.getByTestId('plan-artifact-document').waitFor({ timeout: 10000 });
     await delay(120);
     const drawerCheck = await planView.evaluate((el) => {
       const doc = el.querySelector('[data-testid="plan-artifact-document"]');
@@ -1359,12 +1362,12 @@ async function main() {
       return { imgsInDoc, overflow, artifactTruncated };
     });
     assert.equal(drawerCheck.imgsInDoc, 0, '[M4] plan artifact rendered <img> tag');
-    assert.ok(drawerCheck.overflow <= 1, `[M4] plan drawer horizontal overflow: ${drawerCheck.overflow}`);
+    assert.ok(drawerCheck.overflow <= 1, `[M4] inline plan drawer horizontal overflow: ${drawerCheck.overflow}`);
     assert.equal(drawerCheck.artifactTruncated, true);
-    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'm4-plan-source-drawer.png') });
-    await page.getByTestId('plan-source-close').click();
+    await planView.screenshot({ path: path.join(SCREENSHOT_DIR, 'm4-plan-source-drawer.png') });
+    await planView.getByTestId('plan-source-close').click();
     report.m4 = { ...timelineCheck, ...drawerCheck };
-    console.log('[M4] Passed Plan 6-state todos, wrapping & on-demand readonly implementation_plan.md drawer');
+    console.log('[M4] Passed inline Plan 6-state todos, wrapping & on-demand readonly implementation_plan.md drawer');
 
     /* =====================================================================
      * M5: 设置中心 8 项导航 + 外观 3 二级页签 + Approvals 规则 & C1 三色徽章（暗+亮）+ Plugins 隔离横幅

@@ -17,6 +17,8 @@ import { TokenHeatmapView } from '../src/renderer/components/context/TokenHeatma
 import { QuestionBar, readQuestionDraft } from '../src/renderer/components/QuestionBar';
 import { QuestionFollowupStatus } from '../src/renderer/components/QuestionFollowupStatus';
 import { RightInspector } from '../src/renderer/components/RightInspector';
+import { InlinePlanCard, PlanTimeline } from '../src/renderer/components/PlanTimeline';
+import { resolveAuthoritativeTodos } from '../src/renderer/lib/plan-view';
 import { I18nProvider } from '../src/renderer/i18n/I18nContext';
 import { formatTokenCompact, resolveDaily7d } from '../src/renderer/lib/heatmap';
 import { getFallbackDesktopBridge, resetFallbackDesktopBridge } from '../src/renderer/services/desktop-bridge';
@@ -588,22 +590,14 @@ function telemetry(): TelemetryDashboardSnapshot {
 }
 
 function renderPlan(inspectorData: SessionInspectorData | undefined, messages: ChatMessageItem[] = [], sessionId = 's-plan') {
+  const todos = resolveAuthoritativeTodos(inspectorData?.plan, inspectorData?.todos, messages);
   return render(
     wrap(
-      <RightInspector
-        collapsed={false}
-        width={380}
-        activeTab="plan"
-        focusedDiffFile={null}
-        sessionId={sessionId}
+      <InlinePlanCard
         profileId="p1"
-        inspectorData={inspectorData}
-        sessionMessages={messages}
-        telemetry={telemetry()}
-        onSelectTab={() => {}}
-        onFocusDiffFile={() => {}}
-        onCommitWidth={() => {}}
-        onOpenRateCardsSettings={() => {}}
+        sessionId={sessionId}
+        plan={inspectorData?.plan}
+        todos={todos}
       />
     )
   );
@@ -660,7 +654,7 @@ describe('v0.3.5 Plan 检视器', () => {
     expect(bar.getAttribute('aria-valuemax')).toBe('9');
     expect(bar.getAttribute('aria-label')).toBe('计划进度：已完成 3/9');
     expect(screen.getByTestId('plan-truncated-hint')).toBeTruthy();
-    expect(screen.getByTestId('inspector-view-plan').getAttribute('style')).toBeNull();
+    expect(screen.getByTestId('inline-plan-card').getAttribute('style')).toBeNull();
     expect(screen.getByTestId('plan-item-e').querySelector('.plan-item-text')).toBeTruthy();
     await act(async () => {});
   });
@@ -728,26 +722,11 @@ describe('v0.3.5 Plan 检视器', () => {
     };
     render(
       wrap(
-        <RightInspector
-          collapsed={false}
-          focusedDiffFile={null}
-          width={420}
-          activeTab="plan"
+        <InlinePlanCard
           profileId="p1"
           sessionId={planSessionId}
-          inspectorData={{
-            sessionId: planSessionId,
-            diffs: [],
-            todos: [],
-            terminals: [],
-            plan: { state: 'unreceived', revision: 1, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 },
-          }}
-          sessionMessages={[]}
-          telemetry={telemetry()}
-          onSelectTab={() => {}}
-          onFocusDiffFile={() => {}}
-          onCommitWidth={() => {}}
-          onOpenRateCardsSettings={() => {}}
+          plan={{ state: 'unreceived', revision: 1, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 }}
+          todos={[]}
         />
       )
     );
@@ -839,20 +818,11 @@ describe('v0.3.5 Plan 检视器', () => {
     window.gravityDesktop = { ...getFallbackDesktopBridge(), getSessionPlanArtifact: retryFetcher };
     const { unmount } = render(
       wrap(
-        <RightInspector
-          collapsed={false}
-          focusedDiffFile={null}
-          width={420}
-          activeTab="plan"
+        <InlinePlanCard
           profileId="p1"
           sessionId="s-plan-retry"
-          inspectorData={undefined}
-          sessionMessages={[]}
-          telemetry={telemetry()}
-          onSelectTab={() => {}}
-          onFocusDiffFile={() => {}}
-          onCommitWidth={() => {}}
-          onOpenRateCardsSettings={() => {}}
+          plan={undefined}
+          todos={[]}
         />
       )
     );
@@ -861,88 +831,75 @@ describe('v0.3.5 Plan 检视器', () => {
     expect(retryFetcher.mock.calls[1][0]).toEqual({ profileId: 'p1', sessionId: 's-plan-retry', view: 'summary' });
     unmount();
 
-    // 场景 B：连续 unchanged 也不卡 Loading，按纯空态收口且 0 文件栏
-    const stuckFetcher = vi.fn().mockResolvedValue({ status: 'unchanged', owner: { profileId: 'p1', sessionId: 's-plan-stuck' }, revision: 0 });
+    // 场景 B：连续 unchanged 也不卡 Loading，InlinePlanCard 呈纯空 0 DOM，兼容 PlanTimeline 按纯空态收口且 0 文件栏
+    const stuckFetcher = vi.fn(async (input: { profileId: string; sessionId: string }) => ({
+      status: 'unchanged' as const,
+      owner: { profileId: input.profileId, sessionId: input.sessionId },
+      revision: 0,
+    }));
     window.gravityDesktop = { ...getFallbackDesktopBridge(), getSessionPlanArtifact: stuckFetcher };
-    render(
+    const inlineStuck = render(
       wrap(
-        <RightInspector
-          collapsed={false}
-          focusedDiffFile={null}
-          width={420}
-          activeTab="plan"
+        <InlinePlanCard
           profileId="p1"
           sessionId="s-plan-stuck"
-          inspectorData={undefined}
-          sessionMessages={[]}
-          telemetry={telemetry()}
-          onSelectTab={() => {}}
-          onFocusDiffFile={() => {}}
-          onCommitWidth={() => {}}
-          onOpenRateCardsSettings={() => {}}
+          plan={undefined}
+          todos={[]}
         />
       )
     );
+    await waitFor(() => expect(stuckFetcher).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('inline-plan-card')).toBeNull();
+    expect(screen.queryByTestId('plan-source-open')).toBeNull();
+    inlineStuck.unmount();
+
+    render(wrap(<PlanTimeline profileId="p1" sessionId="s-plan-stuck-compat" plan={undefined} todos={[]} />));
     expect(await screen.findByTestId('plan-empty')).toBeTruthy();
     expect(screen.queryByTestId('plan-source-line')).toBeNull();
   });
 
-  it('unavailable 状态（0 文件名）与不支持该接口的旧桥接（0 文件栏）', async () => {
+  it('unavailable 状态（0 文件名）与不支持该接口的旧桥接（0 文件栏 / 内联 0 DOM）', async () => {
     window.gravityDesktop = {
       ...getFallbackDesktopBridge(),
       getSessionPlanArtifact: vi.fn().mockResolvedValue({ status: 'unavailable', owner: { profileId: 'p1', sessionId: 's-plan-unavail' }, revision: 0, reason: '权限不足' }),
     };
     const { unmount } = render(
       wrap(
-        <RightInspector
-          collapsed={false}
-          focusedDiffFile={null}
-          width={420}
-          activeTab="plan"
+        <InlinePlanCard
           profileId="p1"
           sessionId="s-plan-unavail"
-          inspectorData={undefined}
-          sessionMessages={[]}
-          telemetry={telemetry()}
-          onSelectTab={() => {}}
-          onFocusDiffFile={() => {}}
-          onCommitWidth={() => {}}
-          onOpenRateCardsSettings={() => {}}
+          plan={undefined}
+          todos={[]}
         />
       )
     );
     const unavail = await screen.findByTestId('plan-unavailable');
     expect(unavail.textContent).toContain('权限不足');
     expect(unavail.textContent).not.toContain('implementation_plan.md');
+    expect(screen.queryByTestId('plan-source-open')).toBeNull();
     unmount();
     const legacy = { ...getFallbackDesktopBridge() } as Partial<GravityDesktopBridge>;
     delete legacy.getSessionPlanArtifact;
     delete legacy.onPlanArtifactChanged;
     window.gravityDesktop = legacy as GravityDesktopBridge;
-    render(
+    const inlineLegacy = render(
       wrap(
-        <RightInspector
-          collapsed={false}
-          focusedDiffFile={null}
-          width={420}
-          activeTab="plan"
+        <InlinePlanCard
           profileId="p1"
           sessionId="s-plan-legacy"
-          inspectorData={undefined}
-          sessionMessages={[]}
-          telemetry={telemetry()}
-          onSelectTab={() => {}}
-          onFocusDiffFile={() => {}}
-          onCommitWidth={() => {}}
-          onOpenRateCardsSettings={() => {}}
+          plan={undefined}
+          todos={[]}
         />
       )
     );
+    expect(screen.queryByTestId('inline-plan-card')).toBeNull();
+    inlineLegacy.unmount();
+    render(wrap(<PlanTimeline profileId="p1" sessionId="s-plan-legacy-compat" plan={undefined} todos={[]} />));
     expect(screen.getByTestId('plan-empty')).toBeTruthy();
     expect(screen.queryByTestId('plan-source-line')).toBeNull();
   });
 
-  it('unreceived + 文档就绪展示概要态并隐藏空态；missing 展示纯空态；plan.state === empty（状态 ④）隐藏文件栏', async () => {
+  it('unreceived + 文档就绪展示概要态；missing 内联 0 DOM；plan.state === empty（状态 ④）隐藏文件按钮', async () => {
     window.gravityDesktop = {
       ...getFallbackDesktopBridge(),
       getSessionPlanArtifact: vi.fn().mockResolvedValue({
@@ -956,29 +913,14 @@ describe('v0.3.5 Plan 检视器', () => {
         outline: { title: '实施计划', sections: [{ id: 'sec-1', level: 2, heading: '第一步', summary: '' }], sectionCount: 1 },
       }),
     };
-    const unreceivedInspector = {
-      sessionId: 's-plan-outline-only',
-      diffs: [],
-      todos: [],
-      terminals: [],
-      plan: { state: 'unreceived' as const, revision: 1, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 },
-    };
+    const unreceivedPlan = { state: 'unreceived' as const, revision: 1, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 };
     const { unmount } = render(
       wrap(
-        <RightInspector
-          collapsed={false}
-          focusedDiffFile={null}
-          width={420}
-          activeTab="plan"
+        <InlinePlanCard
           profileId="p1"
           sessionId="s-plan-outline-only"
-          inspectorData={unreceivedInspector}
-          sessionMessages={[]}
-          telemetry={telemetry()}
-          onSelectTab={() => {}}
-          onFocusDiffFile={() => {}}
-          onCommitWidth={() => {}}
-          onOpenRateCardsSettings={() => {}}
+          plan={unreceivedPlan}
+          todos={[]}
         />
       )
     );
@@ -986,62 +928,44 @@ describe('v0.3.5 Plan 检视器', () => {
     expect(screen.queryByTestId('plan-empty')).toBeNull();
     unmount();
 
-    // 状态 ④（DEC-04）：plan.state === 'empty' 时即使存在计划文档也不展示文件栏
+    // 状态 ④（DEC-04）：plan.state === 'empty' 时即使存在计划文档也不展示文件按钮与文件名
     const clearedView = render(
       wrap(
-        <RightInspector
-          collapsed={false}
-          focusedDiffFile={null}
-          width={420}
-          activeTab="plan"
+        <InlinePlanCard
           profileId="p1"
           sessionId="s-plan-outline-only"
-          inspectorData={{
-            ...unreceivedInspector,
-            plan: { state: 'empty', revision: 2, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 },
-          }}
-          sessionMessages={[]}
-          telemetry={telemetry()}
-          onSelectTab={() => {}}
-          onFocusDiffFile={() => {}}
-          onCommitWidth={() => {}}
-          onOpenRateCardsSettings={() => {}}
+          plan={{ state: 'empty', revision: 2, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 }}
+          todos={[]}
         />
       )
     );
     expect(await screen.findByTestId('plan-cleared')).toBeTruthy();
-    expect(screen.queryByTestId('plan-source-line')).toBeNull();
-    expect(screen.getByTestId('inspector-view-plan').textContent).not.toContain('implementation_plan.md');
+    expect(screen.queryByTestId('plan-source-open')).toBeNull();
+    expect(screen.queryByTestId('plan-artifact-open-file')).toBeNull();
+    expect(screen.getByTestId('inline-plan-card').textContent).not.toContain('implementation_plan.md');
     clearedView.unmount();
 
+    const missingFetcher = vi.fn().mockResolvedValue({
+      status: 'missing',
+      owner: { profileId: 'p1', sessionId: 's-plan-missing' },
+      revision: 0,
+    });
     window.gravityDesktop = {
       ...getFallbackDesktopBridge(),
-      getSessionPlanArtifact: vi.fn().mockResolvedValue({
-        status: 'missing',
-        owner: { profileId: 'p1', sessionId: 's-plan-missing' },
-        revision: 0,
-      }),
+      getSessionPlanArtifact: missingFetcher,
     };
     render(
       wrap(
-        <RightInspector
-          collapsed={false}
-          focusedDiffFile={null}
-          width={420}
-          activeTab="plan"
+        <InlinePlanCard
           profileId="p1"
           sessionId="s-plan-missing"
-          inspectorData={{ ...unreceivedInspector, sessionId: 's-plan-missing' }}
-          sessionMessages={[]}
-          telemetry={telemetry()}
-          onSelectTab={() => {}}
-          onFocusDiffFile={() => {}}
-          onCommitWidth={() => {}}
-          onOpenRateCardsSettings={() => {}}
+          plan={unreceivedPlan}
+          todos={[]}
         />
       )
     );
-    expect(await screen.findByTestId('plan-empty')).toBeTruthy();
-    expect(screen.queryByTestId('plan-source-line')).toBeNull();
+    await waitFor(() => expect(missingFetcher).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('inline-plan-card')).toBeNull();
+    expect(screen.queryByTestId('plan-source-open')).toBeNull();
   });
 });

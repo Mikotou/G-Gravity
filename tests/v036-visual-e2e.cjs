@@ -257,7 +257,7 @@ function injectOfflineV036Bridge() {
     leftSidebarWidth: 252,
     rightInspectorCollapsed: false,
     rightInspectorWidth: 380,
-    activeInspectorTab: 'plan',
+    activeInspectorTab: 'diff',
     splitRatio: 0.5,
   };
 
@@ -867,8 +867,14 @@ async function main() {
     await page.addInitScript(injectOfflineV036Bridge);
     await page.goto(`${baseUrl}/index.html`, { waitUntil: 'domcontentloaded' });
     await page.getByTestId('agy-app-root').waitFor({ timeout: 15000 });
+    await page.getByTestId('inline-plan-card').waitFor({ timeout: 15000 });
     await page.getByTestId('plan-timeline').waitFor({ timeout: 15000 });
     await delay(200);
+
+    // 校验 4 页签 RightInspector（Plan 已内联至主对话流，右侧严格 4 个一级页签）
+    const inspTabsCount = await page.locator('[data-testid="right-inspector"] .inspector-head [role="tab"]').count();
+    assert.equal(inspTabsCount, 4, `[Init] expected strictly 4 RightInspector top-level tabs, got ${inspTabsCount}`);
+    assert.equal(await page.getByTestId('inspector-tab-plan').count(), 0, '[Init] inspector-tab-plan must not exist');
 
     // Seed 1 live annotation in the composer tray + CSS.highlights so V1 captures full annotation UI + dual pins
     await selectRangeAndQuote(page, 'assistant-body-m-a1', 'strong', '验证 6 主题划词托盘对比度与双编号钉');
@@ -876,47 +882,56 @@ async function main() {
     assert.equal(highlightCount, 1, '[V1/V4] expected CSS.highlights gravity-annotations size === 1');
 
     /* =====================================================================
-     * V1: 6 套真实预设主题全景（工作台 + 划词托盘 + Plan 抽屉 + 语音设置卡 + 图标 3×2）
+     * V1: 6 套真实预设主题全景（主对话宽列内联 Plan + 原地展开全文 + 4 页签检视器 + 划词托盘 + 语音设置卡 + 图标 3×2）
      * =================================================================== */
     await setInspectorWidth(page, 380);
     for (const theme of ALL_THEMES) {
       await selectThemeViaUi(page, theme);
       const wbCheck = await page.evaluate(() => {
         const pane = document.querySelector('[data-testid="session-pane-sess-s3-exec"]');
-        const plan = document.querySelector('[data-testid="inspector-view-plan"]');
+        const card = pane?.querySelector('[data-testid="inline-plan-card"]');
+        const inspTabs = document.querySelectorAll('[data-testid="right-inspector"] .inspector-head [role="tab"]').length;
         return {
           paneOverflow: pane ? Math.round(pane.scrollWidth - pane.clientWidth) : -1,
-          planOverflow: plan ? Math.round(plan.scrollWidth - plan.clientWidth) : -1,
+          planOverflow: card ? Math.round(card.scrollWidth - card.clientWidth) : -1,
           hasSentAnnotations: Boolean(document.querySelector('[data-testid="sent-annotations"]')),
           hasTray: Boolean(document.querySelector('[data-testid="composer-annotations-sess-s3-exec"]')),
-          hasPlanChip: Boolean(document.querySelector('[data-testid="plan-chip-m-a1"]')),
+          hasInlinePlanCard: Boolean(card),
+          legacyPlanChipCount: document.querySelectorAll('[data-testid^="plan-chip-"]').length,
+          inspTabs,
           hasVoiceBtn: Boolean(document.querySelector('[data-testid="voice-toggle-sess-s3-exec"]')),
         };
       });
       assert.ok(wbCheck.paneOverflow <= 1, `[V1 ${theme}] pane overflow=${wbCheck.paneOverflow}`);
-      assert.ok(wbCheck.planOverflow <= 1, `[V1 ${theme}] plan overflow=${wbCheck.planOverflow}`);
+      assert.ok(wbCheck.planOverflow <= 1, `[V1 ${theme}] inline plan card overflow=${wbCheck.planOverflow}`);
       assert.equal(wbCheck.hasSentAnnotations, true);
       assert.equal(wbCheck.hasTray, true);
-      assert.equal(wbCheck.hasPlanChip, true);
+      assert.equal(wbCheck.hasInlinePlanCard, true);
+      assert.equal(wbCheck.legacyPlanChipCount, 0);
+      assert.equal(wbCheck.inspTabs, 4);
       assert.equal(wbCheck.hasVoiceBtn, true);
       await page.screenshot({ path: path.join(SCREENSHOT_DIR, `v1-${theme}-workbench.png`) });
 
-      // 打开 Plan 原文抽屉截屏并校验 0 <img> / Mermaid 折叠 / GFM 表格 / 0 溢出
-      await page.getByTestId('plan-source-open').click();
-      await page.getByTestId('plan-artifact-document').waitFor({ timeout: 10000 });
+      // 主对话内联展开 Plan 原文并校验 0 <img> / Mermaid 折叠 / GFM 表格 / 0 溢出 / Esc 收起
+      const inlineCard = page.locator('[data-testid="session-pane-sess-s3-exec"] [data-testid="inline-plan-card"]');
+      await inlineCard.scrollIntoViewIfNeeded();
+      await inlineCard.getByTestId('plan-source-open').click();
+      await inlineCard.getByTestId('plan-artifact-document').waitFor({ timeout: 10000 });
       await delay(100);
-      const drawerCheck = await page.getByTestId('inspector-view-plan').evaluate((el) => ({
+      const drawerCheck = await inlineCard.evaluate((el) => ({
         overflow: Math.round(el.scrollWidth - el.clientWidth),
         imgs: el.querySelectorAll('img').length,
         hasMermaid: Boolean(el.querySelector('[data-testid="plan-doc-mermaid"]')),
         hasTable: Boolean(el.querySelector('table.md-table')),
       }));
-      assert.ok(drawerCheck.overflow <= 1, `[V1 ${theme} drawer] overflow=${drawerCheck.overflow}`);
+      assert.ok(drawerCheck.overflow <= 1, `[V1 ${theme} inline source] overflow=${drawerCheck.overflow}`);
       assert.equal(drawerCheck.imgs, 0);
       assert.equal(drawerCheck.hasMermaid, true);
       assert.equal(drawerCheck.hasTable, true);
-      await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, `v1-${theme}-plan-drawer.png`) });
-      await page.getByTestId('plan-source-close').click();
+      await page.getByTestId('session-pane-sess-s3-exec').screenshot({ path: path.join(SCREENSHOT_DIR, `v1-${theme}-plan-inline-source.png`) });
+      await inlineCard.getByTestId('plan-source-drawer').click({ position: { x: 10, y: 10 } });
+      await page.keyboard.press('Escape');
+      await inlineCard.getByTestId('plan-source-drawer').waitFor({ state: 'detached', timeout: 5000 });
       await delay(80);
 
       // 截屏 General → VoiceSettingsCard（暗/亮双代表及全部 6 主题检查 Icons 3×2 + 顶部开关）
@@ -947,30 +962,17 @@ async function main() {
 
       report.v1.push({ theme, wbCheck, drawerCheck, iconAudit });
     }
-    console.log('[V1] Passed all 6 preset themes panorama, Plan drawer, VoiceSettingsCard & Icons 3×2');
+    console.log('[V1] Passed all 6 preset themes panorama, inline Plan source, 4-tab RightInspector, VoiceSettingsCard & Icons 3×2');
 
     /* =====================================================================
-     * V2: 4 档窗格容器宽度（720 / 560 / 460 / 340px，含 340px 录音中 0 溢出）+ 280px 抽屉
+     * V2: 4 档窗格容器宽度（720 / 560 / 460 / 340px，含 340px 内联 Plan 展开/全文/折叠 & 录音 0 溢出）
      * =================================================================== */
     await selectThemeViaUi(page, 'claude-code-dark');
     // 清除托盘标注以免挡住底栏几何测量
     const removeTrayBtn = page.locator('[data-testid^="composer-annotation-remove-"]').first();
     if (await removeTrayBtn.count()) await removeTrayBtn.click();
 
-    // 1) 280px 窄 Inspector 下的 Plan 原文抽屉 0 横向溢出（代码块内部独立滚动）
-    await setInspectorWidth(page, 280);
-    await page.getByTestId('plan-source-open').click();
-    await page.getByTestId('plan-artifact-document').waitFor();
-    await delay(120);
-    const narrowDrawer = await page.getByTestId('inspector-view-plan').evaluate((el) => ({
-      width: Math.round(el.getBoundingClientRect().width),
-      overflow: Math.round(el.scrollWidth - el.clientWidth),
-    }));
-    assert.ok(narrowDrawer.overflow <= 1, `[V2 280px drawer] overflow=${narrowDrawer.overflow}`);
-    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'v2-plan-280-drawer.png') });
-    await page.getByTestId('plan-source-close').click();
-
-    // 2) 收起侧栏与右侧检视器，精准通过视口宽度将主窗格容器宽度逼近 720 / 560 / 460 / 340px
+    // 1) 收起侧栏与右侧检视器，精准通过视口宽度将主窗格容器宽度逼近 720 / 560 / 460 / 340px
     await page.getByTestId('toggle-right-inspector-btn').click();
     await page.getByTestId('toggle-left-sidebar-btn').click();
     await delay(140);
@@ -1020,6 +1022,51 @@ async function main() {
       });
       report.v2.push({ targetPaneW, mode: 'idle', geom });
     }
+
+    // 2) 340px 极窄主窗格下内联 Plan 展开态 / 原地展开全文 / 折叠态（严格 0 横向溢出 & 0 按钮裁切）
+    const narrowCard = page.locator('[data-testid="session-pane-sess-s3-exec"] [data-testid="inline-plan-card"]');
+    await narrowCard.scrollIntoViewIfNeeded();
+    await delay(100);
+    const checkNarrowCard = () =>
+      narrowCard.evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        const buttons = Array.from(el.querySelectorAll('.inline-plan-head button'));
+        const allButtonsInside = buttons.every((btn) => {
+          const r = btn.getBoundingClientRect();
+          return r.width > 0 && r.left >= rect.left - 1 && r.right <= rect.right + 1;
+        });
+        return {
+          width: Math.round(rect.width),
+          overflow: Math.round(el.scrollWidth - el.clientWidth),
+          buttonCount: buttons.length,
+          allButtonsInside,
+        };
+      });
+    const narrowExpanded = await checkNarrowCard();
+    assert.ok(narrowExpanded.overflow <= 1, `[V2 340px inline plan expanded] overflow=${narrowExpanded.overflow}`);
+    assert.equal(narrowExpanded.allButtonsInside, true, '[V2 340px inline plan expanded] header button clipped');
+    await narrowCard.screenshot({ path: path.join(SCREENSHOT_DIR, 'v2-inline-plan-340-expanded.png') });
+
+    await narrowCard.getByTestId('plan-source-open').click();
+    await narrowCard.getByTestId('plan-artifact-document').waitFor({ timeout: 10000 });
+    await delay(120);
+    const narrowSource = await checkNarrowCard();
+    assert.ok(narrowSource.overflow <= 1, `[V2 340px inline plan source] overflow=${narrowSource.overflow}`);
+    assert.equal(narrowSource.allButtonsInside, true, '[V2 340px inline plan source] header button clipped');
+    await narrowCard.screenshot({ path: path.join(SCREENSHOT_DIR, 'v2-inline-plan-340-source.png') });
+
+    // 折叠态：同步收起原文抽屉且 0 裁切
+    await narrowCard.getByTestId('inline-plan-toggle').click();
+    await narrowCard.getByTestId('plan-source-drawer').waitFor({ state: 'detached', timeout: 5000 });
+    await delay(100);
+    const narrowCollapsed = await checkNarrowCard();
+    assert.ok(narrowCollapsed.overflow <= 1, `[V2 340px inline plan collapsed] overflow=${narrowCollapsed.overflow}`);
+    assert.equal(narrowCollapsed.allButtonsInside, true, '[V2 340px inline plan collapsed] header button clipped');
+    await narrowCard.screenshot({ path: path.join(SCREENSHOT_DIR, 'v2-inline-plan-340-collapsed.png') });
+    // 恢复展开态以继续 V4/V3
+    await narrowCard.getByTestId('inline-plan-toggle').click();
+    await narrowCard.getByTestId('plan-timeline').waitFor({ timeout: 5000 });
+    report.v2.push({ targetPaneW: 340, mode: 'inline-plan', narrowExpanded, narrowSource, narrowCollapsed });
 
     // 3) 340px 极窄窗格 + 语音录制中（.voice-status.is-recording + .voice-dot 可见）-> 严格 0 横向溢出 & 0 按钮裁切
     await page.getByTestId('composer-more-sess-s3-exec').click();
@@ -1091,7 +1138,7 @@ async function main() {
     await page.evaluate(() => window.__v036Qa.setSessionStatus('sess-s3-exec', 'idle'));
     await delay(120);
     report.v4 = { reducedInfiniteCount: reducedAnims.length, highlightCount };
-    console.log('[V2 & V4] Passed 4 widths (incl. 340px recording 0 overflow), 280px drawer & reduced-motion 0 infinite animations');
+    console.log('[V2 & V4] Passed 4 widths (incl. 340px inline plan & recording 0 overflow) & reduced-motion 0 infinite animations');
 
     /* =====================================================================
      * V3: Plan 四态（① 纯空 / ①′ 不可读 / ② 概要 / ③ 执行折叠 / ④ 显式清空 DEC-04）+ 标注编辑流
@@ -1110,46 +1157,101 @@ async function main() {
     await page.locator('.message-editor').screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-ann-edit-cards.png') });
     await page.keyboard.press('Escape');
 
-    // 状态 ③（默认会话）：验证已完成 3 步折叠组 & 点击展开 & 底栏章节数
-    const doneGroup = page.getByTestId('plan-done-group-t1');
-    await doneGroup.waitFor();
-    assert.ok((await page.getByTestId('plan-source-open').textContent()).includes('2 个章节'));
-    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-plan-state-3-execution.png') });
+    // 状态 ③（默认会话）：验证内联已完成 3 步折叠组 & 原地查看原文入口
+    const s3Card = page.locator('[data-testid="session-pane-sess-s3-exec"] [data-testid="inline-plan-card"]');
+    await s3Card.waitFor();
+    assert.equal(await s3Card.getAttribute('data-plan-view'), 'execution');
+    await s3Card.getByTestId('plan-done-group-t1').waitFor();
+    assert.ok((await s3Card.getByTestId('plan-source-open').textContent()).includes('查看原文'));
+    await s3Card.screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-inline-plan-state-3-execution.png') });
 
-    // 状态 ① 纯空态
+    // 状态 ① 纯空态（内联严格 0 DOM、0 文件入口、0 implementation_plan.md）
     await page.getByTestId('tab-item-sess-s1-empty').click();
-    await page.getByTestId('plan-empty').waitFor();
-    const s1Text = await page.getByTestId('inspector-view-plan').textContent();
-    assert.equal(await page.getByTestId('plan-source-line').count(), 0);
-    assert.equal(s1Text.includes('implementation_plan.md'), false);
-    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-plan-state-1-empty.png') });
+    const s1Pane = page.getByTestId('session-pane-sess-s1-empty');
+    await s1Pane.waitFor();
+    await delay(140);
+    assert.equal(await s1Pane.getByTestId('inline-plan-card').count(), 0, '[V3 State ①] empty inline plan must render 0 DOM');
+    assert.equal(await s1Pane.getByTestId('plan-source-open').count(), 0);
+    assert.equal((await s1Pane.textContent()).includes('implementation_plan.md'), false);
 
-    // 状态 ①′ unavailable
+    // 状态 ①′ unavailable（仅原因、0 文件名、0 文件按钮）
     await page.getByTestId('tab-item-sess-s1p-unavail').click();
-    await page.getByTestId('plan-unavailable').waitFor();
-    const s1pText = await page.getByTestId('plan-unavailable').textContent();
+    const s1pPane = page.getByTestId('session-pane-sess-s1p-unavail');
+    await s1pPane.getByTestId('plan-unavailable').waitFor();
+    const s1pCard = s1pPane.getByTestId('inline-plan-card');
+    assert.equal(await s1pCard.getAttribute('data-plan-view'), 'unavailable');
+    const s1pText = await s1pPane.getByTestId('plan-unavailable').textContent();
     assert.ok(s1pText.includes('离线权限只读受限'));
     assert.equal(s1pText.includes('implementation_plan.md'), false);
-    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-plan-state-1p-unavailable.png') });
+    assert.equal(await s1pCard.getByTestId('plan-source-open').count(), 0);
+    await s1pCard.screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-inline-plan-state-1p-unavailable.png') });
 
-    // 状态 ② 概要态
+    // 状态 ② 概要态（0 假进度条、章节徽标、底部执行前提示）
     await page.getByTestId('tab-item-sess-s2-outline').click();
-    await page.getByTestId('plan-outline').waitFor();
-    assert.equal(await page.getByTestId('plan-progressbar').count(), 0);
-    assert.ok((await page.getByTestId('plan-outline').textContent()).includes('执行开始后显示实时进度'));
-    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-plan-state-2-outline.png') });
+    const s2Pane = page.getByTestId('session-pane-sess-s2-outline');
+    await s2Pane.getByTestId('plan-outline').waitFor();
+    const s2Card = s2Pane.getByTestId('inline-plan-card');
+    assert.equal(await s2Card.getAttribute('data-plan-view'), 'outline');
+    assert.equal(await s2Card.getByTestId('plan-progressbar').count(), 0);
+    assert.ok((await s2Pane.getByTestId('plan-outline').textContent()).includes('执行开始后显示实时进度'));
+    await s2Card.screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-inline-plan-state-2-outline.png') });
 
-    // 状态 ④ 显式清空态（DEC-04：0 文件栏、0 implementation_plan.md、0 旧待办复活）
+    // 状态 ④ 显式清空态（DEC-04：0 文件按钮、0 implementation_plan.md、0 旧待办复活）
     await page.getByTestId('tab-item-sess-s4-cleared').click();
-    await page.getByTestId('plan-cleared').waitFor();
-    const s4Text = await page.getByTestId('inspector-view-plan').textContent();
-    assert.equal(await page.getByTestId('plan-source-line').count(), 0, '[V3 State ④ DEC-04] plan-source-line must not render');
+    const s4Pane = page.getByTestId('session-pane-sess-s4-cleared');
+    await s4Pane.getByTestId('plan-cleared').waitFor();
+    const s4Card = s4Pane.getByTestId('inline-plan-card');
+    assert.equal(await s4Card.getAttribute('data-plan-view'), 'cleared');
+    const s4Text = await s4Card.textContent();
+    assert.equal(await s4Card.getByTestId('plan-source-open').count(), 0, '[V3 State ④ DEC-04] plan-source-open must not render');
+    assert.equal(await s4Card.getByTestId('plan-artifact-open-file').count(), 0, '[V3 State ④ DEC-04] open-file button must not render');
     assert.equal(s4Text.includes('implementation_plan.md'), false, '[V3 State ④ DEC-04] filename must not appear');
     assert.equal(s4Text.includes('绝不复活的旧待办'), false, '[V3 State ④] old todos must not resurrect');
-    await page.getByTestId('right-inspector').screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-plan-state-4-cleared.png') });
+    await s4Card.screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-inline-plan-state-4-cleared.png') });
 
-    report.v3 = { editOrderOk, statesVerified: ['empty', 'unavailable', 'outline', 'execution', 'cleared'] };
-    console.log('[V3] Passed Plan 4 states (incl. DEC-04 State ④) & EditUserMessage annotation cards');
+    // split-2 双栏同时展开两个不同会话的原地 Plan 原文 + 聚焦窗格 Esc 单关隔离
+    await page.getByTestId('tab-item-sess-s3-exec').click();
+    await page.getByTestId('session-pane-sess-s3-exec').waitFor();
+    await page.getByTestId('layout-btn-split-2').click();
+    await delay(140);
+    const rightSlot = page.getByTestId('workspace-slot-1');
+    if ((await rightSlot.locator('[data-testid="session-pane-sess-s2-outline"]').count()) === 0) {
+      await rightSlot.locator('select.pane-switch').selectOption('sess-s2-outline');
+    }
+    const leftPane = page.getByTestId('session-pane-sess-s3-exec');
+    const rightPane = page.getByTestId('session-pane-sess-s2-outline');
+    await leftPane.getByTestId('plan-source-open').waitFor();
+    await rightPane.getByTestId('plan-source-open').waitFor();
+    await leftPane.getByTestId('plan-source-open').click();
+    await leftPane.getByTestId('plan-artifact-document').waitFor();
+    await rightPane.click({ position: { x: 20, y: 20 } });
+    await rightPane.getByTestId('plan-source-open').click();
+    await rightPane.getByTestId('plan-artifact-document').waitFor();
+    await delay(120);
+    const splitGeom = await page.evaluate(() => {
+      const lp = document.querySelector('[data-testid="session-pane-sess-s3-exec"] [data-testid="inline-plan-card"]');
+      const rp = document.querySelector('[data-testid="session-pane-sess-s2-outline"] [data-testid="inline-plan-card"]');
+      return {
+        leftOverflow: lp ? Math.round(lp.scrollWidth - lp.clientWidth) : -1,
+        rightOverflow: rp ? Math.round(rp.scrollWidth - rp.clientWidth) : -1,
+      };
+    });
+    assert.ok(splitGeom.leftOverflow <= 1, `[V3 split-2] left card overflow=${splitGeom.leftOverflow}`);
+    assert.ok(splitGeom.rightOverflow <= 1, `[V3 split-2] right card overflow=${splitGeom.rightOverflow}`);
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v3-split2-dual-plan-source.png') });
+    // 聚焦右栏按 Esc：仅关闭右栏原文，左栏保持展开
+    await rightPane.getByTestId('plan-source-drawer').click({ position: { x: 10, y: 10 } });
+    await page.keyboard.press('Escape');
+    await rightPane.getByTestId('plan-source-drawer').waitFor({ state: 'detached', timeout: 5000 });
+    assert.equal(await leftPane.getByTestId('plan-source-drawer').count(), 1, '[V3 split-2] Esc on focused right pane must keep left drawer open');
+    // 聚焦左栏按 Esc：关闭左栏原文
+    await leftPane.getByTestId('plan-source-drawer').click({ position: { x: 10, y: 10 } });
+    await page.keyboard.press('Escape');
+    await leftPane.getByTestId('plan-source-drawer').waitFor({ state: 'detached', timeout: 5000 });
+    await page.getByTestId('layout-btn-single').click();
+
+    report.v3 = { editOrderOk, splitGeom, statesVerified: ['empty', 'unavailable', 'outline', 'execution', 'cleared', 'split-2-esc-isolation'] };
+    console.log('[V3] Passed inline Plan 5 states (incl. DEC-04 State ④), split-2 dual Esc isolation & EditUserMessage annotation cards');
 
     assert.deepEqual(externalRequests, [], `Unexpected external requests: ${JSON.stringify(externalRequests)}`);
     assert.deepEqual(pageErrors, [], `Detected pageerror(s): ${JSON.stringify(pageErrors)}`);

@@ -1021,7 +1021,7 @@ describe('v0.2.2 Approve for me 完整逻辑修复（无外部复核 + 有外部
     expect(screen.getByTestId('reviewer-cost-total-usd').textContent).toContain('$');
   });
 
-  it('11) 右侧检视器极窄宽度下的横向滑动栏：保持 .inspector-head 纯 5 页签、溢出时显示左右滑动按钮并支持滚轮横滑', async () => {
+  it('11) 右侧检视器极窄宽度下的横向滑动栏：保持 .inspector-head 纯 4 页签、溢出时显示左右滑动按钮并支持滚轮横滑', async () => {
     resetFallbackDesktopBridge();
     const boot = await getFallbackDesktopBridge().getBootstrap();
     const onSelectTab = vi.fn();
@@ -1046,11 +1046,11 @@ describe('v0.2.2 Approve for me 完整逻辑修复（无外部复核 + 有外部
 
     const inspector = screen.getByTestId('right-inspector');
     const head = inspector.querySelector('.inspector-head') as HTMLDivElement;
-    // D1 (v0.3.4)：严格保持 tablist 语义纯净：5 个一级 tab（分支树收纳至 Context 二级）、0 个多余 button
-    expect(within(head).getAllByRole('tab')).toHaveLength(5);
+    // v0.3.6 Inline Plan：严格保持 tablist 语义纯净：4 个一级 tab（Changes / Terminal / Context / Swarm）、0 个多余 button
+    expect(within(head).getAllByRole('tab')).toHaveLength(4);
     expect(within(head).queryAllByRole('button')).toHaveLength(0);
 
-    // 模拟窄栏溢出（例如右侧栏压缩至 280px，可用页签区仅 80px，5 个页签总宽 220px）
+    // 模拟窄栏溢出（例如右侧栏压缩至 280px，可用页签区仅 80px，4 个页签总宽 220px）
     Object.defineProperty(head, 'clientWidth', { configurable: true, value: 80 });
     Object.defineProperty(head, 'scrollWidth', { configurable: true, value: 220 });
     let scrollLeftVal = 0;

@@ -23,17 +23,17 @@ describe('v0.2 三栏、Composer与Inspector组件交互', () => {
     const sessionId = 'read-test';
     const command = 'echo ' + 'very-long-param '.repeat(32) + 'THE_END';
     const entry = { id: '1', toolCallId: '1', command, output: '示例结果', status: 'failed' as const, exitCode: 1, timestamp: 't' };
-    const tree = (activeTab: 'terminal' | 'plan', output = entry.output, collapsed = false) =>
+    const tree = (activeTab: 'terminal' | 'diff', output = entry.output, collapsed = false) =>
       wrap(<RightInspector collapsed={collapsed} width={380} activeTab={activeTab} focusedDiffFile={null} sessionId={sessionId} sessionMessages={[]}
         telemetry={boot.telemetry} inspectorData={{ sessionId, terminals: [{ ...entry, output }], todos: [], diffs: [] }}
         onSelectTab={() => {}} onFocusDiffFile={() => {}} onCommitWidth={() => {}} onOpenRateCardsSettings={() => {}} />);
     const badge = () => screen.getByTestId('inspector-tab-terminal').querySelector('.tab-count');
-    const view = render(tree('plan'));
+    const view = render(tree('diff'));
     expect(badge()?.classList.contains('tone-danger')).toBe(true);
-    // F-12：收起态不渲染内部控件，且收起期间切到 terminal 不应消除未读计数；展开回 plan 仍可见未读，真正展开 terminal 后消失。
+    // F-12：收起态不渲染内部控件，且收起期间切到 terminal 不应消除未读计数；展开回 diff 仍可见未读，真正展开 terminal 后消失。
     view.rerender(tree('terminal', entry.output, true));
     expect(screen.queryByTestId('inspector-tab-terminal')).toBeNull();
-    view.rerender(tree('plan', entry.output, false)); expect(badge()).toBeTruthy();
+    view.rerender(tree('diff', entry.output, false)); expect(badge()).toBeTruthy();
     view.rerender(tree('terminal')); expect(badge()).toBeNull();
     const toggle = screen.getByRole('button', { name: '展开' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
@@ -43,8 +43,8 @@ describe('v0.2 三栏、Composer与Inspector组件交互', () => {
     expect(screen.getByText(entry.output)).toBeTruthy();
     fireEvent.click(toggle); expect(screen.queryByText(entry.output)).toBeNull();
     view.unmount();
-    const next = render(tree('plan')); expect(badge()).toBeNull();
-    next.rerender(tree('plan', '新的结果')); expect(badge()?.textContent).toBe('1');
+    const next = render(tree('diff')); expect(badge()).toBeNull();
+    next.rerender(tree('diff', '新的结果')); expect(badge()?.textContent).toBe('1');
   });
   it('正文图片支持相对路径、中文与空格、普通链接、引用、嵌入和原图预览', () => {
     const markdown = '![流程](<./图 片/a#b.png>)\n\n[截图](result.png)\n\n![样本][图]\n\n[图]: https://example.test/a.webp\n\n![内嵌](data:image/png;base64,AQID)';
@@ -109,9 +109,10 @@ describe('v0.2 三栏、Composer与Inspector组件交互', () => {
     await waitFor(() => expect(screen.getByTestId('workspace-grid').children).toHaveLength(2));
     expect((await bridge.getBootstrap()).layout.layoutMode).toBe('split-2');
   });
-  it('Inspector六页可切换，用户块采用>前缀且工具默认折叠', async () => {
+  it('Inspector四一级页签与Files二级视图可切换，用户块采用>前缀且工具默认折叠', async () => {
     await mount();
-    for (const tab of ['diff', 'files', 'plan', 'terminal', 'context', 'swarm']) {
+    expect(screen.queryByTestId('inspector-tab-plan')).toBeNull();
+    for (const tab of ['diff', 'files', 'terminal', 'context', 'swarm']) {
       fireEvent.click(screen.getByTestId(`inspector-tab-${tab}`));
       await waitFor(async () => expect((await getFallbackDesktopBridge().getBootstrap()).layout.activeInspectorTab).toBe(tab));
     }

@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-import React, { useState } from 'react';
+import React, { Profiler, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../src/renderer/i18n/I18nContext';
 import { RightInspector } from '../src/renderer/components/RightInspector';
-import { PlanTimeline } from '../src/renderer/components/PlanTimeline';
+import { InlinePlanCard, PlanTimeline } from '../src/renderer/components/PlanTimeline';
 import { PlanArtifactPanel } from '../src/renderer/components/PlanArtifactPanel';
-import { SessionPane } from '../src/renderer/components/SessionPane';
+import { SessionPane, type SessionPaneProps } from '../src/renderer/components/SessionPane';
 import { SentAnnotations } from '../src/renderer/components/SentAnnotations';
 import { EditUserMessage } from '../src/renderer/components/EditUserMessage';
 import { getFallbackDesktopBridge, resetFallbackDesktopBridge } from '../src/renderer/services/desktop-bridge';
@@ -30,6 +30,7 @@ import {
   type ManagedSessionSummary,
   type PlanArtifactChangedEvent,
   type PlanArtifactSnapshot,
+  type RightInspectorTab,
   type SessionInspectorData,
   type SessionTodoItem,
   type TelemetryDashboardSnapshot,
@@ -169,15 +170,21 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
       createdAt: '',
       todos: [{ id: 'ghost-1', content: '不应复活的旧待办', status: 'in_progress' }],
     };
+    const clearedSession = makeSession({ sessionId: s4, profileId: 'p1' });
     render(
       wrap(
-        <RightInspector
-          collapsed={false}
-          focusedDiffFile={null}
-          width={400}
-          activeTab="plan"
-          profileId="p1"
-          sessionId={s4}
+        <SessionPane
+          slotIndex={0}
+          layoutMode="single"
+          isFocused
+          session={clearedSession}
+          availableSessions={[clearedSession]}
+          availableModels={[{ modelId: 'gemini-4-carbon', name: 'Gemini 4 Carbon' }]}
+          messages={[oldMsg]}
+          pendingApprovals={[]}
+          approvalConfig={DEFAULT_APPROVAL_CONFIG}
+          defaultThoughtTrack="zh"
+          telemetryDashboard={makeTelemetry()}
           inspectorData={{
             sessionId: s4,
             diffs: [],
@@ -185,19 +192,35 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
             todos: [],
             plan: { state: 'empty', revision: 5, truncated: false, totalCount: 0, completedCount: 0, failedCount: 0 },
           }}
-          sessionMessages={[oldMsg]}
-          telemetry={makeTelemetry()}
-          onSelectTab={() => {}}
-          onFocusDiffFile={() => {}}
-          onCommitWidth={() => {}}
-          onOpenRateCardsSettings={() => {}}
+          scrollMemoryRef={{ current: {} }}
+          appIcon="gravity-claude-dark"
+          onFocusPane={() => {}}
+          onBindSlotSession={() => {}}
+          onOpenNewSession={() => {}}
+          onSendPrompt={async () => {}}
+          onCancelPrompt={async () => {}}
+          onCompactContext={async () => {}}
+          onSetSessionMode={async () => {}}
+          onSetSessionEffort={async () => {}}
+          onSetSessionModel={async () => {}}
+          onQueryWorkspaceFiles={async () => []}
+          onSubmitApproval={async () => {}}
+          onCycleApprovalMode={async () => {}}
+          onOpenApprovalSettings={() => {}}
+          onOpenSwarmInspector={() => {}}
+          onOpenContextInspector={() => {}}
+          onInspectDiffFile={() => {}}
         />
       )
     );
     expect(await screen.findByTestId('plan-cleared')).toBeTruthy();
     expect(screen.queryByTestId('plan-source-line')).toBeNull();
+    expect(screen.queryByTestId('plan-source-open')).toBeNull();
+    expect(screen.queryByTestId('plan-artifact-open-file')).toBeNull();
     expect(screen.queryByText('不应复活的旧待办')).toBeNull();
-    expect(screen.getByTestId('inspector-view-plan').textContent).not.toContain('implementation_plan.md');
+    const clearedCard = screen.getByTestId('inline-plan-card');
+    expect(clearedCard.getAttribute('data-plan-view')).toBe('cleared');
+    expect(clearedCard.textContent).not.toContain('implementation_plan.md');
 
     // 仅当 plan 缺省时，resolveAuthoritativeTodos 才允许回溯旧消息
     expect(resolveAuthoritativeTodos(undefined, [], [oldMsg])).toHaveLength(1);
@@ -579,9 +602,8 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
     expect(screen.queryByTestId('plan-artifact-document')).toBeNull();
   });
 
-  it('TC-PLAN-09 & TC-PLAN-12：正文内联仅最新消息展示单行 PlanChip 并可跳 Plan 页签；旧桥接直接返回 content 自动降级提取概要', async () => {
-    const sid = uid('plan-chip-sess');
-    const onOpenPlanInspector = vi.fn();
+  it('TC-PLAN-09 & TC-PLAN-12：主对话流仅最新含待办消息挂载 1 张 InlinePlanCard（折叠态示进度与当前步）；旧桥接直接返回 content 自动降级提取概要', async () => {
+    const sid = uid('inline-plan-sess');
     const session = makeSession({ sessionId: sid });
     const messages: ChatMessageItem[] = [
       {
@@ -619,7 +641,6 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
           defaultThoughtTrack="zh"
           telemetryDashboard={makeTelemetry()}
           scrollMemoryRef={{ current: {} }}
-          canTriggerDemoApproval={false}
           appIcon="gravity-claude-dark"
           onFocusPane={() => {}}
           onBindSlotSession={() => {}}
@@ -636,23 +657,27 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
           onOpenApprovalSettings={() => {}}
           onOpenSwarmInspector={() => {}}
           onOpenContextInspector={() => {}}
-          onOpenPlanInspector={onOpenPlanInspector}
           onInspectDiffFile={() => {}}
-          onTriggerDemoApproval={() => {}}
         />
       )
     );
-    // 仅最新一条助手消息展示 PlanChip（旧消息不渲染内联待办表）
-    const chips = screen.getAllByTestId(/^plan-chip-/);
-    expect(chips).toHaveLength(1);
-    expect(chips[0].getAttribute('data-testid')).toBe('plan-chip-a2');
-    expect(chips[0].textContent).toContain('Plan 1/2');
-    expect(chips[0].textContent).toContain('当前进行步骤');
+    // 仅最新含待办助手消息 a2 挂载 1 张 InlinePlanCard（旧消息不渲染，无残留 plan-chip-*）
+    const cards = screen.getAllByTestId('inline-plan-card');
+    expect(cards).toHaveLength(1);
+    expect(screen.queryByTestId(/^plan-chip-/)).toBeNull();
+    expect(cards[0].closest('[data-message-id]')?.getAttribute('data-message-id')).toBe('a2');
+    expect(screen.getByTestId('plan-item-n1')).toBeTruthy();
+    expect(screen.getByTestId('plan-item-n2')).toBeTruthy();
     expect(screen.queryByText('旧消息待办')).toBeNull();
-    fireEvent.click(chips[0]);
-    expect(onOpenPlanInspector).toHaveBeenCalledTimes(1);
+    // 展开态仅 1 个 role="progressbar"；折叠后头部显示 1 / 2 进度与当前步骤且装饰条 aria-hidden
+    expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+    fireEvent.click(screen.getByTestId('inline-plan-toggle'));
+    expect(screen.queryByTestId('plan-timeline')).toBeNull();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.getByTestId('inline-plan-toggle').textContent).toContain('1 / 2');
+    expect(screen.getByTestId('inline-plan-toggle').textContent).toContain('当前进行步骤');
 
-    // TC-PLAN-12：旧桥接返回 content（无 outline）自动降级提取概要并可直接开抽屉
+    // TC-PLAN-12：旧桥接返回 content（无 outline）自动降级提取概要并可直接原地展开原文
     cleanup();
     const legacySid = uid('plan-legacy-fallback');
     window.gravityDesktop = {
@@ -664,10 +689,579 @@ describe('Gravity v0.3.6 Plan 四态时间线与按需原文抽屉 (TC-PLAN-01..
         content: '# 兼容旧桥接\n\n## 第一阶段\n正文内容',
       }),
     };
-    render(wrap(<PlanTimeline profileId="p1" sessionId={legacySid} plan={undefined} todos={[]} />));
+    render(wrap(<InlinePlanCard profileId="p1" sessionId={legacySid} plan={undefined} todos={[]} />));
     expect((await screen.findByTestId('plan-outline')).textContent).toContain('第一阶段');
     fireEvent.click(screen.getByTestId('plan-source-open'));
     expect((await screen.findByTestId('plan-artifact-document')).textContent).toContain('正文内容');
+  });
+});
+
+/* ============================================================================
+ * PART A2 · InlinePlanCard 深度交互、QA-1 回归守卫与 4 页签 RightInspector（QA-2）
+ * ========================================================================== */
+
+function makePaneProps(overrides: Partial<SessionPaneProps> & { session: ManagedSessionSummary }): SessionPaneProps {
+  return {
+    slotIndex: 0,
+    layoutMode: 'single',
+    isFocused: true,
+    availableSessions: [overrides.session],
+    availableModels: [{ modelId: 'gemini-4-carbon', name: 'Gemini 4 Carbon' }],
+    messages: [],
+    pendingApprovals: [],
+    approvalConfig: DEFAULT_APPROVAL_CONFIG,
+    defaultThoughtTrack: 'zh',
+    telemetryDashboard: makeTelemetry(),
+    scrollMemoryRef: { current: {} },
+    appIcon: 'gravity-claude-dark',
+    onFocusPane: () => {},
+    onBindSlotSession: () => {},
+    onOpenNewSession: () => {},
+    onSendPrompt: async () => {},
+    onCancelPrompt: async () => {},
+    onCompactContext: async () => {},
+    onSetSessionMode: async () => {},
+    onSetSessionEffort: async () => {},
+    onSetSessionModel: async () => {},
+    onQueryWorkspaceFiles: async () => [],
+    onSubmitApproval: async () => {},
+    onCycleApprovalMode: async () => {},
+    onOpenApprovalSettings: () => {},
+    onOpenSwarmInspector: () => {},
+    onOpenContextInspector: () => {},
+    onInspectDiffFile: () => {},
+    ...overrides,
+  };
+}
+
+describe('Gravity v0.3.6 InlinePlanCard 回归与 4 页签 RightInspector (QA-2)', () => {
+  it('FE-P0-1：最新助手消息为 question（open / answered）时不吞卡片；全为 question 时自动兜底至流底部', async () => {
+    const sid = uid('plan-q-host');
+    const session = makeSession({ sessionId: sid, profileId: 'p1' });
+    const inspectorData: SessionInspectorData = {
+      sessionId: sid,
+      diffs: [],
+      terminals: [],
+      todos: [
+        { id: 'qt1', content: '起草设计文档', status: 'completed' },
+        { id: 'qt2', content: '确认关键参数', status: 'in_progress' },
+      ],
+      plan: { state: 'present', revision: 2, truncated: false, totalCount: 2, completedCount: 1, failedCount: 0 },
+    };
+    const openQuestionMsg: ChatMessageItem = {
+      id: 'a-q-open',
+      sessionId: sid,
+      role: 'assistant',
+      content: '请确认下列问题',
+      createdAt: '2026-11-28T00:02:00.000Z',
+      question: { message: '选择方案', state: 'open', fields: [] },
+    };
+    const answeredQuestionMsg: ChatMessageItem = {
+      id: 'a-q-ans',
+      sessionId: sid,
+      role: 'assistant',
+      content: '已确认',
+      createdAt: '2026-11-28T00:01:30.000Z',
+      question: { message: '旧确认', state: 'answered', answer: '选项 A', fields: [] },
+    };
+    const normalMsg: ChatMessageItem = {
+      id: 'a-normal',
+      sessionId: sid,
+      role: 'assistant',
+      content: '已完成初步方案设计。',
+      createdAt: '2026-11-28T00:01:00.000Z',
+    };
+
+    // 1) 存在早先普通助手消息 -> 回退挂载到 a-normal，绝不挂到 question 消息上导致 0 DOM
+    const view = render(
+      wrap(<SessionPane {...makePaneProps({ session, messages: [normalMsg, answeredQuestionMsg, openQuestionMsg], inspectorData })} />)
+    );
+    const card = screen.getByTestId('inline-plan-card');
+    expect(card.closest('[data-message-id]')?.getAttribute('data-message-id')).toBe('a-normal');
+    expect(screen.getByTestId('plan-item-qt2')).toBeTruthy();
+
+    // 2) 全部助手消息均为 question -> 兜底挂载在流底部（无 data-message-id 祖先），仍然完整渲染
+    view.rerender(
+      wrap(<SessionPane {...makePaneProps({ session, messages: [answeredQuestionMsg, openQuestionMsg], inspectorData })} />)
+    );
+    const fallbackCard = screen.getByTestId('inline-plan-card');
+    expect(fallbackCard.closest('[data-message-id]')).toBeNull();
+    expect(screen.getByTestId('plan-item-qt1')).toBeTruthy();
+    expect(screen.getByTestId('plan-item-qt2')).toBeTruthy();
+  });
+
+  it('FE-P0-3：宿主消息从流底部 -> a1 -> a2 迁移时保留 sourceOpen / expanded / expandedGroups，切换会话后统一复位', async () => {
+    const sidA = uid('plan-migrate-a');
+    const sidB = uid('plan-migrate-b');
+    const makeArtifact = (sid: string) => ({
+      summary: {
+        status: 'ready' as const,
+        view: 'summary' as const,
+        owner: { profileId: 'p1', sessionId: sid },
+        revision: 3,
+        summaryRevision: 3,
+        contentRevision: 3,
+        filePath: `C:\\brain\\${sid}\\implementation_plan.md`,
+        outline: { title: `计划 ${sid}`, sections: [{ id: 's1', level: 2, heading: '阶段一', summary: '' }], sectionCount: 1 },
+      },
+      content: {
+        status: 'ready' as const,
+        view: 'content' as const,
+        owner: { profileId: 'p1', sessionId: sid },
+        revision: 3,
+        summaryRevision: 3,
+        contentRevision: 3,
+        filePath: `C:\\brain\\${sid}\\implementation_plan.md`,
+        content: `# 计划 ${sid}\n\n## 阶段一\n正在阅读的原文段落`,
+      },
+    });
+    window.gravityDesktop = {
+      ...getFallbackDesktopBridge(),
+      getSessionPlanArtifact: vi.fn(async (input: { sessionId: string; view?: 'summary' | 'content' }) => {
+        const pair = makeArtifact(input.sessionId);
+        return input.view === 'content' ? pair.content : pair.summary;
+      }),
+    };
+
+    const todos: SessionTodoItem[] = [
+      { id: 'm1', content: '已完成 1', status: 'completed' },
+      { id: 'm2', content: '已完成 2', status: 'completed' },
+      { id: 'm3', content: '已完成 3', status: 'completed' },
+      { id: 'm4', content: '进行中 4', status: 'in_progress' },
+    ];
+    const inspA: SessionInspectorData = {
+      sessionId: sidA,
+      diffs: [],
+      terminals: [],
+      todos,
+      plan: { state: 'present', revision: 3, truncated: false, totalCount: 4, completedCount: 3, failedCount: 0 },
+    };
+    const sessA = makeSession({ sessionId: sidA, profileId: 'p1' });
+    const sessB = makeSession({ sessionId: sidB, profileId: 'p1' });
+
+    // 初始 0 助手消息 -> 渲染在流底部兜底位
+    const view = render(wrap(<SessionPane {...makePaneProps({ session: sessA, messages: [], inspectorData: inspA })} />));
+    await screen.findByTestId('plan-source-open');
+
+    // 展开已完成折叠组 + 展开原地原文
+    fireEvent.click(screen.getByTestId('plan-done-group-m1'));
+    expect(screen.getByTestId('plan-item-m1')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('plan-source-open'));
+    expect((await screen.findByTestId('plan-artifact-document')).textContent).toContain('正在阅读的原文段落');
+
+    // 宿主从兜底位迁移到助手消息 a1，再迁移到新回合 a2 -> 原文展开态与分组展开态必须 100% 保持
+    const msgA1: ChatMessageItem = { id: 'a1', sessionId: sidA, role: 'assistant', content: '第一轮输出', createdAt: '' };
+    const msgA2: ChatMessageItem = { id: 'a2', sessionId: sidA, role: 'assistant', content: '第二轮流式输出', isStreaming: true, createdAt: '' };
+    view.rerender(wrap(<SessionPane {...makePaneProps({ session: sessA, messages: [msgA1], inspectorData: inspA })} />));
+    expect(screen.getByTestId('inline-plan-card').closest('[data-message-id]')?.getAttribute('data-message-id')).toBe('a1');
+    expect(screen.getByTestId('plan-source-drawer')).toBeTruthy();
+    expect(screen.getByTestId('plan-item-m1')).toBeTruthy();
+
+    view.rerender(wrap(<SessionPane {...makePaneProps({ session: sessA, messages: [msgA1, msgA2], inspectorData: inspA })} />));
+    expect(screen.getByTestId('inline-plan-card').closest('[data-message-id]')?.getAttribute('data-message-id')).toBe('a2');
+    expect(screen.getByTestId('plan-source-drawer')).toBeTruthy();
+    expect(screen.getByTestId('plan-item-m1')).toBeTruthy();
+
+    // 用户手动折叠卡片 -> 宿主再迁移至 a3 时仍保持折叠，绝不自动弹开
+    fireEvent.click(screen.getByTestId('inline-plan-toggle'));
+    expect(screen.getByTestId('inline-plan-toggle').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('plan-source-drawer')).toBeNull();
+    const msgA3: ChatMessageItem = { id: 'a3', sessionId: sidA, role: 'assistant', content: '第三轮输出', createdAt: '' };
+    view.rerender(wrap(<SessionPane {...makePaneProps({ session: sessA, messages: [msgA1, msgA2, msgA3], inspectorData: inspA })} />));
+    expect(screen.getByTestId('inline-plan-toggle').getAttribute('aria-expanded')).toBe('false');
+
+    // 切换到新会话 sidB -> expanded 复位为 true、sourceOpen 复位为 false、expandedGroups 复位为 {}
+    const inspB: SessionInspectorData = { ...inspA, sessionId: sidB };
+    view.rerender(wrap(<SessionPane {...makePaneProps({ session: sessB, messages: [], inspectorData: inspB })} />));
+    await waitFor(() => expect(screen.getByTestId('inline-plan-toggle').getAttribute('aria-expanded')).toBe('true'));
+    expect(screen.queryByTestId('plan-source-drawer')).toBeNull();
+    expect(screen.getByTestId('plan-done-group-m1')).toBeTruthy();
+  });
+
+  it('FE-P0-2：split-2 双栏各自展开原文时 Esc 仅关闭聚焦栏；IME / 菜单 / 语音 / 行内编辑让路；折叠同步关原文', async () => {
+    const sidL = uid('split-left');
+    const sidR = uid('split-right');
+    window.gravityDesktop = {
+      ...getFallbackDesktopBridge(),
+      getSessionPlanArtifact: vi.fn(async (input: { sessionId: string; view?: 'summary' | 'content' }) => ({
+        status: 'ready' as const,
+        view: input.view ?? 'summary',
+        owner: { profileId: 'p1', sessionId: input.sessionId },
+        revision: 1,
+        summaryRevision: 1,
+        contentRevision: 1,
+        filePath: `C:\\brain\\${input.sessionId}\\implementation_plan.md`,
+        ...(input.view === 'content'
+          ? { content: `# ${input.sessionId}\n\n原文内容` }
+          : { outline: { title: `概要 ${input.sessionId}`, sections: [{ id: 's1', level: 2, heading: '一', summary: '' }], sectionCount: 1 } }),
+      })),
+    };
+
+    const sessL = makeSession({ sessionId: sidL, profileId: 'p1', status: 'idle' });
+    const sessR = makeSession({ sessionId: sidR, profileId: 'p1', status: 'streaming' });
+    const cancelL = vi.fn().mockResolvedValue(undefined);
+    const cancelR = vi.fn().mockResolvedValue(undefined);
+
+    const renderDual = (focus: 'left' | 'right') =>
+      wrap(
+        <div className="workspace mode-split-2">
+          <SessionPane
+            {...makePaneProps({
+              slotIndex: 0,
+              layoutMode: 'split-2',
+              isFocused: focus === 'left',
+              session: sessL,
+              availableSessions: [sessL, sessR],
+              messages: [{ id: 'al', sessionId: sidL, role: 'assistant', content: '左栏', createdAt: '' }],
+              onCancelPrompt: cancelL,
+            })}
+          />
+          <SessionPane
+            {...makePaneProps({
+              slotIndex: 1,
+              layoutMode: 'split-2',
+              isFocused: focus === 'right',
+              session: sessR,
+              availableSessions: [sessL, sessR],
+              messages: [{ id: 'ar', sessionId: sidR, role: 'assistant', content: '右栏', createdAt: '' }],
+              onCancelPrompt: cancelR,
+            })}
+          />
+        </div>
+      );
+
+    const view = render(renderDual('right'));
+    const paneL = screen.getByTestId(`session-pane-${sidL}`);
+    const paneR = screen.getByTestId(`session-pane-${sidR}`);
+
+    // 左右栏均展开原文
+    await within(paneL).findByTestId('plan-source-open');
+    await within(paneR).findByTestId('plan-source-open');
+    fireEvent.click(within(paneL).getByTestId('plan-source-open'));
+    fireEvent.click(within(paneR).getByTestId('plan-source-open'));
+    await within(paneL).findByTestId('plan-artifact-document');
+    await within(paneR).findByTestId('plan-artifact-document');
+
+    // 1) IME 组合态按 Esc：两边都不关闭
+    fireEvent.keyDown(paneR, { key: 'Escape', isComposing: true, keyCode: 229 });
+    expect(within(paneL).getByTestId('plan-source-drawer')).toBeTruthy();
+    expect(within(paneR).getByTestId('plan-source-drawer')).toBeTruthy();
+
+    // 2) 聚焦右栏并在右栏内存在 .popover / .voice-status / .composer-input 时按 Esc：不关闭右栏原文
+    const fakePopover = document.createElement('div');
+    fakePopover.className = 'popover';
+    paneR.appendChild(fakePopover);
+    fireEvent.keyDown(paneR, { key: 'Escape' });
+    expect(within(paneR).getByTestId('plan-source-drawer')).toBeTruthy();
+    fakePopover.remove();
+
+    const fakeVoice = document.createElement('div');
+    fakeVoice.className = 'voice-status';
+    paneR.appendChild(fakeVoice);
+    const voiceCaptureSpy = vi.fn((e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    });
+    window.addEventListener('keydown', voiceCaptureSpy, true);
+    try {
+      fireEvent.keyDown(paneR, { key: 'Escape' });
+      expect(voiceCaptureSpy).toHaveBeenCalledTimes(1);
+      expect(within(paneR).getByTestId('plan-source-drawer')).toBeTruthy();
+      expect(cancelR).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', voiceCaptureSpy, true);
+      fakeVoice.remove();
+    }
+
+    // 行内编辑（.message-editor 内 textarea）按 Esc：既不关闭原文，也不中断流式
+    const fakeEditor = document.createElement('div');
+    fakeEditor.className = 'message-editor';
+    const fakeTextarea = document.createElement('textarea');
+    fakeEditor.appendChild(fakeTextarea);
+    paneR.appendChild(fakeEditor);
+    fireEvent.keyDown(fakeTextarea, { key: 'Escape' });
+    expect(within(paneR).getByTestId('plan-source-drawer')).toBeTruthy();
+    expect(cancelR).not.toHaveBeenCalled();
+    fakeEditor.remove();
+
+    // composer-input 打开斜杠补全菜单时按 Esc：InlinePlanCard 让路（原文不关），Composer 仅清菜单不中断流式
+    const composerR = within(paneR).getByTestId(`composer-input-${sidR}`);
+    fireEvent.change(composerR, { target: { value: '/' } });
+    fireEvent.keyDown(composerR, { key: 'Escape' });
+    expect(within(paneR).getByTestId('plan-source-drawer')).toBeTruthy();
+    expect(cancelR).not.toHaveBeenCalled();
+
+    // 3) 正常在聚焦右栏按 Esc：仅关闭右栏原文，左栏原文保持展开且不中止右栏流式
+    fireEvent.keyDown(within(paneR).getByTestId('plan-source-drawer'), { key: 'Escape' });
+    expect(within(paneR).queryByTestId('plan-source-drawer')).toBeNull();
+    expect(within(paneL).getByTestId('plan-source-drawer')).toBeTruthy();
+    expect(cancelR).not.toHaveBeenCalled();
+
+    // 4) 此时右栏已关原文且正在流式，非聚焦左栏仍开着原文 -> 右栏再按 Esc 应中止右栏流式，绝不被左栏劫持
+    fireEvent.keyDown(paneR, { key: 'Escape' });
+    await waitFor(() => expect(cancelR).toHaveBeenCalledWith(sidR));
+    expect(within(paneL).getByTestId('plan-source-drawer')).toBeTruthy();
+
+    // 5) 焦点切回左栏，折叠左栏卡片 -> 同步关闭原文抽屉且恢复 plan-source-open（不残留幽灵 Esc）
+    view.rerender(renderDual('left'));
+    fireEvent.click(within(paneL).getByTestId('inline-plan-toggle'));
+    expect(within(paneL).queryByTestId('plan-source-drawer')).toBeNull();
+    expect(within(paneL).getByTestId('plan-source-open')).toBeTruthy();
+    expect(within(paneL).getByTestId('plan-source-open').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('FE-P1-3：收起原文后正文单边更新（contentRevision 递增）时外部打开不携过期 contentRevision', async () => {
+    const sid = uid('plan-stale-crev');
+    const filePath = `C:\\brain\\${sid}\\implementation_plan.md`;
+    let listener: ((e: PlanArtifactChangedEvent) => void) | undefined;
+    let contentRev = 100;
+    const getSessionPlanArtifact = vi.fn(async (input: { view?: 'summary' | 'content' }) =>
+      input.view === 'content'
+        ? {
+            status: 'ready' as const,
+            view: 'content' as const,
+            owner: { profileId: 'p1', sessionId: sid },
+            revision: contentRev,
+            summaryRevision: 100,
+            contentRevision: contentRev,
+            filePath,
+            content: `# 计划\n\n正文 rev=${contentRev} [本体](file:///C:/brain/${sid}/implementation_plan.md)`,
+          }
+        : {
+            status: 'ready' as const,
+            view: 'summary' as const,
+            owner: { profileId: 'p1', sessionId: sid },
+            revision: 100,
+            summaryRevision: 100,
+            contentRevision: contentRev,
+            filePath,
+            outline: { title: '计划', sections: [{ id: 's1', level: 2, heading: '章节', summary: '' }], sectionCount: 1 },
+          }
+    );
+    const openLinkOrFileTarget = vi.fn().mockResolvedValue({ opened: true, modeUsed: 'default-app', resolvedTarget: filePath });
+    window.gravityDesktop = {
+      ...getFallbackDesktopBridge(),
+      getSessionPlanArtifact,
+      openLinkOrFileTarget,
+      onPlanArtifactChanged: (fn) => {
+        listener = fn;
+        return () => { listener = undefined; };
+      },
+    };
+
+    render(wrap(<InlinePlanCard profileId="p1" sessionId={sid} cwd="C:\\repo" plan={undefined} todos={[]} />));
+    await screen.findByTestId('plan-outline');
+
+    // 1) 展开原文缓存 contentRevision=100 后收起原文
+    fireEvent.click(screen.getByTestId('plan-source-open'));
+    await screen.findByTestId('plan-artifact-document');
+    fireEvent.click(screen.getByTestId('plan-source-close'));
+    expect(screen.queryByTestId('plan-source-drawer')).toBeNull();
+
+    // 2) 正文更新 contentRevision -> 200（summaryRevision 维持 100），再点头部外部打开
+    contentRev = 200;
+    await act(async () => {
+      listener?.({ profileId: 'p1', sessionId: sid, revision: 200, summaryRevision: 100, contentRevision: 200 });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('plan-artifact-open-file'));
+    });
+    const closedCall = openLinkOrFileTarget.mock.calls.at(-1)?.[0];
+    expect(closedCall.planArtifactOwner).toMatchObject({ profileId: 'p1', sessionId: sid, revision: 100, summaryRevision: 100 });
+    expect(closedCall.planArtifactOwner.contentRevision).toBeUndefined();
+
+    // 3) 重新展开原文拉取 contentRevision=200，点文档内自链携带最新 contentRevision=200
+    fireEvent.click(screen.getByTestId('plan-source-open'));
+    await waitFor(() => expect(screen.getByTestId('plan-artifact-document').textContent).toContain('rev=200'));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '本体' }));
+    });
+    const openCall = openLinkOrFileTarget.mock.calls.at(-1)?.[0];
+    expect(openCall.planArtifactOwner).toMatchObject({ profileId: 'p1', sessionId: sid, revision: 200, contentRevision: 200 });
+  });
+
+  it('FE-P1-4：areSessionPanePropsEqual 仅关注 inspectorData.plan / todos / epoch，终端与 Diff 高频更新跳过 SessionPane 重渲染', async () => {
+    const sid = uid('pane-memo-perf');
+    const session = makeSession({ sessionId: sid, profileId: 'p1' });
+    const stableTodos: SessionTodoItem[] = [{ id: 't1', content: '步骤一', status: 'in_progress' }];
+    const stablePlan = { state: 'present' as const, revision: 1, truncated: false, totalCount: 1, completedCount: 0, failedCount: 0 };
+    const stableMessages: ChatMessageItem[] = [{ id: 'a1', sessionId: sid, role: 'assistant', content: '正文', createdAt: '' }];
+    const baseProps = makePaneProps({ session, messages: stableMessages });
+
+    const memoPane = SessionPane as unknown as { $$typeof?: symbol; type: (...args: unknown[]) => unknown };
+    expect(memoPane.$$typeof).toBe(Symbol.for('react.memo'));
+    const origPaneType = memoPane.type;
+    let paneRenders = 0;
+    memoPane.type = function trackedPane(...args: unknown[]) {
+      paneRenders += 1;
+      return origPaneType(...args);
+    };
+
+    try {
+      const view = render(
+        wrap(
+          <Profiler id="pane-perf" onRender={() => {}}>
+            <SessionPane
+              {...baseProps}
+              inspectorData={{ sessionId: sid, owner: { profileId: 'p1', sessionId: sid, epoch: 1 }, diffs: [], terminals: [], todos: stableTodos, plan: stablePlan }}
+            />
+          </Profiler>
+        )
+      );
+      await act(async () => { await Promise.resolve(); });
+      const rendersAfterMount = paneRenders;
+
+      // 仅变化 terminals / diffs（plan / todos / epoch 引用不变）-> SessionPane 必须跳过重渲染
+      view.rerender(
+        wrap(
+          <Profiler id="pane-perf" onRender={() => {}}>
+            <SessionPane
+              {...baseProps}
+              inspectorData={{
+                sessionId: sid,
+                owner: { profileId: 'p1', sessionId: sid, epoch: 1 },
+                diffs: [{ filePath: 'a.ts', oldText: 'a', newText: 'b', addedLines: 3, removedLines: 1, lines: [], updatedAt: '' }],
+                terminals: [{ id: 'term-1', toolCallId: 'tc-1', command: 'echo 1', output: '1\n', status: 'running', timestamp: '' }],
+                todos: stableTodos,
+                plan: stablePlan,
+              }}
+            />
+          </Profiler>
+        )
+      );
+      expect(paneRenders).toBe(rendersAfterMount);
+
+      // 变更 todos 引用 -> 必须正常触发重渲染更新 UI
+      view.rerender(
+        wrap(
+          <Profiler id="pane-perf" onRender={() => {}}>
+            <SessionPane
+              {...baseProps}
+              inspectorData={{
+                sessionId: sid,
+                owner: { profileId: 'p1', sessionId: sid, epoch: 1 },
+                diffs: [],
+                terminals: [],
+                todos: [{ id: 't1', content: '步骤一已完成', status: 'completed' }],
+                plan: { ...stablePlan, revision: 2, completedCount: 1 },
+              }}
+            />
+          </Profiler>
+        )
+      );
+      expect(paneRenders).toBeGreaterThan(rendersAfterMount);
+      expect(screen.getByText('步骤一已完成')).toBeTruthy();
+    } finally {
+      memoPane.type = origPaneType;
+    }
+  });
+
+  it('FE-P1-5：RightInspector 严格 4 页签，传入历史非法 activeTab="plan" 时自动降级至 diff 保持 Tab 停靠点与有效 aria-labelledby', () => {
+    render(
+      wrap(
+        <RightInspector
+          collapsed={false}
+          width={380}
+          activeTab={'plan' as unknown as RightInspectorTab}
+          focusedDiffFile={null}
+          sessionId="sess-legacy-tab"
+          sessionMessages={[]}
+          telemetry={makeTelemetry()}
+          onSelectTab={() => {}}
+          onFocusDiffFile={() => {}}
+          onCommitWidth={() => {}}
+          onOpenRateCardsSettings={() => {}}
+        />
+      )
+    );
+    const head = screen.getByTestId('right-inspector').querySelector('.inspector-head') as HTMLElement;
+    const tabs = within(head).getAllByRole('tab');
+    expect(tabs).toHaveLength(4);
+    expect(screen.queryByTestId('inspector-tab-plan')).toBeNull();
+    const diffTab = screen.getByTestId('inspector-tab-diff');
+    expect(diffTab.getAttribute('aria-selected')).toBe('true');
+    expect(diffTab.getAttribute('tabindex')).toBe('0');
+    expect(screen.getByTestId('inspector-view-diff')).toBeTruthy();
+    const panel = screen.getByRole('tabpanel');
+    const labelledBy = panel.getAttribute('aria-labelledby');
+    expect(labelledBy).toBeTruthy();
+    expect(document.getElementById(labelledBy!)).toBe(diffTab);
+  });
+
+  it('划词批注零干扰：InlinePlanCard 展开与展开原文均不改变正文锚点偏移，且在 Plan 卡片内划词绝不弹悬浮条', async () => {
+    const sid = uid('plan-ann-iso');
+    const session = makeSession({ sessionId: sid, profileId: 'p1' });
+    window.gravityDesktop = {
+      ...getFallbackDesktopBridge(),
+      getSessionPlanArtifact: vi.fn(async (input: { view?: 'summary' | 'content' }) => ({
+        status: 'ready' as const,
+        view: input.view ?? 'summary',
+        owner: { profileId: 'p1', sessionId: sid },
+        revision: 1,
+        summaryRevision: 1,
+        contentRevision: 1,
+        filePath: `C:\\brain\\${sid}\\implementation_plan.md`,
+        ...(input.view === 'content'
+          ? { content: '# 计划全文\n\n这段计划原文不应影响正文划词锚点。' }
+          : { outline: { title: '计划概要', sections: [{ id: 's1', level: 2, heading: '步骤', summary: '说明' }], sectionCount: 1 } }),
+      })),
+    };
+    const msg: ChatMessageItem = {
+      id: 'a-iso',
+      sessionId: sid,
+      role: 'assistant',
+      content: '正文首段用于精确校验偏移量。',
+      createdAt: '2026-11-28T00:00:00.000Z',
+    };
+    render(
+      wrap(
+        <SessionPane
+          {...makePaneProps({
+            session,
+            messages: [msg],
+            inspectorData: {
+              sessionId: sid,
+              diffs: [],
+              terminals: [],
+              todos: [{ id: 't1', content: '执行步骤', status: 'in_progress' }],
+              plan: { state: 'present', revision: 1, truncated: false, totalCount: 1, completedCount: 0, failedCount: 0 },
+            },
+          })}
+        />
+      )
+    );
+    await screen.findByTestId('plan-source-open');
+
+    const bodyEl = screen.getByTestId('assistant-body-a-iso');
+    const measureAnchor = () => {
+      const pNode = bodyEl.querySelector('p')!.firstChild!;
+      const r = document.createRange();
+      r.setStart(pNode, 2);
+      r.setEnd(pNode, 9);
+      return anchorFromRange(bodyEl, r);
+    };
+    const beforeSource = measureAnchor();
+
+    // 展开原地原文后，正文偏移与上下文必须逐字一致
+    fireEvent.click(screen.getByTestId('plan-source-open'));
+    const doc = await screen.findByTestId('plan-artifact-document');
+    expect(measureAnchor()).toEqual(beforeSource);
+
+    // 在 InlinePlanCard 原文内划词 -> 绝不弹出划词悬浮条
+    const docP = doc.querySelector('p')!;
+    const planRange = document.createRange();
+    planRange.selectNodeContents(docP);
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      toString: () => docP.textContent || '',
+      anchorNode: docP.firstChild,
+      rangeCount: 1,
+      getRangeAt: () => planRange,
+      removeAllRanges: vi.fn(),
+    } as unknown as Selection);
+    fireEvent.mouseUp(docP, { button: 0, clientX: 120, clientY: 120 });
+    expect(screen.queryByTestId('selection-floating-bar')).toBeNull();
   });
 });
 

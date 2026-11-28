@@ -11,7 +11,7 @@
  *       E2E-04: Sidebar/Inspector motion zero long-tasks & gv-activity-flow seamless loop
  *       E2E-05: 20k-char long streaming (>=50fps pacing & ResizeObserver stick-to-bottom + wheel disengage)
  *       E2E-06: Split-2 concurrent streaming & drag-to-pane
- *       E2E-07: Inspector docked <-> floating + D1 pure 5-tab tablist (Tree inside Context)
+ *       E2E-07: Inspector docked <-> floating + pure 4-tab tablist (Plan inlined, Tree inside Context)
  *       E2E-08: Approval card 1-4 shortcuts, F-27 approval-mode-pill-* ARIA, D4 zero-plaintext key, Turbo & F-01 safe Shift+Tab
  *       E2E-09: Diagnostic card dedup (policy_blocked single card) & 429 cooldown card
  *       E2E-10: Settings focus trap (F-13), backdrop anti-misclose (D3/F-10) & IME Escape guard
@@ -1222,7 +1222,7 @@ async function runPartAPackagedWindowsE2E(metrics) {
     await page.keyboard.press('Escape');
 
     // ------------------------------------------------------------------------
-    // E2E-04 & E2E-07: Inspector 5-tab (D1), Docked <-> Floating & Motion Long-Tasks
+    // E2E-04 & E2E-07: Inspector 4-tab (v0.3.6 Inline Plan), Docked <-> Floating & Motion Long-Tasks
     // ------------------------------------------------------------------------
     const toggleInspBtn = page.getByTestId('toggle-right-inspector-btn');
     if ((await toggleInspBtn.getAttribute('aria-pressed')) !== 'true') {
@@ -1231,7 +1231,8 @@ async function runPartAPackagedWindowsE2E(metrics) {
     const inspector = page.getByTestId('right-inspector');
     const inspTabs = inspector.locator('.inspector-head [role="tab"]');
     const inspButtons = inspector.locator('.inspector-head [role="button"], .inspector-head button:not([role="tab"])');
-    assert.equal(await inspTabs.count(), 5, 'D1: .inspector-head must have strictly 5 top-level tabs');
+    assert.equal(await inspTabs.count(), 4, 'v0.3.6: .inspector-head must have strictly 4 top-level tabs');
+    assert.equal(await inspector.getByTestId('inspector-tab-plan').count(), 0, 'v0.3.6: inspector-tab-plan must not render');
     assert.equal(await inspButtons.count(), 0, 'D1: .inspector-head must have 0 non-tab buttons');
     await page.getByTestId('inspector-tab-context').click();
     await page.getByTestId('inspector-tab-tree').waitFor({ timeout: 5000 });
@@ -1239,7 +1240,7 @@ async function runPartAPackagedWindowsE2E(metrics) {
     assert.equal(await inspector.getAttribute('data-inspector-mode'), 'floating');
     await page.getByTestId('inspector-float-toggle').click();
     assert.equal(await inspector.getAttribute('data-inspector-mode'), 'docked');
-    metrics.partA.e2e07Inspector5Tabs = true;
+    metrics.partA.e2e07Inspector4Tabs = true;
 
     // ------------------------------------------------------------------------
     // E2E-05: 20k-char Long Streaming (FPS pacing + stick-to-bottom + wheel disengage)

@@ -931,7 +931,7 @@ describe('Gravity v0.3.6 语音听写全链路与设置页 (TC-VOICE-01..31)', (
           splitSecondarySessionId: null,
           openTabSessionIds: [activeProfile === 'default' ? 'sess-prof-a' : 'sess-prof-b'],
           rightInspectorCollapsed: true,
-          activeInspectorTab: 'plan' as const,
+          activeInspectorTab: 'diff' as const,
           leftSidebarCollapsed: false,
         },
         pendingApprovals: [],

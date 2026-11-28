@@ -1407,14 +1407,19 @@ describe('FE-P3b：设置中心 8 项导航、外观深链、保存失败提示�
 
     render(<InspectorHost />);
 
-    // 1) 一级 5 页签 tablist 连续漫游且焦点不丢
+    // 1) 一级 4 页签 tablist 连续漫游且焦点不丢（v0.3.6 移除 Plan 页签，Changes -> Terminal -> Context -> Swarm）
     const head = screen.getByTestId('right-inspector').querySelector<HTMLElement>('.inspector-head')!;
     expect(head.getAttribute('role')).toBe('tablist');
+    expect(within(head).getAllByRole('tab')).toHaveLength(4);
+    expect(screen.queryByTestId('inspector-tab-plan')).toBeNull();
     const diffTab = screen.getByTestId('inspector-tab-diff');
     diffTab.focus();
     fireEvent.keyDown(head, { key: 'ArrowRight' });
-    expect(screen.getByTestId('inspector-tab-plan').getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(screen.getByTestId('inspector-tab-plan'));
+    expect(screen.getByTestId('inspector-tab-terminal').getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(screen.getByTestId('inspector-tab-terminal'));
+    fireEvent.keyDown(head, { key: 'ArrowRight' });
+    expect(screen.getByTestId('inspector-tab-context').getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(screen.getByTestId('inspector-tab-context'));
     fireEvent.keyDown(head, { key: 'End' });
     expect(screen.getByTestId('inspector-tab-swarm').getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(screen.getByTestId('inspector-tab-swarm'));

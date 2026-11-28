@@ -1545,11 +1545,11 @@ describe('Area 5: Renderer UI full-stack (Settings translator card, 6-tab Right 
     render(<App />);
     await screen.findByTestId('agy-app-root');
 
-    // 1) D1 (v0.3.4): Right Inspector strictly 5 top-level tabs (Tree moved under Context) + sub-view switches inside Context
+    // 1) v0.3.6 Inline Plan: Right Inspector strictly 4 top-level tabs (Plan inlined, Tree moved under Context) + sub-view switches inside Context
     const inspectorHead = document.querySelector('.inspector-head')!;
     expect(inspectorHead).toBeTruthy();
     const headTabs = within(inspectorHead as HTMLElement).getAllByRole('tab');
-    expect(headTabs).toHaveLength(5);
+    expect(headTabs).toHaveLength(4);
 
     expect(screen.getByTestId('ctx-view-switch-context')).toBeTruthy();
     expect(screen.getByTestId('ctx-view-switch-reviewer')).toBeTruthy();
