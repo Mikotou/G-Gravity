@@ -282,7 +282,7 @@ export function withoutSession(layout: WorkspaceLayoutState, id: string): Worksp
   return { ...layout, ...withoutSessionPatch(layout, id) };
 }
 
-const inspectorTabs = ['diff', 'files', 'plan', 'terminal', 'context', 'tree', 'swarm'] as const;
+const inspectorTabs = ['diff', 'files', 'terminal', 'context', 'tree', 'swarm'] as const;
 export type RightInspectorTab = (typeof inspectorTabs)[number];
 export function isRightInspectorTab(value: unknown): value is RightInspectorTab {
   return inspectorTabs.some(tab => tab === value);
