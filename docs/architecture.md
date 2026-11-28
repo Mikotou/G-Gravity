@@ -73,16 +73,18 @@
 
 ---
 
-## 七、`v0.3.6` 本地离线语音听写、Plan 四态与按需抽屉、统一批注协议及双端实机闭环（2026-11-28）
+## 七、`v0.3.6` 本地离线语音听写、主对话流内联 Plan、统一批注协议及双端实机闭环（2026-11-28）
 
 - **架构规模与零环守卫（`src/shared/` 23 文件、`src/main/` 118 文件、323 条内部静态边、0 循环依赖、0 `acp/ → services/` 反向依赖）**：
-  - `core-service.ts` 420 LOC（`<= 420`）、`index.ts` 143 LOC，全仓主进程单文件最长 633 LOC（`<= 650`）；**93/93 唯一 IPC 通道**（73 `invoke` + 20 `event`）在共享契约、`preload.ts`、`ipc-router.ts` 与 `macos-menu.ts` 间 1:1 对齐；
-  - 渲染层生产 CSS 收敛至 **`214,294 B <= 215,040 B`**（gzip `38.22 kB`），0 死类、0 跨文件重复选择器、0 非合成动画、`pcm-worklet-*.js` 独立打包 `1,230 B`。
+  - `core-service.ts` 417 LOC（`<= 420`）、`plan-artifact-reader.ts` 279 LOC、`index.ts` 143 LOC，全仓主进程单文件最长 633 LOC（`<= 650`）；**93/93 唯一 IPC 通道**（73 `invoke` + 20 `event`）在共享契约、`preload.ts`、`ipc-router.ts` 与 `macos-menu.ts` 间 1:1 对齐；
+  - 渲染层生产 CSS 收敛至 **`214,975 B <= 215,040 B`**（gzip `38.34 kB`），0 死类、0 跨文件重复选择器、0 非合成动画、`pcm-worklet-*.js` 独立打包 `1,230 B`。
 - **本地优先离线语音子系统（`src/main/voice/` + `assets/local-voice/` + `src/renderer/lib/voice/`）**：
   - 严禁 Chromium Web Speech API（0 处 AST 引用），严格维持 `script-src 'self'` CSP；默认采用主进程独立 `worker_threads` 运行的 MIT 许可 `whisper.cpp` Emscripten WASM + OpenCC 繁转简（模型 `ggml-base-q5_1.bin` `59,707,625 B` 不入 Git 索引，由 CI `npm run voice:model:fetch` 随包内置，本地缺失可经用户确认下载至 `<userData>/voice-models/`，`model.cjs` 严防软硬链/TOCTOU/大小写及 NFD-NFC 路径漂移）；
   - 静息态 0 次麦克风权限探测，仅经主进程租约（`dictation` / `mic-test` / `device-list`）放行采音，用毕/切号/失焦/组件卸载即刻释放；支持 OpenAI 兼容与 Gemini Developer API 外部转写（必须实测短语音转写通过才可启用，OS 加密 fail-closed，macOS 冷启被动状态快照零 Keychain 唤醒防死锁，独立费用账本与 401/403/429 熔断）。
-- **Plan 检视器统一 4 态、统一批注协议与跨端精修**：
-  - `PlanArtifactReader` 拆分 `summaryRevision` / `contentRevision` 双视图与防抖竞态清理；前端统一为 `empty / unavailable / outline / execution` 四态与按需展开只读 `PlanSourceDrawer`（Mermaid 折叠、GFM Callout、窗口捕获 `Esc` + IME 防护）；
+- **主对话流宽幅内联 Plan（`InlinePlanCard`）、4 页签检视器、统一批注协议与跨端精修**：
+  - `RightInspector` 移除 `Plan` 页签，精简为 **`Changes / Terminal / Context / Swarm` 4 主页签**（旧 `layout.json` 的 `activeInspectorTab: 'plan'` 启动自动迁移至 `'context'`，显式保存 `'plan'` 拒绝）；
+  - `InlinePlanCard` 迁入主对话流内（紧随 `ThinkingBlock` / `ToolActivityStream` 之后、`.cc-text` 正文之前，无助手消息或全为 `question` 时自动兜底流底部），默认展开执行进度/计划概要并支持按需原地展开只读 Plan 原文（Mermaid 折叠、GFM Callout、4 向 `Esc` + IME 防护、`split-2` 双栏独立状态与聚焦窗格 `Esc` 隔离、340px 窄屏无裁剪无溢出）；
+  - `PlanArtifactReader` 与 `local-media-inspector` 强化大小写不敏感磁盘（NTFS/APFS）精确会话目录隔离、先订阅后探测首写竞态保护、同 Profile ACP 断连保 `epoch`/watcher、离线/切分支/整树归档/退出全路径 0 watcher 泄漏，以及 macOS Darwin FSEvents 启动盲窗一次性 `.unref()` `120ms` settle 复检；前端 `usePlanArtifact` 增设 `knownEpochRef` 与 `effectiveEpoch` 纵深防御；
   - `src/shared/message-annotation.ts` 统一划词批注展示顺序（用户正文置顶、批注卡紧随其后），同步作用于发送后消息与 `EditUserMessage` 原地编辑；
   - 补齐 `VoiceControls` 窄窗 `+` 溢出菜单、行内二次确认削除（`ConfirmDeleteButton`）、顶部自动图标开关 + 3×2 原创图标网格、macOS B11 交通灯安全区 `14 + 64 / scale`、`.settings`/`.modal` 100% 高度不侵入顶栏、`mac.css` 全覆盖 `no-drag`、以及 `read-quota-macos.sh` 看门狗独立进程组清理与 `release.yml` 单引号 heredoc 修复。
 
