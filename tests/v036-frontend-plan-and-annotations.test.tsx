@@ -1263,6 +1263,155 @@ describe('Gravity v0.3.6 InlinePlanCard 回归与 4 页签 RightInspector (QA-2)
     fireEvent.mouseUp(docP, { button: 0, clientX: 120, clientY: 120 });
     expect(screen.queryByTestId('selection-floating-bar')).toBeNull();
   });
+
+  it('QA2-P0 (e2dc044)：直接响应 epoch 前移时推进 knownEpochRef/effectiveEpoch、立即渲染原文，推送保持严格相等，旧代次直接响应被丢弃', async () => {
+    const sid = uid('plan-epoch-advance');
+    const filePath = `C:\\brain\\${sid}\\implementation_plan.md`;
+    let listener: ((e: PlanArtifactChangedEvent) => void) | undefined;
+    let summaryResp = {
+      epoch: 2,
+      revision: 10,
+      summaryRevision: 10,
+      contentRevision: 10,
+      title: '代次 2 概要',
+      heading: '初版章节',
+    };
+    let contentResp = {
+      epoch: 3,
+      revision: 20,
+      summaryRevision: 10,
+      contentRevision: 20,
+      content: '# 代次 3 正文\n\nEpoch-3 最新内容',
+    };
+
+    const getSessionPlanArtifact = vi.fn(async (input: { view?: 'summary' | 'content' }) =>
+      input.view === 'content'
+        ? {
+            status: 'ready' as const,
+            view: 'content' as const,
+            owner: { profileId: 'p1', sessionId: sid, epoch: contentResp.epoch },
+            epoch: contentResp.epoch,
+            revision: contentResp.revision,
+            summaryRevision: contentResp.summaryRevision,
+            contentRevision: contentResp.contentRevision,
+            filePath,
+            content: contentResp.content,
+          }
+        : {
+            status: 'ready' as const,
+            view: 'summary' as const,
+            owner: { profileId: 'p1', sessionId: sid, epoch: summaryResp.epoch },
+            epoch: summaryResp.epoch,
+            revision: summaryResp.revision,
+            summaryRevision: summaryResp.summaryRevision,
+            contentRevision: summaryResp.contentRevision,
+            filePath,
+            outline: {
+              title: summaryResp.title,
+              sections: [{ id: 's1', level: 2, heading: summaryResp.heading, summary: '' }],
+              sectionCount: 1,
+            },
+          }
+    );
+    const openLinkOrFileTarget = vi.fn().mockResolvedValue({ opened: true, modeUsed: 'default-app', resolvedTarget: filePath });
+    window.gravityDesktop = {
+      ...getFallbackDesktopBridge(),
+      getSessionPlanArtifact,
+      openLinkOrFileTarget,
+      onPlanArtifactChanged: (fn) => {
+        listener = fn;
+        return () => { listener = undefined; };
+      },
+    };
+
+    // 1) 初始 epoch=2 拉取摘要返回 epoch=2
+    render(wrap(<InlinePlanCard profileId="p1" sessionId={sid} epoch={2} cwd="C:\\repo" plan={undefined} todos={[]} />));
+    expect((await screen.findByTestId('plan-outline')).textContent).toContain('代次 2 概要');
+
+    // 2) 点击 plan-source-open，正文直接响应返回推进后的 epoch=3 -> 立即渲染正文，绝不卡死在「正在读取原文…」
+    fireEvent.click(screen.getByTestId('plan-source-open'));
+    const doc = await screen.findByTestId('plan-artifact-document');
+    expect(doc.textContent).toContain('Epoch-3 最新内容');
+    expect(screen.queryByText('正在读取原文…')).toBeNull();
+
+    // 3) 点击 plan-artifact-open-file（openExternal）-> planArtifactOwner.epoch 必须为推进后的 3（非陈旧的 2）
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('plan-artifact-open-file'));
+    });
+    const extCall = openLinkOrFileTarget.mock.calls.at(-1)?.[0];
+    expect(extCall.planArtifactOwner).toMatchObject({
+      profileId: 'p1',
+      sessionId: sid,
+      epoch: 3,
+      revision: 20,
+      contentRevision: 20,
+    });
+
+    // 4) 推送 onPlanArtifactChanged：跨代次 epoch=99 与旧代次 epoch=2 必须严格忽略；同代次 epoch=3 正常触发刷新
+    const callsBeforePush = getSessionPlanArtifact.mock.calls.length;
+    await act(async () => {
+      listener?.({ profileId: 'p1', sessionId: sid, epoch: 99, revision: 99, summaryRevision: 99, contentRevision: 99 });
+      listener?.({ profileId: 'p1', sessionId: sid, epoch: 2, revision: 25, summaryRevision: 25, contentRevision: 25 });
+      await Promise.resolve();
+    });
+    expect(getSessionPlanArtifact).toHaveBeenCalledTimes(callsBeforePush);
+
+    summaryResp = {
+      epoch: 3,
+      revision: 30,
+      summaryRevision: 30,
+      contentRevision: 30,
+      title: '代次 3 概要',
+      heading: '刷新章节',
+    };
+    contentResp = {
+      epoch: 3,
+      revision: 30,
+      summaryRevision: 30,
+      contentRevision: 30,
+      content: '# 代次 3 正文\n\nEpoch-3 刷新后内容 rev=30',
+    };
+    await act(async () => {
+      listener?.({ profileId: 'p1', sessionId: sid, epoch: 3, revision: 30, summaryRevision: 30, contentRevision: 30 });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('plan-artifact-document').textContent).toContain('Epoch-3 刷新后内容 rev=30');
+      expect(screen.getByTestId('plan-outline').textContent).toContain('代次 3 概要');
+    });
+
+    // 5) 更旧的直接响应 epoch=1 仍被 ownerMatchesDirect 丢弃，绝不覆盖 epoch=3 正文与概要
+    const callsBeforeStaleDirect = getSessionPlanArtifact.mock.calls.length;
+    summaryResp = {
+      epoch: 1,
+      revision: 40,
+      summaryRevision: 40,
+      contentRevision: 40,
+      title: '陈旧代次 1 概要',
+      heading: '过时章节',
+    };
+    contentResp = {
+      epoch: 1,
+      revision: 40,
+      summaryRevision: 40,
+      contentRevision: 40,
+      content: '# 陈旧代次 1 正文\n\n绝不应覆盖 Epoch-3',
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('plan-artifact-refresh'));
+    });
+    await waitFor(() => expect(getSessionPlanArtifact.mock.calls.length).toBeGreaterThanOrEqual(callsBeforeStaleDirect + 2));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByTestId('plan-artifact-document').textContent).toContain('Epoch-3 刷新后内容 rev=30');
+    expect(screen.getByTestId('plan-artifact-document').textContent).not.toContain('陈旧代次 1');
+    expect(screen.getByTestId('plan-outline').textContent).toContain('代次 3 概要');
+    expect(screen.getByTestId('plan-outline').textContent).not.toContain('陈旧代次 1');
+
+    // 再次外部打开仍携带有效 epoch=3
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('plan-artifact-open-file'));
+    });
+    expect(openLinkOrFileTarget.mock.calls.at(-1)?.[0].planArtifactOwner.epoch).toBe(3);
+  });
 });
 
 /* ============================================================================
