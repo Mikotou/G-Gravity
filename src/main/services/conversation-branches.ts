@@ -286,6 +286,10 @@ export class ConversationBranches {
 
       const tree = this.buildTreeState(rootId);
       const { messages, ...messagePosition } = this.context.messages().page(targetBranchId);
+      // A replaced offline tab has no live slot to close during the switch.
+      for (const id of previousLayout?.openTabSessionIds ?? []) {
+        if (treeSet.has(id) && id !== targetBranchId && id !== previousActive && !this.app.sessions.isActive(id)) this.app.retireSession(id);
+      }
       return {
         session: enrichedActive,
         previousBranchId: previousActive,

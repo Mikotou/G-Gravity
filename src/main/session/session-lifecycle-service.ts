@@ -184,6 +184,8 @@ export class SessionLifecycleService {
     this.turns.promptOwners.get(sessionId)?.abort(new Error('会话正在关闭'));
     this.turns.questions.cancel(sessionId);
     this.app.approval.cancelSession(sessionId);
+    // Offline tabs can observe plan files without an ACP slot to emit 'closed'.
+    if (!this.app.sessions.isActive(sessionId)) this.app.retireSession(sessionId);
     await this.app.sessions.closeSession(sessionId);
   }
   private async finishDeletion(id: string): Promise<void> {
@@ -257,6 +259,7 @@ export class SessionLifecycleService {
       if (action !== 'restore') {
         for (const bid of branchIds) {
           if (this.app.sessions.isActive(bid)) await this.closeSession(bid);
+          else if (action === 'archive') this.app.retireSession(bid);
         }
       }
       if (action === 'delete') {

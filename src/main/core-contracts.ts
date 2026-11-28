@@ -73,6 +73,7 @@ export type SettingsHost = Pick<CoreResources, 'store' | 'accounts' | 'client' |
 export type OrganizerHost = Pick<CoreResources, 'accounts' | 'client' | 'sessions' | 'trees' | 'titles' | 'emit'>;
 export type ExternalUsageHost = Pick<CoreResources, 'store' | 'sessions' | 'telemetry' | 'emit'>;
 export type BranchHost = Pick<CoreResources, 'accounts' | 'sessions' | 'trees' | 'titles' | 'telemetry' | 'swarm' | 'emit'>
+  & Pick<LifecycleHost, 'retireSession'>
   & Pick<GravityDesktopBridge, 'createSession' | 'resumeSession' | 'sendPrompt' | 'closeSession' | 'getSessionInspector'>;
 export interface TelemetryHost extends Pick<CoreResources, 'store' | 'accounts' | 'client' | 'sessions' | 'telemetry' | 'emit'> {
   listenerCount: EventEmitter['listenerCount'];

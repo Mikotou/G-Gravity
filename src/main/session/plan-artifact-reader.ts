@@ -58,6 +58,8 @@ function inspect(candidate: Candidate, observe: (dir: string, child: string) => 
   }
   const real = realpathSync.native(cursor);
   if (!sameLocalPath(cursor, real) || localPathMember(root, real) === undefined || isUnsafeLocalFile(real)) throw Error('产物路径不可用');
+  // Session IDs are opaque even on filesystems that resolve paths case-insensitively.
+  if (basename(directory ? real : dirname(real)) !== basename(directory ? path : dirname(path))) throw Error('产物会话目录不匹配');
   observe(dirname(real), basename(real));
   const stat = lstatSync(real);
   if (directory) {
@@ -81,6 +83,7 @@ export class PlanArtifactReader {
   private forget(entry: Observation): void {
     clearTimeout(entry.timer);
     for (const watcher of entry.watchers.values()) watcher.close();
+    entry.watchers.clear();
     this.entries.delete(entry.owner.sessionId);
   }
   remove(id: string): void {
@@ -103,7 +106,9 @@ export class PlanArtifactReader {
 
   observe(owner: Owner): void {
     const context = this.context(owner);
-    if (context && !this.entries.has(owner.sessionId)) {
+    if (!context) return;
+    const previous = this.entries.get(owner.sessionId)?.owner;
+    if (previous?.profileId !== owner.profileId || previous?.epoch !== context.epoch) {
       this.observation({ ...owner, epoch: context.epoch });
       this.notice(owner.sessionId);
     }
@@ -117,18 +122,21 @@ export class PlanArtifactReader {
     }, 60);
     entry.timer.unref();
   }
-  private watch(entry: Observation, targets: Map<string, [string, string]>): void {
-    for (const [key, watcher] of entry.watchers) if (!targets.has(key)) { watcher.close(); entry.watchers.delete(key); }
-    for (const [key, [dir, child]] of targets) {
-      if (entry.watchers.has(key)) continue;
-      try {
-        const watcher = watch(dir, { persistent: false }, (_event, filename) => {
-          if (!filename || filename.toLowerCase() === child.toLowerCase()) this.notice(entry.owner.sessionId);
-        });
-        watcher.on('error', () => { watcher.close(); entry.watchers.delete(key); this.notice(entry.owner.sessionId); });
-        entry.watchers.set(key, watcher);
-      } catch { /* A force refresh always rechecks the actual file. */ }
-    }
+  private watch(entry: Observation, key: string, dir: string, child: string): void {
+    if (entry.watchers.has(key)) return;
+    const notice = () => {
+      if (this.entries.get(entry.owner.sessionId) === entry) this.notice(entry.owner.sessionId);
+    };
+    try {
+      const watcher = watch(dir, { persistent: false }, (_event, filename) => {
+        if (!filename || filename.toLowerCase() === child.toLowerCase()) notice();
+      });
+      watcher.on('error', () => {
+        watcher.close();
+        if (entry.watchers.get(key) === watcher) { entry.watchers.delete(key); notice(); }
+      });
+      entry.watchers.set(key, watcher);
+    } catch { /* A force refresh always rechecks the actual file. */ }
   }
 
   async get(input: GetSessionPlanArtifactInput & Pick<Owner, 'epoch'>): Promise<PlanArtifactSnapshot> {
@@ -164,11 +172,14 @@ export class PlanArtifactReader {
   private async read(entry: Observation, context: Context, view: PlanArtifactView, current: () => boolean, knownRevision?: number): Promise<PlanArtifactSnapshot> {
     const owner = entry.owner;
     const result: PlanArtifactSnapshot = { status: 'missing', view, owner, epoch: owner.epoch, revision: 0 };
-    const targets = new Map<string, [string, string]>();
+    const targets = new Set<string>();
     const observe = (dir: string, child: string) => {
       // A directory replaced at the same pathname needs a watcher on its new inode.
       const { dev, ino } = lstatSync(dir, { bigint: true });
-      targets.set(JSON.stringify([join(dir, child), String(dev), String(ino)]), [dir, child]);
+      const key = JSON.stringify([join(dir, child), String(dev), String(ino)]);
+      targets.add(key);
+      // Subscribe before probing the child, including when it has yet to be created.
+      this.watch(entry, key, dir, child);
     };
     const locate = () => {
       const files = candidates(context, owner.sessionId);
@@ -185,11 +196,11 @@ export class PlanArtifactReader {
         const before = fileStamp(path);
         const revision = view === 'content' ? entry.contentRevision : entry.summaryRevision;
         if (knownRevision && knownRevision === revision && entry.stamp === before) {
-          this.watch(entry, targets);
           return { ...result, status: 'unchanged', source: 'brain-artifact', filePath: path, revision,
             contentRevision: entry.contentRevision, summaryRevision: entry.summaryRevision };
         }
         const bytes = await readBoundedLocalFile(path, PLAN_ARTIFACT_MAX_BYTES, true);
+        if (!current()) return { status: 'unavailable', owner, revision: 0 };
         if (bytes.includes(0) || locate() !== path || before !== fileStamp(path)) throw Error('文件无效或已更改');
         content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
         outline = parsePlanOutline(content);
@@ -200,10 +211,13 @@ export class PlanArtifactReader {
     } catch {
       result.status = 'unavailable';
       result.reason = '产物归属不唯一、无法安全读取或超过 128 KiB UTF-8 限制';
+    } finally {
+      for (const [key, watcher] of entry.watchers) {
+        if (!targets.has(key)) { watcher.close(); entry.watchers.delete(key); }
+      }
     }
     if (!current()) return { status: 'unavailable', owner, revision: 0 };
     entry.stamp = validatedStamp;
-    this.watch(entry, targets);
     const signature = (value: unknown) => createHash('sha256').update(JSON.stringify([result.status, result.filePath, value])).digest('hex');
     const summarySignature = signature(outline);
     const contentSignature = signature(content);
