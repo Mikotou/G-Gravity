@@ -83,8 +83,9 @@ export function PlanTimeline({
   const progress = useMemo(() => computePlanProgress(plan, todos), [plan, todos]);
   const timeline = useMemo(() => groupPlanTimeline(todos), [todos]);
   const updated = formatPlanTime(summary?.updatedAt);
+  const effectiveEpoch = (drawerOpen ? artifact.content?.epoch : undefined) ?? artifact.summary?.epoch ?? epoch;
   const owner = sessionId
-    ? { profileId, sessionId, ...(epoch !== undefined ? { epoch } : {}), revision: summary?.revision, summaryRevision: summary?.revision }
+    ? { profileId, sessionId, ...(effectiveEpoch !== undefined ? { epoch: effectiveEpoch } : {}), revision: summary?.revision, summaryRevision: summary?.revision }
     : null;
 
   const openExternal = () => {
@@ -101,7 +102,7 @@ export function PlanTimeline({
         <PlanSourceDrawer
           profileId={profileId}
           sessionId={sessionId}
-          epoch={epoch}
+          epoch={effectiveEpoch}
           cwd={cwd}
           filePath={summary?.filePath}
           revision={artifact.content?.revision}
@@ -396,11 +397,12 @@ export function InlinePlanCard({
   const progress = useMemo(() => computePlanProgress(plan, todos), [plan, todos]);
   const timeline = useMemo(() => groupPlanTimeline(todos), [todos]);
   const updated = formatPlanTime(artifact.content?.updatedAt ?? summary?.updatedAt);
+  const effectiveEpoch = (sourceOpen ? artifact.content?.epoch : undefined) ?? artifact.summary?.epoch ?? epoch;
   const owner = sessionId
     ? {
         profileId,
         sessionId,
-        ...(epoch !== undefined ? { epoch } : {}),
+        ...(effectiveEpoch !== undefined ? { epoch: effectiveEpoch } : {}),
         revision: sourceOpen && artifact.content?.revision !== undefined ? artifact.content.revision : summary?.revision,
         ...(summary?.revision !== undefined ? { summaryRevision: summary.revision } : {}),
         ...(sourceOpen && artifact.content?.revision !== undefined ? { contentRevision: artifact.content.revision } : {}),
@@ -439,7 +441,7 @@ export function InlinePlanCard({
       setOpenError(`${t5.planArtifactOpenError}：${stripIpcErrorPrefix(reason)}`)
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, summary?.filePath, sessionId, profileId, epoch, summary?.revision, artifact.content?.revision, sourceOpen, t5.planArtifactOpenError]);
+  }, [cwd, summary?.filePath, sessionId, profileId, effectiveEpoch, summary?.revision, artifact.content?.revision, sourceOpen, t5.planArtifactOpenError]);
 
   const openLink = useCallback(
     async (target: string) => {
@@ -472,7 +474,7 @@ export function InlinePlanCard({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cwd, sessionId, summary?.filePath, profileId, epoch, summary?.revision, artifact.content?.revision, sourceOpen, t5.planArtifactOpenError]
+    [cwd, sessionId, summary?.filePath, profileId, effectiveEpoch, summary?.revision, artifact.content?.revision, sourceOpen, t5.planArtifactOpenError]
   );
 
   if (kind === 'empty') return null;

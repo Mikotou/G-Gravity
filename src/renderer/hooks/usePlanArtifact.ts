@@ -19,6 +19,7 @@ export interface PlanSummaryState {
   updatedAt?: string;
   reason?: string;
   revision?: number;
+  epoch?: number;
 }
 
 export interface PlanContentState {
@@ -26,6 +27,7 @@ export interface PlanContentState {
   truncated: boolean;
   revision?: number;
   updatedAt?: string;
+  epoch?: number;
 }
 
 export interface UsePlanArtifactResult {
@@ -60,16 +62,6 @@ export function __resetPlanArtifactCache(): void {
 
 export function planArtifactKey(profileId: string, sessionId: string, epoch?: number): string {
   return `${profileId}:${sessionId}:${epoch ?? 0}`;
-}
-
-function ownerMatches(result: PlanArtifactSnapshot, profileId: string, sessionId: string, epoch?: number): boolean {
-  const owner = result.owner;
-  if (owner) {
-    if (owner.sessionId && owner.sessionId !== sessionId) return false;
-    if (owner.profileId && owner.profileId !== profileId) return false;
-  }
-  const resultEpoch = result.epoch ?? owner?.epoch;
-  return !(epoch !== undefined && resultEpoch !== undefined && resultEpoch !== epoch);
 }
 
 export function usePlanArtifact({
@@ -119,6 +111,42 @@ export function usePlanArtifact({
   const contentOpenRef = useRef(contentOpen);
   contentOpenRef.current = contentOpen;
 
+  // QA2-P0: 追踪当前 key 下最新已确认代次（与 key 同步复位，防跨会话污染）
+  const knownEpochRef = useRef<{ key: string; epoch?: number }>({ key, epoch });
+  if (knownEpochRef.current.key !== key) {
+    knownEpochRef.current = { key, epoch };
+  } else if (epoch !== undefined) {
+    knownEpochRef.current.epoch =
+      knownEpochRef.current.epoch === undefined ? epoch : Math.max(knownEpochRef.current.epoch, epoch);
+  }
+
+  /**
+   * 直接请求响应的归属校验（loadSummary / loadContent 使用）：
+   * 仅丢弃早于当前已知代次的旧响应，接受同代次或更新代次的响应并推进 knownEpochRef。
+   */
+  const ownerMatchesDirect = useCallback(
+    (result: PlanArtifactSnapshot): boolean => {
+      const owner = result.owner;
+      if (owner) {
+        if (owner.sessionId && owner.sessionId !== sessionId) return false;
+        if (owner.profileId && owner.profileId !== profileId) return false;
+      }
+      const resultEpoch = result.epoch ?? owner?.epoch;
+      const expectedEpoch = knownEpochRef.current.epoch ?? epochRef.current;
+      // 丢弃早于当前已知代次的旧响应
+      if (expectedEpoch !== undefined && resultEpoch !== undefined && resultEpoch < expectedEpoch) return false;
+      // 推进 knownEpochRef
+      if (
+        resultEpoch !== undefined &&
+        (knownEpochRef.current.epoch === undefined || resultEpoch > knownEpochRef.current.epoch)
+      ) {
+        knownEpochRef.current.epoch = resultEpoch;
+      }
+      return true;
+    },
+    [profileId, sessionId]
+  );
+
   const commitSummary = useCallback((next: PlanSummaryState | null) => {
     summaryRef.current = next;
     setSummary(next);
@@ -139,20 +167,29 @@ export function usePlanArtifact({
       setLoadingSummary(true);
       setError('');
       try {
+        const prevKnown = knownEpochRef.current.epoch;
         let result = await fetcher({
           profileId,
           sessionId,
           view: 'summary',
           ...(known !== undefined ? { knownRevision: known } : {}),
         });
-        if (stale() || !ownerMatches(result, profileId, sessionId, epochRef.current)) return;
+        if (stale() || !ownerMatchesDirect(result)) return;
         if (result.status === 'unchanged') {
           if (summaryRef.current) {
-            // QA1-FE-12：摘要未变但正文 revision 递增时，仍需将已缓存正文标脏，防止抽屉永不刷新
+            const unchangedEpoch = result.epoch ?? result.owner?.epoch;
+            const epochAdvanced =
+              unchangedEpoch !== undefined &&
+              ((prevKnown !== undefined && unchangedEpoch > prevKnown) ||
+                (contentRef.current?.epoch !== undefined && unchangedEpoch > contentRef.current.epoch));
+            if (unchangedEpoch !== undefined && summaryRef.current.epoch !== unchangedEpoch) {
+              commitSummary({ ...summaryRef.current, epoch: unchangedEpoch });
+            }
+            // QA1-FE-12 / QA2-P0：摘要未变但正文 revision 递增或代次前移时，将已缓存正文标脏并按需重拉
             if (
-              typeof result.contentRevision === 'number' &&
               contentRef.current &&
-              result.contentRevision !== contentRef.current.revision
+              (epochAdvanced ||
+                (typeof result.contentRevision === 'number' && result.contentRevision !== contentRef.current.revision))
             ) {
               contentStaleRef.current = true;
               if (contentOpenRef.current) void loadContent(false);
@@ -160,9 +197,14 @@ export function usePlanArtifact({
             return;
           }
           result = await fetcher({ profileId, sessionId, view: 'summary' });
-          if (stale() || !ownerMatches(result, profileId, sessionId, epochRef.current)) return;
+          if (stale() || !ownerMatchesDirect(result)) return;
           if (result.status === 'unchanged') result = { ...result, status: 'missing' };
         }
+        const resultEpoch = result.epoch ?? result.owner?.epoch;
+        const epochAdvanced =
+          resultEpoch !== undefined &&
+          ((prevKnown !== undefined && resultEpoch > prevKnown) ||
+            (contentRef.current?.epoch !== undefined && resultEpoch > contentRef.current.epoch));
         const revision = result.summaryRevision ?? result.revision;
         let outline = result.outline;
         let legacyContent: PlanContentState | null = null;
@@ -174,6 +216,7 @@ export function usePlanArtifact({
             truncated: Boolean(result.truncated),
             revision: result.contentRevision ?? result.revision,
             updatedAt: result.updatedAt,
+            ...(resultEpoch !== undefined ? { epoch: resultEpoch } : {}),
           };
         }
         const next: PlanSummaryState = {
@@ -183,26 +226,34 @@ export function usePlanArtifact({
           ...(result.updatedAt ? { updatedAt: result.updatedAt } : {}),
           ...(result.reason ? { reason: result.reason } : {}),
           revision,
+          ...(resultEpoch !== undefined ? { epoch: resultEpoch } : {}),
         };
         commitSummary(next);
+        let shouldReloadContent = false;
         if (legacyContent) commitContent(legacyContent);
         else if (result.status !== 'ready') commitContent(null);
-        else if (contentRef.current && result.contentRevision !== undefined && result.contentRevision !== contentRef.current.revision) {
+        else if (
+          contentRef.current &&
+          (epochAdvanced ||
+            (result.contentRevision !== undefined && result.contentRevision !== contentRef.current.revision))
+        ) {
           contentStaleRef.current = true;
+          shouldReloadContent = true;
         }
         remember(
           baseKeyRef.current,
           next,
           legacyContent ?? (result.status === 'ready' ? contentRef.current : null),
-          result.epoch ?? result.owner?.epoch ?? epochRef.current
+          resultEpoch ?? knownEpochRef.current.epoch ?? epochRef.current
         );
+        if (shouldReloadContent && contentOpenRef.current) void loadContent(false);
       } catch (reason) {
         if (!stale()) setError(stripIpcErrorPrefix(reason));
       } finally {
         if (!stale()) setLoadingSummary(false);
       }
     },
-    [commitContent, commitSummary, profileId, sessionId]
+    [commitContent, commitSummary, ownerMatchesDirect, profileId, sessionId]
   );
 
   const contentGenRef = useRef(0);
@@ -223,24 +274,36 @@ export function usePlanArtifact({
           view: 'content',
           ...(known !== undefined ? { knownRevision: known } : {}),
         });
-        if (stale() || !ownerMatches(result, profileId, sessionId, epochRef.current)) return;
+        if (stale() || !ownerMatchesDirect(result)) return;
         if (result.status === 'unchanged' && contentRef.current) return;
         contentStaleRef.current = false;
         if (result.status === 'ready' && typeof result.content === 'string') {
+          const contentEpoch = result.epoch ?? result.owner?.epoch;
           const next: PlanContentState = {
             content: result.content,
             truncated: Boolean(result.truncated),
             revision: result.contentRevision ?? result.revision,
             updatedAt: result.updatedAt,
+            ...(contentEpoch !== undefined ? { epoch: contentEpoch } : {}),
           };
           commitContent(next);
           if (summaryRef.current) {
-            remember(baseKeyRef.current, summaryRef.current, next, result.epoch ?? result.owner?.epoch ?? epochRef.current);
+            remember(
+              baseKeyRef.current,
+              summaryRef.current,
+              next,
+              contentEpoch ?? knownEpochRef.current.epoch ?? epochRef.current
+            );
           }
         } else if (result.status !== 'unchanged') {
           commitContent(null);
           if (result.status === 'missing' || result.status === 'unavailable') {
-            commitSummary({ status: result.status, ...(result.reason ? { reason: result.reason } : {}) });
+            const contentEpoch = result.epoch ?? result.owner?.epoch;
+            commitSummary({
+              status: result.status,
+              ...(result.reason ? { reason: result.reason } : {}),
+              ...(contentEpoch !== undefined ? { epoch: contentEpoch } : {}),
+            });
           }
         }
       } catch (reason) {
@@ -249,7 +312,7 @@ export function usePlanArtifact({
         if (!stale()) setLoadingContent(false);
       }
     },
-    [commitContent, commitSummary, profileId, sessionId]
+    [commitContent, commitSummary, ownerMatchesDirect, profileId, sessionId]
   );
 
   // 归属切换：复位并以缓存（若有）作为首帧，随后增量刷新摘要
@@ -257,6 +320,8 @@ export function usePlanArtifact({
     keyRef.current = key;
     genRef.current++;
     contentGenRef.current++;
+    // QA2-P0: key 变更时同步重置 knownEpochRef
+    knownEpochRef.current = { key, epoch: epochRef.current };
     const rawHit = baseKey ? summaryCache.get(baseKey) : undefined;
     const hit =
       rawHit && !(epochRef.current !== undefined && rawHit.epoch !== undefined && rawHit.epoch !== epochRef.current)
@@ -272,7 +337,9 @@ export function usePlanArtifact({
     void loadSummary(false);
     const unsubscribe = getDesktopBridge().onPlanArtifactChanged?.((event: PlanArtifactChangedEvent) => {
       if (event.sessionId !== sessionId || (event.profileId && event.profileId !== profileId)) return;
-      if (epochRef.current !== undefined && event.epoch !== undefined && event.epoch !== epochRef.current) return;
+      // QA2-P0: 订阅回调严格相等判断（保护 TC-PLAN-15/17/10）
+      const activeEpoch = knownEpochRef.current.epoch ?? epochRef.current;
+      if (activeEpoch !== undefined && event.epoch !== undefined && event.epoch !== activeEpoch) return;
       const summaryRev = event.summaryRevision ?? event.revision;
       if (summaryRef.current?.revision === undefined || summaryRev !== summaryRef.current.revision) void loadSummary(false);
       const contentRev = event.contentRevision ?? event.revision;
